@@ -1,11 +1,11 @@
 bl_info = {
-    "name": "avacapo integration",
+   "name": "AvaCapo AI animation",
     "author": "agamurian",
     "version": (0, 1),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Avacapo",
-    "description": "Use AI to animate your characters",
-    "category": "Rigging",
+    "description": "Automating charecter animation with AI",
+    "category": "Animation",
 }
 
 import bpy
