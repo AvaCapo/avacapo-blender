@@ -35,9 +35,12 @@ class AVACAPO_PT_main_panel(Panel):
 
     def draw(self, context) -> None:
         layout = self.layout
+        layout.label(text="Connected",icon="INTERNET")
+        box = layout.box()
+        box.label(text=context.object.name,icon="OUTLINER_OB_ARMATURE")
         layout.operator(
             AVACAPO_OT_create_avacapo.bl_idname,
-            text="Create avacapo",
+            text="Operator",
             icon="MESH_UVSPHERE",
         )
 
