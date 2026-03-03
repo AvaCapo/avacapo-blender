@@ -1,4 +1,16 @@
 # AvaCapo blender addon.
+------------------------
 
-this is bledner integration of AvaCapo animation service
-this addon allows you to use AI for animating characters
+Bledner integration of AvaCapo.
+Addon allows you to use AI for animating characters.
+
+This repo root is blender addon folder, it have __init__.py
+
+### Installation:
+Dowload zip and install it via blender:
+Get Extentions -> Install from disk
+
+### Development setup:
+Use Vscode Blender Development extention in this folder, it will symlink the folder
+in local blender addons folder.
+
