@@ -1,5 +1,7 @@
+from bpy.types import Operator, Panel
+import bpy
 bl_info = {
-   "name": "AvaCapo AI animation",
+    "name": "AvaCapo AI animation",
     "author": "agamurian",
     "version": (0, 1),
     "blender": (4, 2, 0),
@@ -8,8 +10,6 @@ bl_info = {
     "category": "Animation",
 }
 
-import bpy
-from bpy.types import Operator, Panel
 
 class AVACAPO_OT_create_avacapo(Operator):
     """Create an avacapo"""
@@ -21,7 +21,7 @@ class AVACAPO_OT_create_avacapo(Operator):
         self.report({"INFO"}, "avacapo created!")
         return {"FINISHED"}
 
-    def invoke(self, context, event: bpy.types.Event) -> set[str]:
+    def invoke(self, context, event: bpy.types.Event | None) -> set[str]:
         return self.execute(context)
 
 
@@ -35,9 +35,9 @@ class AVACAPO_PT_main_panel(Panel):
 
     def draw(self, context) -> None:
         layout = self.layout
-        layout.label(text="Connected",icon="INTERNET")
+        layout.label(text="Connected", icon="INTERNET")
         box = layout.box()
-        box.label(text=context.object.name,icon="OUTLINER_OB_ARMATURE")
+        box.label(text=context.object.name, icon="OUTLINER_OB_ARMATURE")
         layout.operator(
             AVACAPO_OT_create_avacapo.bl_idname,
             text="Operator",
@@ -59,4 +59,3 @@ def register() -> None:
 def unregister() -> None:
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
-
