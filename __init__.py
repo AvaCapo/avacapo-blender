@@ -97,9 +97,21 @@ class MY_OT_OpenTextPopover(bpy.types.Operator):
     def execute(self, context):
         return {'FINISHED'}
 
+# UTILS
+# --------------------------------------------------------------------
+
+
+def check_type_of_armature(armature):
+    return "AVACAPO_V1"
+
+
+def get_selected_obj(context) -> bpy.types.Object | None:
+    return context.object
 
 # Panel
 # --------------------------------------------------------------------
+
+
 class AVACAPO_PT_main_panel(Panel):
     """Main avacapo panel in the N panel"""
     bl_label = "Avacapo"
@@ -110,12 +122,16 @@ class AVACAPO_PT_main_panel(Panel):
 
     def draw(self, context) -> None:
         layout = self.layout
-        layout.label(text="Connected", icon="INTERNET")
+        row = layout.row(align=True)
+        row.label(text="Connected", icon="INTERNET")
+        row.operator(
+            AVACAPO_OT_create_avacapo.bl_idname,
+            text="",
+            icon="MESH_UVSPHERE",
+        )
         box_obj = layout.box()
         settings = context.scene.my_settings
 
-        def get_selected_obj(context) -> bpy.types.Object | None:
-            return context.object
         selected_obj = get_selected_obj(context)
         # for objects every redraw!!!
         if selected_obj == None:
@@ -145,51 +161,55 @@ class AVACAPO_PT_main_panel(Panel):
         else:
             # Armature is here
             # -----------------
+            armature = context.object
             box_obj.label(text=f"{context.object.name}",
                           icon="OUTLINER_OB_ARMATURE")
-
-            box_prompt = layout.box()
-            row_top = box_prompt.row(align=True)
-            row_top.label(text="Start",)
-            row_top.separator()
-            row_top.separator()
-            row_top.label(text="Duration", icon="TIME")
-            row_top.separator()
-            row_top.separator()
-            row_top.label(text="End", )
-            row = box_prompt.row(align=True)
-            row.label(icon='PREV_KEYFRAME')
-            row.prop(settings, "start", text="", expand=True)
-            row.separator()
-            row.separator()
-            row.prop(settings, "duration",  text="", expand=True)
-            row.separator()
-            row.separator()
-            row.prop(settings, "end", text="", expand=True)
-            row.label(icon='NEXT_KEYFRAME')
-            box_prompt.label(text="Prompt:", icon="TEXT")
-            row_prompt = box_prompt.row(align=True)
-            row_prompt.prop(settings, "my_text")
-            row_prompt.operator("my.open_text_popover",
-                                text="", icon="FULLSCREEN_ENTER")
-            row = box_prompt.row(align=True)
-            row.prop(settings, "model")
-            row.operator(
-                AVACAPO_OT_create_avacapo.bl_idname,
-                text="Generate",
-                icon="SHADERFX",
-            )
-
-        layout.operator(
-            AVACAPO_OT_create_avacapo.bl_idname,
-            text="",
-            icon="MESH_UVSPHERE",
-        )
+            if not check_type_of_armature(armature) == "AVACAPO_V1":
+                box_obj.label(text=f"Unknown rig", icon="ERROR")
+                box_obj.operator(AVACAPO_OT_create_avacapo.bl_idname,
+                                 text="Try to Convert", icon="SHADERFX")
+            else:
+                box_obj.label(text=f"AvaCapo rig v1", icon="CHECKBOX_HLT")
+                box_prompt = layout.box()
+                row_top = box_prompt.row(align=True)
+                col = row_top.row(align=True)
+                col.label(text="Start")
+                row_top.separator()
+                row_top.separator()
+                row_top.label(text="Duration", icon="TIME")
+                row_top.separator()
+                row_top.separator()
+                row_top.label(text="End", )
+                row = box_prompt.row(align=True)
+                row.operator(AVACAPO_OT_create_avacapo.bl_idname,
+                             text="", icon="RECORD_ON")
+                row.prop(settings, "start", text="", expand=True)
+                row.separator()
+                row.separator()
+                row.prop(settings, "duration",  text="", expand=True)
+                row.separator()
+                row.separator()
+                row.prop(settings, "end", text="", expand=True)
+                row.operator(AVACAPO_OT_create_avacapo.bl_idname,
+                             text="", icon="RECORD_ON")
+                box_prompt.separator(type="LINE")
+                row_desc = box_prompt.row(align=True)
+                row_desc.label(text="Prompt:", icon="TEXT")
+                row_desc.operator("my.open_text_popover",
+                                  text="", icon="FULLSCREEN_ENTER")
+                row_prompt = box_prompt.row(align=True)
+                row_prompt.prop(settings, "my_text")
+                row = box_prompt.row(align=True)
+                row.prop(settings, "model")
+                row.operator(
+                    AVACAPO_OT_create_avacapo.bl_idname,
+                    text="Generate",
+                    icon="SHADERFX",
+                )
 
 
 # Registration
 # --------------------------------------------------------------------
-
 
 _classes = [
     MySettings,
