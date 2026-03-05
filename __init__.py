@@ -167,8 +167,7 @@ class AVACAPO_PT_main_panel(Panel):
             row.separator()
             row.prop(settings, "end", text="", expand=True)
             row.label(icon='NEXT_KEYFRAME')
-
-            box_prompt.label(text="Prompt:" icon="TEXT")
+            box_prompt.label(text="Prompt:", icon="TEXT")
             row_prompt = box_prompt.row(align=True)
             row_prompt.prop(settings, "my_text")
             row_prompt.operator("my.open_text_popover",
