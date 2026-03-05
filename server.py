@@ -8,11 +8,13 @@ from .storage import get_api_token
 
 
 URL = "http://185.70.185.83:8888/api/v1/api-avacapo-prompt/"
-type modelType = Literal["asm","gen1","gen2"]
+type modelType = Literal["asm", "gen1", "gen2"]
+
 
 def get_fps() -> int:
     """ get fps from blender please """
     return 24
+
 
 def get_animation(name, prompt: str, duration: float, temperature: float, model: modelType):
     """ send prompt to server, get animation back """
@@ -39,4 +41,3 @@ def get_animation(name, prompt: str, duration: float, temperature: float, model:
             result += chunk
 
     return result
-
