@@ -1,5 +1,9 @@
-from bpy.types import Operator, Panel
+from .server import get_animation
 import bpy
+from bpy.types import Operator, Panel
+import logging
+import threading
+
 bl_info = {
     "name": "AvaCapo AI animation",
     "author": "agamurian",
@@ -9,6 +13,9 @@ bl_info = {
     "description": "Automating charecter animation with AI",
     "category": "Animation",
 }
+
+
+log = logging.getLogger('blender_logger')
 
 # Props:
 # --------------------------------------------------------------------
@@ -47,6 +54,96 @@ class MySettings(bpy.types.PropertyGroup):
 
 # Operators:
 # --------------------------------------------------------------------
+
+# Actual server fetch
+
+# Working Example of asyncronous operator
+class AVACAPO_OT_fetch(bpy.types.Operator):
+    bl_idname = "aitext.fetch"
+    bl_label = "Get Animation"
+    bl_description = "Get AI Generated animation"
+
+    _thread = None
+    _result = None
+    _error = None
+    _timer = None
+
+    # called every 0.25 s by the timer on the main thread
+    def modal(self, context, event):
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        if self._thread and not self._thread.is_alive():
+            log.debug("Background thread finished, cleaning up timer")
+            context.window_manager.event_timer_remove(self._timer)
+            context.scene.avacapo_busy = False
+            context.scene.avacapo_status = ""
+
+            if self._error:
+                msg = f"Request failed: {self._error}"
+                log.error(msg)
+                self.report({"ERROR"}, msg)
+                context.scene.avacapo_status = f"Error: {self._error}"
+                return {"CANCELLED"}
+
+            log.info(f"Quote received: {self._result!r}")
+            self._add_text_object(context, self._result)
+            context.scene.avacapo_status = "Done!"
+            self.report({"INFO"}, "Quote added to scene!")
+            return {"FINISHED"}
+
+        return {"PASS_THROUGH"}
+
+    def invoke(self, context, event):
+        if context.scene.avacapo_busy:
+            self.report({"WARNING"}, "Already fetching, please wait...")
+            return {"CANCELLED"}
+
+        log.debug(f"Starting fetch from")
+        context.scene.avacapo_busy = True
+        context.scene.avacapo_status = "Fetching..."
+        self._result = None
+        self._error = None
+
+        # spin up background thread — urllib blocks, can't run on main thread
+        self._thread = threading.Thread(target=self._fetch, daemon=True)
+        self._thread.start()
+
+        # modal + timer keeps the operator alive without freezing Blender
+        self._timer = context.window_manager.event_timer_add(
+            0.25, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    # ── background thread ─────────────────────────────────────────────────────
+
+    def _fetch(self):
+        log.debug("Thread started, opening URL...")
+        try:
+            raw = get_animation(
+                prompt=bpy.data.scenes['Scene'].my_settings.my_text)
+            log.debug(f"Raw response ({len(raw)} bytes): {raw[:120]}")
+            self._result = raw
+        except Exception as e:
+            self._error = str(e)
+            log.exception("Unexpected error in fetch thread")
+
+    # ── main thread ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _add_text_object(context, text):
+        log.debug("Adding text object to scene")
+        bpy.ops.object.text_add(location=(0, 0, 0))
+        obj = context.active_object
+        obj.name = "Quote"
+        obj.data.body = str(text)
+        obj.data.size = 0.3
+        obj.rotation_euler = (1.5708, 0, 0)   # face front
+        log.debug(f"Text object '{obj.name}' created")
+
+# Working Example of asyncronous operator
+
+
 class AVACAPO_OT_create_avacapo(Operator):
     """Create an avacapo"""
     bl_idname = "avacapo.create_avacapo"
@@ -87,11 +184,17 @@ class MY_OT_OpenTextPopover(bpy.types.Operator):
                 box.label(text=line if line else " ")
         else:
             box.label(text="(empty)", icon='INFO')
-        layout.operator(
-            AVACAPO_OT_create_avacapo.bl_idname,
-            text="Generate",
-            icon="SHADERFX",
-        )
+        if context.scene.avacapo_busy:
+            layout.label(text="Fetching...", icon="TIME")
+        else:
+            layout.operator(
+                AVACAPO_OT_fetch.bl_idname,
+                text="Generate",
+                icon="SHADERFX",
+            )
+        if context.scene.avacapo_status:
+            icon = "ERROR" if "Error" in context.scene.avacapo_status else "INFO"
+            layout.label(text=context.scene.avacapo_status, icon=icon)
         layout.prop(settings, "model")
 
     def execute(self, context):
@@ -201,11 +304,17 @@ class AVACAPO_PT_main_panel(Panel):
                 row_prompt.prop(settings, "my_text")
                 row = box_prompt.row(align=True)
                 row.prop(settings, "model")
-                row.operator(
-                    AVACAPO_OT_create_avacapo.bl_idname,
-                    text="Generate",
-                    icon="SHADERFX",
-                )
+                if context.scene.avacapo_busy:
+                    row.label(text="Fetching...", icon="TIME")
+                else:
+                    row.operator(
+                        AVACAPO_OT_fetch.bl_idname,
+                        text="Generate",
+                        icon="SHADERFX",
+                    )
+                if context.scene.avacapo_status:
+                    icon = "ERROR" if "Error" in context.scene.avacapo_status else "INFO"
+                    row.label(text=context.scene.avacapo_status, icon=icon)
 
 
 # Registration
@@ -214,6 +323,7 @@ class AVACAPO_PT_main_panel(Panel):
 _classes = [
     MySettings,
     MY_OT_OpenTextPopover,
+    AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_PT_main_panel,
 ]
@@ -223,9 +333,13 @@ def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.my_settings = bpy.props.PointerProperty(type=MySettings)
+    bpy.types.Scene.avacapo_busy = bpy.props.BoolProperty(default=False)
+    bpy.types.Scene.avacapo_status = bpy.props.StringProperty(default="")
 
 
 def unregister() -> None:
-    del bpy.types.Scene.my_settings
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
+    del bpy.types.Scene.my_settings
+    del bpy.types.Scene.avacapo_busy
+    del bpy.types.Scene.avacapo_status
