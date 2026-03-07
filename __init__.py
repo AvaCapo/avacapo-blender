@@ -1,3 +1,4 @@
+from re import S
 from .server import get_animation
 import bpy
 from bpy.types import Operator, Panel
@@ -22,6 +23,7 @@ log = logging.getLogger('blender_logger')
 # --------------------------------------------------------------------
 
 
+# all blender-local variables
 class AvacapoSettings(bpy.types.PropertyGroup):
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     my_text: bpy.props.StringProperty(
@@ -51,6 +53,14 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         ],
         default='ASM'
     )
+    server_busy: bpy.props.BoolProperty(
+        name="server_busy",
+        default=False,
+    )
+    server_status: bpy.props.StringProperty(
+        name="server_status",
+        default="",
+    )
 
 
 # Operators:
@@ -71,38 +81,40 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
     # called every 0.25 s by the timer on the main thread
     def modal(self, context, event):
+        settings = context.scene.avacapo_settings
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
 
         if self._thread and not self._thread.is_alive():
             log.debug("Background thread finished, cleaning up timer")
             context.window_manager.event_timer_remove(self._timer)
-            context.scene.avacapo_busy = False
-            context.scene.avacapo_status = ""
+            settings.server_busy = False
+            settings.server_status = ""
 
             if self._error:
                 msg = f"Request failed: {self._error}"
                 log.error(msg)
                 self.report({"ERROR"}, msg)
-                context.scene.avacapo_status = f"Error: {self._error}"
+                settings.server_status = f"Error: {self._error}"
                 return {"CANCELLED"}
 
             log.info(f"Quote received: {self._result!r}")
             self._add_text_object(context, self._result)
-            context.scene.avacapo_status = "Done!"
+            settings.server_status = "Done!"
             self.report({"INFO"}, "Quote added to scene!")
             return {"FINISHED"}
 
         return {"PASS_THROUGH"}
 
     def invoke(self, context, event):
-        if context.scene.avacapo_busy:
+        settings = context.scene.avacapo_settings
+        if settings.server_busy:
             self.report({"WARNING"}, "Already fetching, please wait...")
             return {"CANCELLED"}
 
         log.debug(f"Starting fetch from")
-        context.scene.avacapo_busy = True
-        context.scene.avacapo_status = "Fetching..."
+        settings.server_busy = True
+        settings.server_status = "Fetching..."
         self._result = None
         self._error = None
 
@@ -306,7 +318,7 @@ class AVACAPO_PT_main_panel(Panel):
                 row_prompt.prop(settings, "my_text")
                 row = box_prompt.row(align=True)
                 row.prop(settings, "model")
-                if context.scene.avacapo_busy:
+                if settings.server_busy:
                     row.label(text="Fetching...", icon="TIME")
                 else:
                     row.operator(
@@ -314,9 +326,9 @@ class AVACAPO_PT_main_panel(Panel):
                         text="Generate",
                         icon="SHADERFX",
                     )
-                if context.scene.avacapo_status:
-                    icon = "ERROR" if "Error" in context.scene.avacapo_status else "INFO"
-                    row.label(text=context.scene.avacapo_status, icon=icon)
+                if settings.server_status:
+                    icon = "ERROR" if "Error" in settings.server_status else "INFO"
+                    row.label(text=settings.server_status, icon=icon)
 
 
 # Registration
@@ -336,13 +348,9 @@ def register() -> None:
         bpy.utils.register_class(cls)
     bpy.types.Scene.avacapo_settings = bpy.props.PointerProperty(
         type=AvacapoSettings)
-    bpy.types.Scene.avacapo_busy = bpy.props.BoolProperty(default=False)
-    bpy.types.Scene.avacapo_status = bpy.props.StringProperty(default="")
 
 
 def unregister() -> None:
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.Scene.avacapo_settings
-    del bpy.types.Scene.avacapo_busy
-    del bpy.types.Scene.avacapo_status

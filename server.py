@@ -1,10 +1,12 @@
 # Module to exchange info with server
+from storage import Storage
 import os
 import requests
 from typing import Literal
+import logging
 import bpy
+logger = logging.getLogger('blender_logger')
 
-from storage import Storage
 storage = Storage()
 
 
@@ -37,11 +39,8 @@ def get_animation(
         "extension": ext,
     }
 
-    print("--------")
-    print(payload)
-    print("---------")
     response = requests.post(URL, json=payload)
-    print("Status:", response.status_code)
+    logger.debug("Status:", response.status_code)
     result = b''
     for chunk in response.iter_content(chunk_size=1024 * 1024):
         print(chunk)
