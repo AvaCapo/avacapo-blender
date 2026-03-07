@@ -1,8 +1,9 @@
 from re import S
 from .server import get_animation
+from . import animation_utils
+from .logger import log
 import bpy
 from bpy.types import Operator, Panel
-import logging
 import threading
 
 
@@ -16,8 +17,6 @@ bl_info = {
     "category": "Animation",
 }
 
-
-log = logging.getLogger('blender_logger')
 
 # Props:
 # --------------------------------------------------------------------
@@ -98,10 +97,11 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 settings.server_status = f"Error: {self._error}"
                 return {"CANCELLED"}
 
-            log.info(f"Quote received: {self._result!r}")
+            log.info(f"FVH received: {self._result!r}")
+            animation_utils.apply_fvh(context.object, self._result)
             self._add_text_object(context, self._result)
             settings.server_status = "Done!"
-            self.report({"INFO"}, "Quote added to scene!")
+            self.report({"INFO"}, "animation applied")
             return {"FINISHED"}
 
         return {"PASS_THROUGH"}

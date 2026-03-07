@@ -1,9 +1,8 @@
 import os
 import json
-import logging
+from .logger import log
 from dataclasses import dataclass, asdict
 
-logger = logging.getLogger('blender_logger')
 
 STORAGE_FILE_NAME = "storage.json"
 current_dir = os.getcwd()
@@ -20,7 +19,7 @@ class Storage:
             with open(STORAGE_PATH) as f:
                 self.__dict__.update(json.load(f))
         except FileNotFoundError:
-            logger.warning("Storage file not found, creating.")
+            log.warning("Storage file not found, creating.")
             self.save()
 
     def save(self) -> None:

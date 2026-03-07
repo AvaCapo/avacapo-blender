@@ -1,11 +1,9 @@
 # Module to exchange info with server
 from storage import Storage
-import os
 import requests
 from typing import Literal
-import logging
+from .logger import log
 import bpy
-logger = logging.getLogger('blender_logger')
 
 storage = Storage()
 
@@ -16,7 +14,7 @@ modelType = Literal["asm", "gen1", "gen2"]
 
 def get_fps() -> int:
     """ get fps from blender please """
-    return 24
+    return bpy.context.scene.render.fps
 
 
 def get_animation(
@@ -40,7 +38,7 @@ def get_animation(
     }
 
     response = requests.post(URL, json=payload)
-    logger.debug("Status:", response.status_code)
+    log.debug("Status:", response.status_code)
     result = b''
     for chunk in response.iter_content(chunk_size=1024 * 1024):
         print(chunk)
