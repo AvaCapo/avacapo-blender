@@ -1,27 +1,41 @@
 import os
 import json
 from .logger import log
-from dataclasses import dataclass, asdict
-
 
 STORAGE_FILE_NAME = "storage.json"
-current_dir = os.getcwd()
+current_dir = os.path.dirname(os.path.abspath(__file__))
 STORAGE_PATH = os.path.join(current_dir, STORAGE_FILE_NAME)
 
 
-# TODO: add logging and validation is sheme is off (use)
-@dataclass
 class Storage:
     api_token: str = ""
 
-    def load(self) -> None:
+    @classmethod
+    def load(cls) -> None:
+        log.debug("storage loading")
         try:
             with open(STORAGE_PATH) as f:
-                self.__dict__.update(json.load(f))
+                _dict = json.load(f)
+            for k, v in _dict.items():
+                if k in cls.__annotations__:
+                    setattr(cls, k, v)
+                else:
+                    log.warning("Unknown key in storage: '%s', skipping.", k)
         except FileNotFoundError:
             log.warning("Storage file not found, creating.")
-            self.save()
+            cls.save()
+        except json.JSONDecodeError as e:
+            log.error("Storage file corrupt: %s", e)
 
-    def save(self) -> None:
+    @classmethod
+    def save(cls) -> None:
+        known_fields = cls.__annotations__
+        data = {}
+        for key in known_fields:
+            data[key] = getattr(cls, key)
         with open(STORAGE_PATH, "w") as f:
-            json.dump(asdict(self), f, indent=2)
+            json.dump(data, f, indent=2)
+
+
+Storage.load()
+log.debug(Storage.api_token)

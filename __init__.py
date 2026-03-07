@@ -1,11 +1,10 @@
-from re import S
-from .server import get_animation
-from . import animation_utils
-from .logger import log
 import bpy
-from bpy.types import Operator, Panel
 import threading
 
+from .server import get_animation
+from . import animation_utils
+from .storage import Storage
+from .logger import log
 
 bl_info = {
     "name": "AvaCapo AI animation",
@@ -98,8 +97,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 return {"CANCELLED"}
 
             log.info(f"FVH received: {self._result!r}")
-            animation_utils.apply_fvh(context.object, self._result)
-            self._add_text_object(context, self._result)
+            self._execute(context, self._result)
             settings.server_status = "Done!"
             self.report({"INFO"}, "animation applied")
             return {"FINISHED"}
@@ -145,20 +143,14 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
     # ── main thread ───────────────────────────────────────────────────────────
 
     @staticmethod
-    def _add_text_object(context, text):
+    def _execute(context, fetch_result):
         log.debug("Adding text object to scene")
-        bpy.ops.object.text_add(location=(0, 0, 0))
-        obj = context.active_object
-        obj.name = "Quote"
-        obj.data.body = str(text)
-        obj.data.size = 0.3
-        obj.rotation_euler = (1.5708, 0, 0)   # face front
-        log.debug(f"Text object '{obj.name}' created")
+        animation_utils.apply_fvh(context.object, fetch_result)
 
 # Working Example of asyncronous operator
 
 
-class AVACAPO_OT_create_avacapo(Operator):
+class AVACAPO_OT_create_avacapo(bpy.types.Operator):
     """Create an avacapo"""
     bl_idname = "avacapo.create_avacapo"
     bl_label = "Create avacapo"
@@ -229,7 +221,7 @@ def get_selected_obj(context) -> bpy.types.Object | None:
 # --------------------------------------------------------------------
 
 
-class AVACAPO_PT_main_panel(Panel):
+class AVACAPO_PT_main_panel(bpy.types.Panel):
     """Main avacapo panel in the N panel"""
     bl_label = "Avacapo"
     bl_idname = "AVACAPO_PT_main_panel"
@@ -241,6 +233,7 @@ class AVACAPO_PT_main_panel(Panel):
         layout = self.layout
         row = layout.row(align=True)
         row.label(text="Connected", icon="INTERNET")
+        row.label(text=Storage.api_token, icon="INTERNET")
         row.operator(
             AVACAPO_OT_create_avacapo.bl_idname,
             text="",

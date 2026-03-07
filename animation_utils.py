@@ -1,5 +1,13 @@
 import bpy
 
+from .logger import log
+
 
 def apply_fvh(obj: bpy.types.Object, fvh):
-    print(obj, fvh)
+    log.debug(
+        f'''
+        aplling animation:
+        {obj.name}
+        {len(fvh)}
+        '''
+    )

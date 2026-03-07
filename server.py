@@ -1,12 +1,9 @@
-# Module to exchange info with server
-from storage import Storage
+import bpy
 import requests
 from typing import Literal
+
+from .storage import Storage
 from .logger import log
-import bpy
-
-storage = Storage()
-
 
 URL = "http://185.70.185.83:8888/api/v1/api-avacapo-prompt/"
 modelType = Literal["asm", "gen1", "gen2"]
@@ -25,18 +22,19 @@ def get_animation(
     model: modelType = "asm"
 ):
     """ send prompt to server, get animation back """
+
     ext = 'bvh'
     payload = {
         "prompt": prompt,
         "prompt_duration": duration,
-        "prompt_fps": 30,
+        "prompt_fps": get_fps(),
         "prompt_temperature": temperature,
         "name": name,
-        "api_token": storage.api_token,
+        "api_token": Storage.api_token,
         "model": model,
         "extension": ext,
     }
-
+    log.debug(f"playload: {payload}")
     response = requests.post(URL, json=payload)
     log.debug("Status:", response.status_code)
     result = b''
