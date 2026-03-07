@@ -102,7 +102,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 settings.server_status = f"Error: {self._error}"
                 return {"CANCELLED"}
 
-            log.info(f"FVH received: {self._result!r}")
+            log.info(f"BVH received: {self._result!r}")
             self._execute(context, self._result)
             settings.server_status = "Done!"
             self.report({"INFO"}, "animation applied")
@@ -156,7 +156,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
     @staticmethod
     def _execute(context, fetch_result):
         log.debug("appling animation")
-        animation_utils.apply_fvh(context.object, fetch_result)
+        animation_utils.apply_bvh(context.object, fetch_result)
 
 # Working Example of asyncronous operator
 

@@ -3,11 +3,11 @@ import bpy
 from .logger import log
 
 
-def apply_fvh(obj: bpy.types.Object, fvh):
+def apply_bvh(obj: bpy.types.Object, bvh):
     log.debug(
         f'''
         aplling animation:
         {obj.name}
-        {len(fvh)}
+        {len(bvh)}
         '''
     )
