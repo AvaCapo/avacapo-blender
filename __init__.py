@@ -24,7 +24,7 @@ bl_info = {
 # all blender-local variables
 class AvacapoSettings(bpy.types.PropertyGroup):
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
-    my_text: bpy.props.StringProperty(
+    prompt: bpy.props.StringProperty(
         name="",
         default="",
         description="Enter text here"
@@ -35,11 +35,17 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     )
     duration: bpy.props.FloatProperty(
         name="duration",
+        description="seconds",
         default=2.5,
     )
     end: bpy.props.IntProperty(
         name="end",
         default=120,
+    )
+    temperature: bpy.props.FloatProperty(
+        name="temperature",
+        description="setting 0.0 - 1.0 for neural network 'randomness'",
+        default=0.5,
     )
     model: bpy.props.EnumProperty(
         name="Model",
@@ -129,11 +135,16 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
     # ── background thread ─────────────────────────────────────────────────────
 
     def _fetch(self):
+        settings = bpy.context.scene.avacapo_settings
         # check response here,
         log.debug("Thread started, opening URL...")
         try:
             raw = get_animation(
-                prompt=bpy.data.scenes['Scene'].avacapo_settings.my_text)
+                prompt=settings.prompt,
+                duration=settings.duration,
+                temperature=settings.temperature,
+                model=settings.model
+            )
             log.debug(f"Raw response ({len(raw)} bytes): {raw[:120]}")
             self._result = raw
         except Exception as e:
@@ -144,14 +155,14 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
     @staticmethod
     def _execute(context, fetch_result):
-        log.debug("Adding text object to scene")
+        log.debug("appling animation")
         animation_utils.apply_fvh(context.object, fetch_result)
 
 # Working Example of asyncronous operator
 
 
 class AVACAPO_OT_create_avacapo(bpy.types.Operator):
-    """Create an avacapo"""
+    """Not yet implemented"""
     bl_idname = "avacapo.create_avacapo"
     bl_label = "Create avacapo"
     bl_options = {"REGISTER", "UNDO"}
@@ -174,7 +185,7 @@ class MY_OT_OpenTextPopover(bpy.types.Operator):
     def draw(self, context):
         layout = self.layout
         settings = context.scene.avacapo_settings
-        text = settings.my_text
+        text = settings.prompt
 
         row = layout.row()
         row.label(text="Preview:", icon='TEXT')
@@ -308,7 +319,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row_desc.operator("my.open_text_popover",
                                   text="", icon="FULLSCREEN_ENTER")
                 row_prompt = box_prompt.row(align=True)
-                row_prompt.prop(settings, "my_text")
+                row_prompt.prop(settings, "prompt")
                 row = box_prompt.row(align=True)
                 row.prop(settings, "model")
                 if settings.server_busy:

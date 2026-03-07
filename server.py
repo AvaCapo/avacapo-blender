@@ -39,7 +39,6 @@ def get_animation(
     log.debug("Status:", response.status_code)
     result = b''
     for chunk in response.iter_content(chunk_size=1024 * 1024):
-        print(chunk)
         if chunk:
             result += chunk
     return result
