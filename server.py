@@ -4,7 +4,8 @@ import requests
 from typing import Literal
 import bpy
 
-from .storage import get_api_token
+from storage import Storage
+storage = Storage()
 
 
 URL = "http://185.70.185.83:8888/api/v1/api-avacapo-prompt/"
@@ -31,7 +32,7 @@ def get_animation(
         "prompt_fps": 30,
         "prompt_temperature": temperature,
         "name": name,
-        "api_token": "5c89cce212dd41fdb73afe462379a34c",
+        "api_token": storage.api_token,
         "model": model,
         "extension": ext,
     }

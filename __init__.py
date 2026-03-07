@@ -4,6 +4,7 @@ from bpy.types import Operator, Panel
 import logging
 import threading
 
+
 bl_info = {
     "name": "AvaCapo AI animation",
     "author": "agamurian",
@@ -21,7 +22,7 @@ log = logging.getLogger('blender_logger')
 # --------------------------------------------------------------------
 
 
-class MySettings(bpy.types.PropertyGroup):
+class AvacapoSettings(bpy.types.PropertyGroup):
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     my_text: bpy.props.StringProperty(
         name="",
@@ -118,10 +119,11 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
     # ── background thread ─────────────────────────────────────────────────────
 
     def _fetch(self):
+        # check response here,
         log.debug("Thread started, opening URL...")
         try:
             raw = get_animation(
-                prompt=bpy.data.scenes['Scene'].my_settings.my_text)
+                prompt=bpy.data.scenes['Scene'].avacapo_settings.my_text)
             log.debug(f"Raw response ({len(raw)} bytes): {raw[:120]}")
             self._result = raw
         except Exception as e:
@@ -167,7 +169,7 @@ class MY_OT_OpenTextPopover(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
-        settings = context.scene.my_settings
+        settings = context.scene.avacapo_settings
         text = settings.my_text
 
         row = layout.row()
@@ -233,7 +235,7 @@ class AVACAPO_PT_main_panel(Panel):
             icon="MESH_UVSPHERE",
         )
         box_obj = layout.box()
-        settings = context.scene.my_settings
+        settings = context.scene.avacapo_settings
 
         selected_obj = get_selected_obj(context)
         # for objects every redraw!!!
@@ -321,7 +323,7 @@ class AVACAPO_PT_main_panel(Panel):
 # --------------------------------------------------------------------
 
 _classes = [
-    MySettings,
+    AvacapoSettings,
     MY_OT_OpenTextPopover,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
@@ -332,7 +334,8 @@ _classes = [
 def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.my_settings = bpy.props.PointerProperty(type=MySettings)
+    bpy.types.Scene.avacapo_settings = bpy.props.PointerProperty(
+        type=AvacapoSettings)
     bpy.types.Scene.avacapo_busy = bpy.props.BoolProperty(default=False)
     bpy.types.Scene.avacapo_status = bpy.props.StringProperty(default="")
 
@@ -340,6 +343,6 @@ def register() -> None:
 def unregister() -> None:
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
-    del bpy.types.Scene.my_settings
+    del bpy.types.Scene.avacapo_settings
     del bpy.types.Scene.avacapo_busy
     del bpy.types.Scene.avacapo_status
