@@ -1,6 +1,7 @@
+import bpy
 from typing import Literal
 
-type RigType = Literal["avacapo_v1"]
+RigType = Literal["avacapo_v1"]
 
 
 def infer_rig_type(obj: bpy.types.Object) -> RigType:

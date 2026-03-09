@@ -4,7 +4,7 @@ from typing import Literal
 from .logger import log
 from .rig_utils import infer_rig_type
 
-type AnimationType = Literal["bvh_avocapo_v1"]
+AnimationType = Literal["bvh_avocapo_v1"]
 
 
 class Animation:
@@ -22,7 +22,7 @@ def apply_animation(obj: bpy.types.Object, animation_data: Animation):
     animation = Animation(animation_data)
     match infer_rig_type(obj), animation._type:
         case "avacapo_v1", "bvh_avocapo_v1":
-            apply_bvh(obj, bvh)
+            apply_bvh(obj, animation_data)
         case _:
             log.error(
                 f"cannot apply animation of type {animation._type} to {infer_rig_type}")
