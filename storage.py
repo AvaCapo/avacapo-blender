@@ -1,10 +1,7 @@
 import os
 import json
 from .logger import log
-
-STORAGE_FILE_NAME = "storage.json"
-current_dir = os.path.dirname(os.path.abspath(__file__))
-STORAGE_PATH = os.path.join(current_dir, STORAGE_FILE_NAME)
+from .local_files import STORAGE_PATH
 
 
 class Storage:

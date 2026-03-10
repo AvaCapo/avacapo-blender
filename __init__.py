@@ -1,10 +1,14 @@
 import bpy
+import os
 import threading
+
 
 from .server import get_animation
 from . import animation_utils
+from . import rig_utils
 from .storage import Storage
 from .logger import log
+from .local_files import AVACAPO_RIG_NAME, BLEND_PATH
 
 bl_info = {
     "name": "AvaCapo AI animation",
@@ -161,6 +165,37 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 # Working Example of asyncronous operator
 
 
+class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
+    """create avacapo rig"""
+    bl_idname = "avacapo.create_avacapo_v1"
+    bl_label = "Create avacapo rig"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        inner_path = "Object"
+        object_name = AVACAPO_RIG_NAME
+
+        bpy.ops.wm.append(
+            filepath=os.path.join(BLEND_PATH, inner_path, object_name),
+            directory=os.path.join(BLEND_PATH, inner_path),
+            filename=object_name
+        )
+
+        # Optional: select and make it active
+        obj = context.scene.objects.get(object_name)
+        if obj:
+            bpy.ops.object.select_all(action='DESELECT')
+            obj.select_set(True)
+            context.view_layer.objects.active = obj
+            self.report({"INFO"}, "avacapo rig created!")
+        else:
+            self.report(
+                {"WARNING"}, f"Object '{object_name}' not found after append")
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
+
+
 class AVACAPO_OT_create_avacapo(bpy.types.Operator):
     """Not yet implemented"""
     bl_idname = "avacapo.create_avacapo"
@@ -255,12 +290,13 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 
         selected_obj = get_selected_obj(context)
         # for objects every redraw!!!
-        if selected_obj == None:
-            box_obj.label(text='no selected object',
-                          icon="ERROR")
-        elif selected_obj.type != 'ARMATURE':
-            box_obj.label(text=f"{context.object.name} is not an armature",
-                          icon="MOD_WIREFRAME")
+        if selected_obj == None or selected_obj.type != 'ARMATURE':
+            if selected_obj == None:
+                box_obj.label(text='no selected object',
+                              icon="ERROR")
+            elif selected_obj.type != 'ARMATURE':
+                box_obj.label(text=f"{context.object.name} is not an armature",
+                              icon="MOD_WIREFRAME")
             if any(o.type == "ARMATURE" for o in context.scene.objects):
                 for a in [o for o in context.scene.objects if o.type == "ARMATURE"]:
                     row_select_armature = box_obj.row()
@@ -274,18 +310,18 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
             else:
                 box_obj.label(text="no armatures",
                               icon="OUTLINER_OB_ARMATURE")
-                box_obj.operator(
-                    AVACAPO_OT_create_avacapo.bl_idname,
-                    text="Create Armature",
-                    icon="OUTLINER_OB_ARMATURE",
-                )
+            box_obj.operator(
+                AVACAPO_OT_create_avacapo_v1.bl_idname,
+                text="Create Armature",
+                icon="OUTLINER_OB_ARMATURE",
+            )
         else:
             # Armature is here
             # -----------------
             armature = context.object
             box_obj.label(text=f"{context.object.name}",
                           icon="OUTLINER_OB_ARMATURE")
-            if not check_type_of_armature(armature) == "AVACAPO_V1":
+            if rig_utils.infer_rig_type(armature) != "avacapo_bvh_v1":
                 box_obj.label(text=f"Unknown rig", icon="ERROR")
                 box_obj.operator(AVACAPO_OT_create_avacapo.bl_idname,
                                  text="Try to Convert", icon="SHADERFX")
@@ -343,6 +379,7 @@ _classes = [
     MY_OT_OpenTextPopover,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
+    AVACAPO_OT_create_avacapo_v1,
     AVACAPO_PT_main_panel,
 ]
 
@@ -352,9 +389,14 @@ def register() -> None:
         bpy.utils.register_class(cls)
     bpy.types.Scene.avacapo_settings = bpy.props.PointerProperty(
         type=AvacapoSettings)
+    bpy.app.handlers.depsgraph_update_post.append(
+        rig_utils._init_bone_trees_once)
 
 
 def unregister() -> None:
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.Scene.avacapo_settings
+    if rig_utils._init_bone_trees_once in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(
+            rig_utils._init_bone_trees_once)
