@@ -2,7 +2,7 @@ import bpy
 from bpy.app.handlers import persistent
 from typing import Literal, TypeAlias
 
-from .local_files import AVACAPO_RIG_NAME, BLEND_NAME, BLEND_PATH
+from .config import AVACAPO_RIG_NAME, BLEND_NAME, BLEND_PATH
 from .logger import log
 
 RigType = Literal["avacapo_bvh_v1", "unknown"]
@@ -24,11 +24,7 @@ def collect_bone_tree(armature_obj: bpy.types.Object) -> BoneTree:
         return {child.name: build_subtree(child) for child in bone.children}
 
     # Start from root bones only (no parent)
-    return {
-        bone.name: build_subtree(bone)
-        for bone in arm.bones
-        if bone.parent is None
-    }
+    return {bone.name: build_subtree(bone) for bone in arm.bones if bone.parent is None}
 
 
 def _find_in_descendants(bone: bpy.types.Bone, name: str) -> bpy.types.Bone | None:
@@ -74,7 +70,8 @@ def check_if_same_rigtype(
             if child_bone is None:
                 if verbose:
                     print(
-                        f"[RigCheck] MISSING: '{child_name}' not found under '{parent_bone.name}'")
+                        f"[RigCheck] MISSING: '{child_name}' not found under '{parent_bone.name}'"
+                    )
                 return False
             # Recurse into the expected children of this bone
             if not match_subtree(child_bone, child_subtree):
@@ -97,8 +94,7 @@ def load_bone_tree(rig_name: str) -> BoneTree:
 
     with bpy.data.libraries.load(BLEND_PATH, link=False) as (data_from, data_to):
         if rig_name not in data_from.objects:
-            raise ValueError(
-                f"Object '{rig_name}' not found in '{BLEND_NAME}'")
+            raise ValueError(f"Object '{rig_name}' not found in '{BLEND_NAME}'")
         data_to.objects = [rig_name]
 
     rig_obj = data_to.objects[0]
@@ -126,11 +122,13 @@ def _init_bone_trees_once(scene, depsgraph):
 
 
 def infer_rig_type(obj: bpy.types.Object) -> RigType:
-    log.debug(
-        f"infer rig type: matching {obj} against AVACAPO_BVH_V1_BONE_TREE")
+    # log.debug(
+    # f"infer rig type: matching {obj} against AVACAPO_BVH_V1_BONE_TREE")
     if obj.type != "ARMATURE":
         log.error(f"{obj.name} is not armature, cannot infer rig type")
-        return 'unknown'
-    if AVACAPO_BVH_V1_BONE_TREE and check_if_same_rigtype(obj, AVACAPO_BVH_V1_BONE_TREE):
-        return 'avacapo_bvh_v1'
-    return 'unknown'
+        return "unknown"
+    if AVACAPO_BVH_V1_BONE_TREE and check_if_same_rigtype(
+        obj, AVACAPO_BVH_V1_BONE_TREE
+    ):
+        return "avacapo_bvh_v1"
+    return "unknown"

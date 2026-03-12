@@ -1,6 +1,7 @@
 import bpy
 import requests
 from typing import Literal
+import time
 
 from .storage import Storage
 from .logger import log
@@ -10,20 +11,20 @@ modelType = Literal["asm", "gen1", "gen2"]
 
 
 def get_fps() -> int:
-    """ get fps from blender please """
+    """get fps from blender please"""
     return bpy.context.scene.render.fps
 
 
 def get_animation(
-    name: str = "animation",
+    name: str = "test_animation",
     prompt: str = "",
     duration: float = 5.0,
-    temperature: float = 0.5,
-    model: modelType = "asm"
+    temperature: float = 1.0,
+    model: modelType = "asm",
 ):
-    """ send prompt to server, get animation back """
+    """send prompt to server, get animation back"""
 
-    ext = 'bvh'
+    time_start = time.time()
     payload = {
         "prompt": prompt,
         "prompt_duration": duration,
@@ -32,13 +33,12 @@ def get_animation(
         "name": name,
         "api_token": Storage.api_token,
         "model": model,
-        "extension": ext,
+        "extension": "bvh",
     }
-    log.debug(f"playload: {payload}")
+    print(payload)
     response = requests.post(URL, json=payload)
-    log.debug("Status:", response.status_code)
-    result = b''
-    for chunk in response.iter_content(chunk_size=1024 * 1024):
-        if chunk:
-            result += chunk
-    return result
+    time_end = time.time()
+    print("---")
+    print(f"response getting is {time_start - time_end}")
+    print("---")
+    return response.content

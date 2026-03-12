@@ -1,7 +1,7 @@
 import os
 import json
 from .logger import log
-from .local_files import STORAGE_PATH
+from .config import STORAGE_PATH
 
 
 class Storage:
