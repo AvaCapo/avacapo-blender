@@ -2,6 +2,7 @@ import bpy
 import os
 import threading
 import time
+import datetime
 
 
 from .state_controller import State, Queue
@@ -115,11 +116,17 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             # chain: process the next pending task if any
             bpy.ops.queue.process()
 
+            task = Queue.get_by_id(State.current_task_id)
+            if task:
+                task.status = "error" if self._error else "done"
+                task.time_finished = datetime.now().isoformat(timespec="seconds")
+                task.generation_time = time.time() - self._time_start
             return {"FINISHED"}
 
         return {"PASS_THROUGH"}
 
     def invoke(self, context, event):
+        self._time_start = time.time()
         if State.server_busy:
             self.report({"WARNING"}, "Already fetching, please wait...")
             return {"CANCELLED"}
@@ -161,6 +168,42 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         animation_utils.apply_bvh(obj, fetch_result)
 
 
+class QUEUE_OT_redo_task(bpy.types.Operator):
+    bl_idname = "queue.redo_task"
+    bl_label = "Redo Task"
+
+    task_id: bpy.props.StringProperty()
+
+    def execute(self, context):
+        original = Queue.get_by_id(self.task_id)
+        if not original:
+            self.report({"WARNING"}, "Task not found.")
+            return {"CANCELLED"}
+
+        # clone with same params, fresh status
+        task = Queue.add(
+            prompt=original.prompt,
+            start_frame=original.start_frame,
+            duration=original.duration,
+            model=original.model,
+        )
+        self.report({"INFO"}, f"Re-queued: {task.id}")
+        if not State.server_busy:
+            bpy.ops.queue.process()
+        return {"FINISHED"}
+
+
+class QUEUE_OT_discard_task(bpy.types.Operator):
+    bl_idname = "queue.discard_task"
+    bl_label = "Discard Task"
+
+    task_id: bpy.props.StringProperty()
+
+    def execute(self, context):
+        Queue.discard_by_id(self.task_id)
+        return {"FINISHED"}
+
+
 class QUEUE_OT_add_task(bpy.types.Operator):
     bl_idname = "queue.add_task"
     bl_label = "Add Task"
@@ -174,7 +217,13 @@ class QUEUE_OT_add_task(bpy.types.Operator):
             self.report({"WARNING"}, "Prompt is empty.")
             return {"CANCELLED"}
 
-        task = Queue.add(prompt)
+        task = Queue.add(
+            prompt=settings.prompt.strip(),
+            start_frame=settings.start,
+            duration=settings.duration,
+            model=settings.model,
+        )
+
         self.report({"INFO"}, f"Task queued: {task.name} [{task.id}]")
 
         # kick off processing immediately if nothing is running
@@ -462,18 +511,17 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 # --------------------------------------------------------------------
 
 _classes = [
-    # props:
     AvacapoSettings,
-    # operators:
     MY_OT_OpenTextPopover,
     QUEUE_OT_add_task,
     QUEUE_OT_process,
+    QUEUE_OT_redo_task,
+    QUEUE_OT_discard_task,
     AVACAPO_OT_reload_addon,
     AVACAPO_OT_update_addon,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
-    # panel:
     AVACAPO_PT_main_panel,
 ]
 
