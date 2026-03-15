@@ -10,7 +10,7 @@ from . import animation_utils
 from . import rig_utils
 from .storage import Storage
 from .logger import log
-from .config import ADDON_NAME, AVACAPO_RIG_NAME, BLEND_PATH
+from .config import AVACAPO_RIG_NAME, BLEND_PATH
 
 bl_info = {
     "name": "AvaCapo AI animation",
@@ -27,7 +27,6 @@ bl_info = {
 # --------------------------------------------------------------------
 
 
-# all blender-local variables
 class AvacapoSettings(bpy.types.PropertyGroup):
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     prompt: bpy.props.StringProperty(
@@ -54,7 +53,6 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     model: bpy.props.EnumProperty(
         name="Model",
         description="generation model",
-        # TODO: take from config.py, generate enum
         items=[
             ("asm", "Asm", "Fast simple ASM"),
             ("gen1", "Gen 1", "First generation GPAT"),
@@ -67,10 +65,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
 # Operators:
 # --------------------------------------------------------------------
 
-# Actual server fetch
 
-
-# Working Example of asyncronous operator
 class AVACAPO_OT_fetch(bpy.types.Operator):
     bl_idname = "aitext.fetch"
     bl_label = "Get Animation"
@@ -81,7 +76,6 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
     _error = None
     _timer = None
 
-    # called every 0.25 s by the timer on the main thread
     def modal(self, context, event):
         time_start = time.time()
         if event.type != "TIMER":
@@ -90,7 +84,12 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         if self._thread and not self._thread.is_alive():
             log.debug("Background thread finished, cleaning up timer")
             context.window_manager.event_timer_remove(self._timer)
+
+            # update the task that was running
+            task = Queue.get_by_id(State.current_task_id)
+
             State.server_busy = False
+            State.current_task_id = ""
             State.server_status = ""
 
             if self._error:
@@ -98,9 +97,13 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 log.error(msg)
                 self.report({"ERROR"}, msg)
                 State.server_status = f"Error: {self._error}"
+                if task:
+                    task.status = "error"
                 return {"CANCELLED"}
 
             log.info(f"BVH received: {self._result!r}")
+            if task:
+                task.status = "done"
             self._execute(self._result, context.object)
             State.server_status = "Done!"
             self.report({"INFO"}, "animation applied")
@@ -108,6 +111,10 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             log.debug(
                 f"time of modal operator animation apply is {time_end - time_start}"
             )
+
+            # chain: process the next pending task if any
+            bpy.ops.queue.process()
+
             return {"FINISHED"}
 
         return {"PASS_THROUGH"}
@@ -117,28 +124,23 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             self.report({"WARNING"}, "Already fetching, please wait...")
             return {"CANCELLED"}
 
-        log.debug(f"Starting fetch from")
+        log.debug("Starting fetch")
         State.server_busy = True
         State.server_status = "Fetching..."
         self._result = None
         self._error = None
 
-        # spin up background thread — urllib blocks, can't run on main thread
         self._thread = threading.Thread(target=self._fetch, daemon=True)
         self._thread.start()
 
-        # modal + timer keeps the operator alive without freezing Blender
         self._timer = context.window_manager.event_timer_add(
             0.25, window=context.window
         )
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
-    # ── background thread ─────────────────────────────────────────────────────
-
     def _fetch(self):
         settings = bpy.context.scene.avacapo_settings
-        # check response here,
         log.debug("Thread started, opening URL...")
         try:
             raw = get_animation(
@@ -153,16 +155,53 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             self._error = str(e)
             log.exception("Unexpected error in fetch thread")
 
-    # ── main thread ───────────────────────────────────────────────────────────
-
     @staticmethod
     def _execute(fetch_result, obj):
-        # passing object! stale data, change to custom ids
-        log.debug("appling animation")
+        log.debug("applying animation")
         animation_utils.apply_bvh(obj, fetch_result)
 
 
-# Working Example of asyncronous operator
+class QUEUE_OT_add_task(bpy.types.Operator):
+    bl_idname = "queue.add_task"
+    bl_label = "Add Task"
+    bl_description = "Queue a generation task from the current prompt"
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        prompt = settings.prompt.strip()
+
+        if not prompt:
+            self.report({"WARNING"}, "Prompt is empty.")
+            return {"CANCELLED"}
+
+        task = Queue.add(prompt)
+        self.report({"INFO"}, f"Task queued: {task.name} [{task.id}]")
+
+        # kick off processing immediately if nothing is running
+        if not State.server_busy:
+            bpy.ops.queue.process()
+
+        return {"FINISHED"}
+
+
+class QUEUE_OT_process(bpy.types.Operator):
+    """Pick the next pending task and start the fetch operator"""
+
+    bl_idname = "queue.process"
+    bl_label = "Process Queue"
+
+    def execute(self, context):
+        if State.server_busy:
+            return {"FINISHED"}  # fetch already running, it will chain on its own
+
+        task = next((t for t in Queue.tasks if t.status == "pending"), None)
+        if task is None:
+            return {"FINISHED"}
+
+        task.status = "loading"
+        State.current_task_id = task.id
+        bpy.ops.aitext.fetch("INVOKE_DEFAULT")
+        return {"FINISHED"}
 
 
 class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
@@ -182,7 +221,6 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
             filename=object_name,
         )
 
-        # Optional: select and make it active
         obj = context.scene.objects.get(object_name)
         if obj:
             bpy.ops.object.select_all(action="DESELECT")
@@ -201,12 +239,10 @@ class AVACAPO_OT_reload_addon(bpy.types.Operator):
 
     bl_idname = "avacapo.reload_addon"
     bl_label = "Reload Addon"
-    bl_options = {"REGISTER"}  # obviously no undo avaliable
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
-        addon_name = ADDON_NAME
         bpy.ops.script.reload()
-        # bpy.ops.wm.addon_enable(module="addon_name")
         self.report({"INFO"}, "addon reloaded!")
         return {"FINISHED"}
 
@@ -219,12 +255,10 @@ class AVACAPO_OT_update_addon(bpy.types.Operator):
 
     bl_idname = "avacapo.update_addon"
     bl_label = "update Addon"
-    bl_options = {"REGISTER"}  # obviously no undo avaliable
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
-        addon_name = ADDON_NAME
-
-        self.report({"INFO"}, "addon updateed!")
+        self.report({"INFO"}, "addon updated!")
         return {"FINISHED"}
 
     def invoke(self, context, event: bpy.types.Event | None) -> set[str]:
@@ -265,54 +299,26 @@ class MY_OT_OpenTextPopover(bpy.types.Operator):
         box = layout.box()
 
         if text:
-            # Split by newlines and display each line
             for line in text.split("\n"):
                 box.label(text=line if line else " ")
         else:
             box.label(text="(empty)", icon="INFO")
+
         if State.server_busy:
             layout.label(text="Fetching...", icon="TIME")
         else:
             layout.operator(
-                AVACAPO_OT_fetch.bl_idname,
+                QUEUE_OT_add_task.bl_idname,
                 text="Generate",
                 icon="SHADERFX",
             )
         if State.server_status:
             icon = "ERROR" if "Error" in State.server_status else "INFO"
             layout.label(text=State.server_status, icon=icon)
-        # layout.prop(settings, "temperature")
         layout.prop(settings, "model")
 
     def execute(self, context):
         return {"FINISHED"}
-
-
-class QUEUE_OT_add_task(bpy.types.Operator):
-    bl_idname = "queue.add_task"
-    bl_label = "Add Task"
-    bl_description = "Add a new task to the queue"
-
-    prompt: bpy.props.StringProperty(
-        name="Prompt",
-        description="Task prompt",
-        default="",
-    )
-
-    def execute(self, context):
-        if not self.prompt.strip():
-            self.report({"WARNING"}, "Prompt is empty.")
-            return {"CANCELLED"}
-
-        task = Queue.add(self.prompt.strip())
-        self.report({"INFO"}, f"Task added: {task.name} [{task.id}]")
-        return {"FINISHED"}
-
-    def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self)
-
-    def draw(self, context):
-        self.layout.prop(self, "prompt")
 
 
 # UTILS
@@ -357,9 +363,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
         settings = context.scene.avacapo_settings
 
         selected_obj = get_selected_obj(context)
-        # for objects every redraw!!!
-        if selected_obj == None or selected_obj.type != "ARMATURE":
-            if selected_obj == None:
+        if selected_obj is None or selected_obj.type != "ARMATURE":
+            if selected_obj is None:
                 box_obj.label(text="no selected object", icon="ERROR")
             elif selected_obj.type != "ARMATURE":
                 box_obj.label(
@@ -383,19 +388,17 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 icon="OUTLINER_OB_ARMATURE",
             )
         else:
-            # Armature is here
-            # -----------------
             armature = context.object
             box_obj.label(text=f"{context.object.name}", icon="OUTLINER_OB_ARMATURE")
             if rig_utils.infer_rig_type(armature) != "avacapo_bvh_v1":
-                box_obj.label(text=f"Unknown rig", icon="ERROR")
+                box_obj.label(text="Unknown rig", icon="ERROR")
                 box_obj.operator(
                     AVACAPO_OT_create_avacapo.bl_idname,
                     text="Try to Convert",
                     icon="SHADERFX",
                 )
             else:
-                box_obj.label(text=f"AvaCapo rig v1", icon="CHECKBOX_HLT")
+                box_obj.label(text="AvaCapo rig v1", icon="CHECKBOX_HLT")
                 box_prompt = layout.box()
                 row_top = box_prompt.row(align=True)
                 col = row_top.row(align=True)
@@ -405,9 +408,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row_top.label(text="Duration", icon="TIME")
                 row_top.separator()
                 row_top.separator()
-                row_top.label(
-                    text="End",
-                )
+                row_top.label(text="End")
                 row = box_prompt.row(align=True)
                 row.operator(
                     AVACAPO_OT_create_avacapo.bl_idname, text="", icon="RECORD_ON"
@@ -431,8 +432,9 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row_prompt = box_prompt.row(align=True)
                 row_prompt.prop(settings, "prompt")
                 row = box_prompt.row(align=True)
-                # row.prop(settings, "temperature")
                 row.prop(settings, "model")
+
+                # Generate button — now queues a task instead of fetching directly
                 if State.server_busy:
                     row.label(text="Fetching...", icon="TIME")
                 else:
@@ -443,11 +445,16 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                         text = "Generate"
                         icon = "SHADERFX"
                     row.operator(
-                        AVACAPO_OT_fetch.bl_idname,
+                        QUEUE_OT_add_task.bl_idname,
                         text=text,
                         icon=icon,
                     )
-                layout.operator(QUEUE_OT_add_task.bl_idname, text="add Task")
+
+                if State.server_status:
+                    icon = "ERROR" if "Error" in State.server_status else "INFO"
+                    layout.label(text=State.server_status, icon=icon)
+
+                # Queue
                 Queue.draw(layout)
 
 
@@ -460,7 +467,9 @@ _classes = [
     # operators:
     MY_OT_OpenTextPopover,
     QUEUE_OT_add_task,
+    QUEUE_OT_process,
     AVACAPO_OT_reload_addon,
+    AVACAPO_OT_update_addon,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,

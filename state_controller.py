@@ -16,6 +16,7 @@ class State:
     server_busy: bool = False
     server_status: str = ""
     current_fps: int = 24
+    current_task_id: str = ""  # id of the task currently being fetched
 
 
 TaskStatus = Literal["pending", "loading", "done", "aborted", "error"]
@@ -79,7 +80,7 @@ class Queue:
             pass  # already removed, not an error
 
     @classmethod
-    def discard_by_id(cls, task_id: str) -> None:
+    def get_by_id(cls, task_id: str) -> None:
         cls.tasks = [t for t in cls.tasks if t.id != task_id]
 
 
