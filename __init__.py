@@ -4,13 +4,13 @@ import threading
 import time
 
 
-from .state_controller import State
+from .state_controller import State, Queue
 from .server import get_animation
 from . import animation_utils
 from . import rig_utils
 from .storage import Storage
 from .logger import log
-from .config import AVACAPO_RIG_NAME, BLEND_PATH
+from .config import ADDON_NAME, AVACAPO_RIG_NAME, BLEND_PATH
 
 bl_info = {
     "name": "AvaCapo AI animation",
@@ -54,6 +54,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     model: bpy.props.EnumProperty(
         name="Model",
         description="generation model",
+        # TODO: take from config.py, generate enum
         items=[
             ("asm", "Asm", "Fast simple ASM"),
             ("gen1", "Gen 1", "First generation GPAT"),
@@ -195,6 +196,41 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_reload_addon(bpy.types.Operator):
+    """Reload current addon after update"""
+
+    bl_idname = "avacapo.reload_addon"
+    bl_label = "Reload Addon"
+    bl_options = {"REGISTER"}  # obviously no undo avaliable
+
+    def execute(self, context):
+        addon_name = ADDON_NAME
+        bpy.ops.script.reload()
+        # bpy.ops.wm.addon_enable(module="addon_name")
+        self.report({"INFO"}, "addon reloaded!")
+        return {"FINISHED"}
+
+    def invoke(self, context, event: bpy.types.Event | None) -> set[str]:
+        return self.execute(context)
+
+
+class AVACAPO_OT_update_addon(bpy.types.Operator):
+    """update current addon after update"""
+
+    bl_idname = "avacapo.update_addon"
+    bl_label = "update Addon"
+    bl_options = {"REGISTER"}  # obviously no undo avaliable
+
+    def execute(self, context):
+        addon_name = ADDON_NAME
+
+        self.report({"INFO"}, "addon updateed!")
+        return {"FINISHED"}
+
+    def invoke(self, context, event: bpy.types.Event | None) -> set[str]:
+        return self.execute(context)
+
+
 class AVACAPO_OT_create_avacapo(bpy.types.Operator):
     """Not yet implemented"""
 
@@ -252,6 +288,33 @@ class MY_OT_OpenTextPopover(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class QUEUE_OT_add_task(bpy.types.Operator):
+    bl_idname = "queue.add_task"
+    bl_label = "Add Task"
+    bl_description = "Add a new task to the queue"
+
+    prompt: bpy.props.StringProperty(
+        name="Prompt",
+        description="Task prompt",
+        default="",
+    )
+
+    def execute(self, context):
+        if not self.prompt.strip():
+            self.report({"WARNING"}, "Prompt is empty.")
+            return {"CANCELLED"}
+
+        task = Queue.add(self.prompt.strip())
+        self.report({"INFO"}, f"Task added: {task.name} [{task.id}]")
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        self.layout.prop(self, "prompt")
+
+
 # UTILS
 # --------------------------------------------------------------------
 
@@ -280,10 +343,13 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
     def draw(self, context) -> None:
         layout = self.layout
         row = layout.row(align=True)
-        row.label(text="Connected", icon="INTERNET")
-        row.label(text=Storage.api_token, icon="INTERNET")
+
+        if Storage.api_token != "":
+            row.label(text="Connected", icon="INTERNET")
+        else:
+            row.label(text="Disconnected", icon="ERROR")
         row.operator(
-            AVACAPO_OT_create_avacapo.bl_idname,
+            AVACAPO_OT_reload_addon.bl_idname,
             text="",
             icon="MESH_UVSPHERE",
         )
@@ -313,7 +379,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 box_obj.label(text="no armatures", icon="OUTLINER_OB_ARMATURE")
             box_obj.operator(
                 AVACAPO_OT_create_avacapo_v1.bl_idname,
-                text="Create Armature",
+                text="New Armature",
                 icon="OUTLINER_OB_ARMATURE",
             )
         else:
@@ -370,25 +436,35 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 if State.server_busy:
                     row.label(text="Fetching...", icon="TIME")
                 else:
+                    if State.server_status:
+                        icon = "ERROR" if "Error" in State.server_status else "INFO"
+                        text = "Re-Generate"
+                    else:
+                        text = "Generate"
+                        icon = "SHADERFX"
                     row.operator(
                         AVACAPO_OT_fetch.bl_idname,
-                        text="Generate",
-                        icon="SHADERFX",
+                        text=text,
+                        icon=icon,
                     )
-                if State.server_status:
-                    icon = "ERROR" if "Error" in State.server_status else "INFO"
-                    row.label(text=State.server_status, icon=icon)
+                layout.operator(QUEUE_OT_add_task.bl_idname, text="add Task")
+                Queue.draw(layout)
 
 
 # Registration
 # --------------------------------------------------------------------
 
 _classes = [
+    # props:
     AvacapoSettings,
+    # operators:
     MY_OT_OpenTextPopover,
+    QUEUE_OT_add_task,
+    AVACAPO_OT_reload_addon,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
+    # panel:
     AVACAPO_PT_main_panel,
 ]
 

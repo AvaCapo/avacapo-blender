@@ -1,6 +1,7 @@
 import os
 from typing import Literal
 
+ADDON_NAME = "avacapo"
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 
 BLEND_NAME = "rigs.blend"
