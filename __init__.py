@@ -51,6 +51,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         description="setting 0.0 - 1.0 for neural network 'randomness'",
         default=1.0,
     )
+    # TODO: get from config
     model: bpy.props.EnumProperty(
         name="Model",
         description="generation model",
@@ -183,7 +184,7 @@ class QUEUE_OT_redo_task(bpy.types.Operator):
             return {"CANCELLED"}
 
         # clone with same params, fresh status
-        bpy.ops.queue.discard_task(self.task_id)
+        bpy.ops.queue.discard_task(task_id=self.task_id)
         task = Queue.add(
             prompt=original.prompt,
             start_frame=original.start_frame,
@@ -371,8 +372,8 @@ class MY_OT_OpenTextPopover(bpy.types.Operator):
         else:
             box.label(text="(empty)", icon="INFO")
 
-        if State.server_busy:
-            layout.label(text="Fetching...", icon="TIME")
+        if not Queue.allow_new_task:
+            layout.label(text="Too musch in the queue, wait...", icon="TIME")
         else:
             layout.operator(
                 QUEUE_OT_add_task.bl_idname,
@@ -504,23 +505,16 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row.prop(settings, "model")
 
                 # Generate button — now queues a task instead of fetching directly
-                if State.server_busy:
-                    row.label(text="Fetching...", icon="TIME")
+                if not Queue.allow_new_task:
+                    row.label(text="Queue is full...", icon="TIME")
                 else:
-                    if State.server_status:
-                        icon = "ERROR" if "Error" in State.server_status else "INFO"
-                        text = "Re-Generate"
-                    else:
-                        text = "Generate"
-                        icon = "SHADERFX"
                     row.operator(
                         QUEUE_OT_add_task.bl_idname,
-                        text=text,
-                        icon=icon,
+                        text="Generate",
+                        icon="SHADERFX",
                     )
 
-                if State.server_status:
-                    icon = "ERROR" if "Error" in State.server_status else "INFO"
+                if "Error" in State.server_status:
                     layout.label(text=State.server_status, icon=icon)
 
                 # Queue

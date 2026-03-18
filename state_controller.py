@@ -50,6 +50,7 @@ class Queue:
         model: str = ""
 
     tasks: list[Task] = []
+    allow_new_task: bool = True
 
     @staticmethod
     def generate_task_name(prompt: str) -> str:
