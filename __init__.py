@@ -256,6 +256,21 @@ class QUEUE_OT_process(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_select_by_name(bpy.types.Operator):
+    """select object by name"""
+
+    bl_idname = "avacapo.select_by_name"
+    bl_label = "Select objct by name"
+    bl_options = {"REGISTER", "UNDO"}
+    obj_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        bpy.ops.object.select_all(action="DESELECT")
+        bpy.data.objects[self.obj_name].select_set(True)
+        bpy.context.view_layer.objects.active = bpy.data.objects[self.obj_name]
+        return {"FINISHED"}
+
+
 class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
     """create avacapo rig"""
 
@@ -423,14 +438,16 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     text=f"{context.object.name} is not an armature",
                     icon="MOD_WIREFRAME",
                 )
+            # TODO: remove double pass trough objects
             if any(o.type == "ARMATURE" for o in context.scene.objects):
                 for a in [o for o in context.scene.objects if o.type == "ARMATURE"]:
                     row_select_armature = box_obj.row()
-                    row_select_armature.operator(
-                        AVACAPO_OT_create_avacapo.bl_idname,
+                    op = row_select_armature.operator(
+                        AVACAPO_OT_select_by_name.bl_idname,
                         text="",
                         icon="RESTRICT_SELECT_OFF",
                     )
+                    op.obj_name = a.name
                     row_select_armature.label(text=a.name, icon="OUTLINER_OB_ARMATURE")
             else:
                 box_obj.label(text="no armatures", icon="OUTLINER_OB_ARMATURE")
@@ -525,6 +542,7 @@ _classes = [
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
+    AVACAPO_OT_select_by_name,
     AVACAPO_PT_main_panel,
 ]
 
