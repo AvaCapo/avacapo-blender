@@ -119,7 +119,9 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             task = Queue.get_by_id(State.current_task_id)
             if task:
                 task.status = "error" if self._error else "done"
-                task.time_finished = datetime.now().isoformat(timespec="seconds")
+                task.time_finished = datetime.datetime.now().isoformat(
+                    timespec="seconds"
+                )
                 task.generation_time = time.time() - self._time_start
             return {"FINISHED"}
 
@@ -181,6 +183,7 @@ class QUEUE_OT_redo_task(bpy.types.Operator):
             return {"CANCELLED"}
 
         # clone with same params, fresh status
+        bpy.ops.queue.discard_task(self.task_id)
         task = Queue.add(
             prompt=original.prompt,
             start_frame=original.start_frame,
