@@ -6,6 +6,7 @@ from .config import STORAGE_PATH
 
 class Storage:
     api_token: str = ""
+    base_url: str = ""
 
     @classmethod
     def load(cls) -> None:
