@@ -110,9 +110,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             State.server_status = "Done!"
             self.report({"INFO"}, "animation applied")
             time_end = time.time()
-            log.debug(
-                f"time of modal operator animation apply is {time_end - time_start}"
-            )
+            log.debug(f"time of modal operator animation apply is {time_end - time_start}")
 
             # chain: process the next pending task if any
             bpy.ops.queue.process()
@@ -120,9 +118,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             task = Queue.get_by_id(State.current_task_id)
             if task:
                 task.status = "error" if self._error else "done"
-                task.time_finished = datetime.datetime.now().isoformat(
-                    timespec="seconds"
-                )
+                task.time_finished = datetime.datetime.now().isoformat(timespec="seconds")
                 task.generation_time = time.time() - self._time_start
             return {"FINISHED"}
 
@@ -143,9 +139,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         self._thread = threading.Thread(target=self._fetch, daemon=True)
         self._thread.start()
 
-        self._timer = context.window_manager.event_timer_add(
-            0.25, window=context.window
-        )
+        self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
@@ -480,9 +474,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row_top.separator()
                 row_top.label(text="End")
                 row = box_prompt.row(align=True)
-                row.operator(
-                    AVACAPO_OT_create_avacapo.bl_idname, text="", icon="RECORD_ON"
-                )
+                row.operator(AVACAPO_OT_create_avacapo.bl_idname, text="", icon="RECORD_ON")
                 row.prop(settings, "start", text="", expand=True)
                 row.separator()
                 row.separator()
@@ -490,15 +482,11 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row.separator()
                 row.separator()
                 row.prop(settings, "end", text="", expand=True)
-                row.operator(
-                    AVACAPO_OT_create_avacapo.bl_idname, text="", icon="RECORD_ON"
-                )
+                row.operator(AVACAPO_OT_create_avacapo.bl_idname, text="", icon="RECORD_ON")
                 box_prompt.separator(type="LINE")
                 row_desc = box_prompt.row(align=True)
                 row_desc.label(text="Prompt:", icon="TEXT")
-                row_desc.operator(
-                    "my.open_text_popover", text="", icon="FULLSCREEN_ENTER"
-                )
+                row_desc.operator("my.open_text_popover", text="", icon="FULLSCREEN_ENTER")
                 row_prompt = box_prompt.row(align=True)
                 row_prompt.prop(settings, "prompt")
                 row = box_prompt.row(align=True)

@@ -33,9 +33,7 @@ def apply_animation(obj: bpy.types.Object, animation_data: Animation):
         case "avacapo_v1", "bvh_avocapo_v1":
             apply_bvh(obj, animation_data)
         case _:
-            log.error(
-                f"cannot apply animation of type {animation._type} to {infer_rig_type}"
-            )
+            log.error(f"cannot apply animation of type {animation._type} to {infer_rig_type}")
 
 
 def apply_bvh(skeleton: bpy.types.Object, bvh_bytes):
@@ -143,9 +141,7 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes):
                 )
                 num_channels = 4
             else:
-                data_path = 'pose.bones["%s"].rotation_euler' % escape_identifier(
-                    bvh_node.name
-                )
+                data_path = 'pose.bones["%s"].rotation_euler' % escape_identifier(bvh_node.name)
                 num_channels = 3
 
             rotate = []
@@ -160,9 +156,7 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes):
                 if rotate_mode == "QUATERNION":
                     rotate.append(bone_rotation_matrix.to_quaternion())
                 else:
-                    r = bone_rotation_matrix.to_euler(
-                        pose_bone.rotation_mode, prev_euler
-                    )
+                    r = bone_rotation_matrix.to_euler(pose_bone.rotation_mode, prev_euler)
                     rotate.append(r)
                     prev_euler = r
 

@@ -127,8 +127,6 @@ def infer_rig_type(obj: bpy.types.Object) -> RigType:
     if obj.type != "ARMATURE":
         log.error(f"{obj.name} is not armature, cannot infer rig type")
         return "unknown"
-    if AVACAPO_BVH_V1_BONE_TREE and check_if_same_rigtype(
-        obj, AVACAPO_BVH_V1_BONE_TREE
-    ):
+    if AVACAPO_BVH_V1_BONE_TREE and check_if_same_rigtype(obj, AVACAPO_BVH_V1_BONE_TREE):
         return "avacapo_bvh_v1"
     return "unknown"

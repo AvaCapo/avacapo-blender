@@ -70,9 +70,7 @@ class Queue:
 
         # ── row 2: prompt preview ─────────────────────────────────────
         row2 = box.row()
-        row2.label(
-            text=task.prompt[:48] + ("…" if len(task.prompt) > 48 else ""), icon="TEXT"
-        )
+        row2.label(text=task.prompt[:48] + ("…" if len(task.prompt) > 48 else ""), icon="TEXT")
 
         # ── row 3: params snapshot ────────────────────────────────────
         row3 = box.row(align=True)
