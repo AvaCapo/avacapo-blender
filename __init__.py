@@ -3,10 +3,11 @@ import os
 import threading
 import time
 import datetime
+import webbrowser
 
 
 from .state_controller import State, Queue
-from .server import get_animation
+from .server import get_animation, get_base_url
 from . import animation_utils
 from . import rig_utils
 from .storage import Storage
@@ -62,6 +63,103 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         ],
         default="asm",
     )
+    token_input: bpy.props.StringProperty(
+        name="Token",
+        description="Paste your API token here",
+        default="",
+        subtype="PASSWORD",
+    )
+
+
+# Auth Operators:
+# --------------------------------------------------------------------
+
+
+class AVACAPO_OT_login_browser(bpy.types.Operator):
+    """Open browser to create an API token and receive it automatically"""
+
+    bl_idname = "avacapo.login_browser"
+    bl_label = "Login via Browser"
+
+    _auth_server = None
+    _timer = None
+
+    def modal(self, context, event):
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        if self._auth_server and not self._auth_server.is_running:
+            context.window_manager.event_timer_remove(self._timer)
+
+            if self._auth_server.token:
+                Storage.api_token = self._auth_server.token
+                Storage.save()
+                self.report({"INFO"}, "Connected successfully!")
+                log.info("Browser auth completed")
+            else:
+                self.report({"WARNING"}, "Auth timed out or was cancelled")
+                log.warning("Browser auth timed out")
+
+            self._auth_server = None
+            # Force UI redraw
+            for area in context.screen.areas:
+                area.tag_redraw()
+            return {"FINISHED"}
+
+        return {"PASS_THROUGH"}
+
+    def invoke(self, context, event):
+        from .auth_server import PluginAuthServer
+
+        self._auth_server = PluginAuthServer()
+        port = self._auth_server.start()
+
+        # Open the token page with plugin auth params
+        base_url = get_base_url().replace('/api/v1', '').replace(':8888', '')
+        frontend_url = "https://app.avacapo.com"
+        url = f"{frontend_url}/app/api-tokens?plugin_auth=true&port={port}"
+        webbrowser.open(url)
+        log.info(f"Opened browser for auth: {url}")
+
+        self._timer = context.window_manager.event_timer_add(
+            0.5, window=context.window
+        )
+        context.window_manager.modal_handler_add(self)
+        self.report({"INFO"}, "Waiting for browser auth...")
+        return {"RUNNING_MODAL"}
+
+
+class AVACAPO_OT_paste_token(bpy.types.Operator):
+    """Save a manually pasted API token"""
+
+    bl_idname = "avacapo.paste_token"
+    bl_label = "Connect"
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        token = settings.token_input.strip()
+        if not token:
+            self.report({"WARNING"}, "Token is empty")
+            return {"CANCELLED"}
+
+        Storage.api_token = token
+        Storage.save()
+        settings.token_input = ""
+        self.report({"INFO"}, "Connected successfully!")
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_disconnect(bpy.types.Operator):
+    """Clear the stored API token"""
+
+    bl_idname = "avacapo.disconnect"
+    bl_label = "Disconnect"
+
+    def execute(self, context):
+        Storage.api_token = ""
+        Storage.save()
+        self.report({"INFO"}, "Disconnected")
+        return {"FINISHED"}
 
 
 # Operators:
@@ -410,19 +508,49 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 
     def draw(self, context) -> None:
         layout = self.layout
-        row = layout.row(align=True)
-
-        if Storage.api_token != "":
-            row.label(text="Connected", icon="INTERNET")
-        else:
-            row.label(text="Disconnected", icon="ERROR")
-        row.operator(
-            AVACAPO_OT_reload_addon.bl_idname,
-            text="",
-            icon="MESH_UVSPHERE",
-        )
-        box_obj = layout.box()
         settings = context.scene.avacapo_settings
+
+        # --- Auth Section ---
+        if Storage.api_token != "":
+            row = layout.row(align=True)
+            row.label(text="Connected", icon="CHECKMARK")
+            row.operator(
+                AVACAPO_OT_disconnect.bl_idname,
+                text="",
+                icon="X",
+            )
+            row.operator(
+                AVACAPO_OT_reload_addon.bl_idname,
+                text="",
+                icon="MESH_UVSPHERE",
+            )
+        else:
+            box_auth = layout.box()
+            box_auth.label(text="Not Connected", icon="ERROR")
+            box_auth.operator(
+                AVACAPO_OT_login_browser.bl_idname,
+                text="Login via Browser",
+                icon="URL",
+            )
+            box_auth.separator()
+            box_auth.label(text="Or paste token manually:")
+            row = box_auth.row(align=True)
+            row.prop(settings, "token_input", text="")
+            row.operator(
+                AVACAPO_OT_paste_token.bl_idname,
+                text="Connect",
+                icon="CHECKMARK",
+            )
+            row_reload = layout.row(align=True)
+            row_reload.operator(
+                AVACAPO_OT_reload_addon.bl_idname,
+                text="",
+                icon="MESH_UVSPHERE",
+            )
+            return  # Don't show generation UI when disconnected
+
+        # --- Generation Section ---
+        box_obj = layout.box()
 
         selected_obj = get_selected_obj(context)
         if selected_obj is None or selected_obj.type != "ARMATURE":
@@ -503,7 +631,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     )
 
                 if "Error" in State.server_status:
-                    layout.label(text=State.server_status, icon=icon)
+                    layout.label(text=State.server_status, icon="ERROR")
 
                 # Queue
                 Queue.draw(layout)
@@ -519,6 +647,9 @@ _classes = [
     QUEUE_OT_process,
     QUEUE_OT_redo_task,
     QUEUE_OT_discard_task,
+    AVACAPO_OT_login_browser,
+    AVACAPO_OT_paste_token,
+    AVACAPO_OT_disconnect,
     AVACAPO_OT_reload_addon,
     AVACAPO_OT_update_addon,
     AVACAPO_OT_fetch,
