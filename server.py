@@ -5,14 +5,10 @@ import time
 
 from .storage import Storage
 from .logger import log
+from .config import Config
+from .models import get_models_names
 
-DEFAULT_BASE_URL = "http://185.70.185.83:8888/api/v1"
-modelType = Literal["asm", "gen1", "gen2"]
-
-
-def get_base_url() -> str:
-    """Get the API base URL from storage or use default."""
-    return getattr(Storage, 'base_url', '') or DEFAULT_BASE_URL
+config = Config()
 
 
 def get_fps() -> int:
@@ -25,12 +21,15 @@ def get_animation(
     prompt: str = "",
     duration: float = 5.0,
     temperature: float = 1.0,
-    model: modelType = "asm",
+    model: str = "gen2",
 ):
     """send prompt to server, get animation back"""
-
+    model_names = get_models_names()
+    if model not in model_names:
+        log.error(f"Invalid model type: {model}. Must be one of {model_names}.")
+        return None
+    
     time_start = time.time()
-    url = f"{get_base_url()}/api-avacapo-prompt/"
     payload = {
         "prompt": prompt,
         "prompt_duration": duration,
@@ -42,7 +41,7 @@ def get_animation(
         "extension": "bvh",
     }
     print(payload)
-    response = requests.post(url, json=payload)
+    response = requests.post(config.GENERATION_URL, json=payload)
     time_end = time.time()
     print("---")
     print(f"response getting took {time_end - time_start:.2f}s")

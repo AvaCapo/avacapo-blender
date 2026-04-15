@@ -2,8 +2,9 @@ import bpy
 from bpy.app.handlers import persistent
 from typing import Literal, TypeAlias
 
-from .config import AVACAPO_RIG_NAME, BLEND_NAME, BLEND_PATH
+from .config import Config
 from .logger import log
+config = Config()
 
 RigType = Literal["avacapo_bvh_v1", "unknown"]
 
@@ -92,9 +93,9 @@ def check_if_same_rigtype(
 
 def load_bone_tree(rig_name: str) -> BoneTree:
 
-    with bpy.data.libraries.load(BLEND_PATH, link=False) as (data_from, data_to):
+    with bpy.data.libraries.load(config.BLEND_PATH, link=False) as (data_from, data_to):
         if rig_name not in data_from.objects:
-            raise ValueError(f"Object '{rig_name}' not found in '{BLEND_NAME}'")
+            raise ValueError(f"Object '{rig_name}' not found in '{config.BLEND_NAME}'")
         data_to.objects = [rig_name]
 
     rig_obj = data_to.objects[0]
@@ -116,7 +117,7 @@ AVACAPO_BVH_V1_BONE_TREE: BoneTree | None = None
 @persistent
 def _init_bone_trees_once(scene, depsgraph):
     global AVACAPO_BVH_V1_BONE_TREE
-    AVACAPO_BVH_V1_BONE_TREE = load_bone_tree(AVACAPO_RIG_NAME)
+    AVACAPO_BVH_V1_BONE_TREE = load_bone_tree(config.AVACAPO_RIG_NAME)
     log.debug("Bone trees initialized:", AVACAPO_BVH_V1_BONE_TREE)
     bpy.app.handlers.depsgraph_update_post.remove(_init_bone_trees_once)
 

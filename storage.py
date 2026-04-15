@@ -1,7 +1,8 @@
-import os
 import json
 from .logger import log
-from .config import STORAGE_PATH
+from .config import Config
+
+config = Config()
 
 
 class Storage:
@@ -12,7 +13,7 @@ class Storage:
     def load(cls) -> None:
         log.debug("storage loading")
         try:
-            with open(STORAGE_PATH) as f:
+            with open(config.STORAGE_PATH) as f:
                 _dict = json.load(f)
             for k, v in _dict.items():
                 if k in cls.__annotations__:
@@ -31,7 +32,7 @@ class Storage:
         data = {}
         for key in known_fields:
             data[key] = getattr(cls, key)
-        with open(STORAGE_PATH, "w") as f:
+        with open(config.STORAGE_PATH, "w") as f:
             json.dump(data, f, indent=2)
 
 

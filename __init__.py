@@ -7,13 +7,14 @@ import webbrowser
 
 
 from .state_controller import State, Queue
-from .server import get_animation, get_base_url
+from .server import get_animation
 from . import animation_utils
 from . import rig_utils
 from .storage import Storage
 from .logger import log
-from .config import AVACAPO_RIG_NAME, BLEND_PATH
+from .config import Config
 
+config = Config()
 bl_info = {
     "name": "AvaCapo AI animation",
     "author": "agamurian",
@@ -115,9 +116,7 @@ class AVACAPO_OT_login_browser(bpy.types.Operator):
         port = self._auth_server.start()
 
         # Open the token page with plugin auth params
-        base_url = get_base_url().replace('/api/v1', '').replace(':8888', '')
-        frontend_url = "https://app.avacapo.com"
-        url = f"{frontend_url}/app/api-tokens?plugin_auth=true&port={port}"
+        url = f"{config.FRONTEND_URL}/app/api-tokens?plugin_auth=true&port={port}"
         webbrowser.open(url)
         log.info(f"Opened browser for auth: {url}")
 
@@ -373,11 +372,11 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
 
     def execute(self, context):
         inner_path = "Object"
-        object_name = AVACAPO_RIG_NAME
+        object_name = config.AVACAPO_RIG_NAME
 
         bpy.ops.wm.append(
-            filepath=os.path.join(BLEND_PATH, inner_path, object_name),
-            directory=os.path.join(BLEND_PATH, inner_path),
+            filepath=os.path.join(config.BLEND_PATH, inner_path, object_name),
+            directory=os.path.join(config.BLEND_PATH, inner_path),
             filename=object_name,
         )
 
