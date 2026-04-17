@@ -2,7 +2,6 @@ import bpy
 import os
 import threading
 import time
-import datetime
 import webbrowser
 
 
@@ -184,8 +183,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             log.debug("Background thread finished, cleaning up timer")
             context.window_manager.event_timer_remove(self._timer)
 
-            # update the task that was running
-            task = Queue.get_by_id(State.current_task_id)
+            task_id = State.current_task_id
 
             State.server_busy = False
             State.current_task_id = ""
@@ -196,14 +194,36 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 log.error(msg)
                 self.report({"ERROR"}, msg)
                 State.server_status = f"Error: {self._error}"
-                if task:
-                    task.status = "error"
+                if task_id:
+                    Queue.finish(
+                        task_id,
+                        status="error",
+                        generation_time=time.time() - self._time_start,
+                    )
                 return {"CANCELLED"}
 
             log.info(f"BVH received: {self._result!r}")
-            if task:
-                task.status = "done"
-            self._execute(self._result, context.object)
+            try:
+                self._execute(self._result, context.object)
+            except Exception as exc:
+                message = f"Applying animation failed: {exc}"
+                log.exception(message)
+                self.report({"ERROR"}, message)
+                State.server_status = f"Error: {exc}"
+                if task_id:
+                    Queue.finish(
+                        task_id,
+                        status="error",
+                        generation_time=time.time() - self._time_start,
+                    )
+                return {"CANCELLED"}
+
+            if task_id:
+                Queue.finish(
+                    task_id,
+                    status="done",
+                    generation_time=time.time() - self._time_start,
+                )
             State.server_status = "Done!"
             self.report({"INFO"}, "animation applied")
             time_end = time.time()
@@ -211,12 +231,6 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
             # chain: process the next pending task if any
             bpy.ops.queue.process()
-
-            task = Queue.get_by_id(State.current_task_id)
-            if task:
-                task.status = "error" if self._error else "done"
-                task.time_finished = datetime.datetime.now().isoformat(timespec="seconds")
-                task.generation_time = time.time() - self._time_start
             return {"FINISHED"}
 
         return {"PASS_THROUGH"}
@@ -275,13 +289,13 @@ class QUEUE_OT_redo_task(bpy.types.Operator):
             return {"CANCELLED"}
 
         # clone with same params, fresh status
+        try:
+            task = Queue.clone_task(original)
+        except ValueError as exc:
+            self.report({"WARNING"}, str(exc))
+            return {"CANCELLED"}
+
         bpy.ops.queue.discard_task(task_id=self.task_id)
-        task = Queue.add(
-            prompt=original.prompt,
-            start_frame=original.start_frame,
-            duration=original.duration,
-            model=original.model,
-        )
         self.report({"INFO"}, f"Re-queued: {task.id}")
         if not State.server_busy:
             bpy.ops.queue.process()
@@ -312,12 +326,16 @@ class QUEUE_OT_add_task(bpy.types.Operator):
             self.report({"WARNING"}, "Prompt is empty.")
             return {"CANCELLED"}
 
-        task = Queue.add(
-            prompt=settings.prompt.strip(),
-            start_frame=settings.start,
-            duration=settings.duration,
-            model=settings.model,
-        )
+        try:
+            task = Queue.add(
+                prompt=settings.prompt.strip(),
+                start_frame=settings.start,
+                duration=settings.duration,
+                model=settings.model,
+            )
+        except ValueError as exc:
+            self.report({"WARNING"}, str(exc))
+            return {"CANCELLED"}
 
         self.report({"INFO"}, f"Task queued: {task.name} [{task.id}]")
 
@@ -338,11 +356,10 @@ class QUEUE_OT_process(bpy.types.Operator):
         if State.server_busy:
             return {"FINISHED"}  # fetch already running, it will chain on its own
 
-        task = next((t for t in Queue.tasks if t.status == "pending"), None)
+        task = Queue.start_next()
         if task is None:
             return {"FINISHED"}
 
-        task.status = "loading"
         State.current_task_id = task.id
         bpy.ops.aitext.fetch("INVOKE_DEFAULT")
         return {"FINISHED"}
@@ -560,17 +577,17 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     text=f"{context.object.name} is not an armature",
                     icon="MOD_WIREFRAME",
                 )
-            # TODO: remove double pass trough objects
-            if any(o.type == "ARMATURE" for o in context.scene.objects):
-                for a in [o for o in context.scene.objects if o.type == "ARMATURE"]:
+            armatures = [o for o in context.scene.objects if o.type == "ARMATURE"]
+            if armatures:
+                for armature in armatures:
                     row_select_armature = box_obj.row()
                     op = row_select_armature.operator(
                         AVACAPO_OT_select_by_name.bl_idname,
                         text="",
                         icon="RESTRICT_SELECT_OFF",
                     )
-                    op.obj_name = a.name
-                    row_select_armature.label(text=a.name, icon="OUTLINER_OB_ARMATURE")
+                    op.obj_name = armature.name
+                    row_select_armature.label(text=armature.name, icon="OUTLINER_OB_ARMATURE")
             else:
                 box_obj.label(text="no armatures", icon="OUTLINER_OB_ARMATURE")
             box_obj.operator(
@@ -578,6 +595,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 text="New Armature",
                 icon="OUTLINER_OB_ARMATURE",
             )
+
         else:
             armature = context.object
             box_obj.label(text=f"{context.object.name}", icon="OUTLINER_OB_ARMATURE")
