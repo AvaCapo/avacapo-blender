@@ -3,8 +3,6 @@ import bpy
 from typing import Literal
 import tempfile
 import os
-from mathutils import Matrix
-import uuid
 from io_anim_bvh.import_bvh import read_bvh, sorted_nodes
 from mathutils import Matrix, Euler, Vector
 from bpy_extras import anim_utils
