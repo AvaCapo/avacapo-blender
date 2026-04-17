@@ -12,6 +12,7 @@ RigType = Literal["avacapo_bvh_v1", "unknown"]
 
 # Recursive nested dict: { bone_name: { child_name: {...} } }
 BoneTree: TypeAlias = dict[str, "BoneTree"]
+AVACAPO_BVH_V1_BONE_TREE: BoneTree | None = None
 
 
 def collect_bone_tree(armature_obj: bpy.types.Object) -> BoneTree:
@@ -109,10 +110,6 @@ def load_bone_tree(rig_name: str) -> BoneTree:
     bpy.data.objects.remove(rig_obj, do_unlink=True)
 
     return tree
-
-
-AVACAPO_BVH_V1_BONE_TREE: BoneTree | None = None
-
 
 @persistent
 def _init_bone_trees_once(scene, depsgraph):
