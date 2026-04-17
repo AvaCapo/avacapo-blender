@@ -1,7 +1,5 @@
 import bpy
 import requests
-from typing import Literal
-import time
 
 from .storage import Storage
 from .logger import log
@@ -26,10 +24,10 @@ def get_animation(
     """send prompt to server, get animation back"""
     model_names = get_models_names()
     if model not in model_names:
-        log.error(f"Invalid model type: {model}. Must be one of {model_names}.")
-        return None
-    
-    time_start = time.time()
+        message = f"Invalid model type: {model}. Must be one of {model_names}."
+        log.error(message)
+        raise ValueError(message)
+
     payload = {
         "prompt": prompt,
         "prompt_duration": duration,
@@ -40,10 +38,13 @@ def get_animation(
         "model": model,
         "extension": "bvh",
     }
-    print(payload)
-    response = requests.post(config.GENERATION_URL, json=payload)
-    time_end = time.time()
-    print("---")
-    print(f"response getting took {time_end - time_start:.2f}s")
-    print("---")
+    log.info(f"Sending request with payload: {payload}")
+
+    try:
+        response = requests.post(config.GENERATION_URL, json=payload, timeout=60)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        log.error(f"Animation request failed: {exc}")
+        raise RuntimeError("Failed to fetch animation from server.") from exc
+
     return response.content
