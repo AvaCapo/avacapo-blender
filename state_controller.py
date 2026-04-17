@@ -1,16 +1,11 @@
-# this to-be-big-ass-file is central for all state controls
-# its done a simple "static-class" (class with no instance)
-# called simple "State"
-# as its not bpy thing, but a python-level thing it can be accesed
-# from any thread.
-
-# here is all async things, qeues etc...
 from __future__ import annotations
-import bpy
+
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-import uuid
 from typing import Literal
+
+import bpy
 
 
 class State:
@@ -24,7 +19,7 @@ TaskStatus = Literal["pending", "loading", "done", "aborted", "error"]
 
 STATUS_META: dict[str, tuple[str, str]] = {
     "pending": ("TIME", "Pending"),
-    "loading": ("SORTTIME", "Loading…"),
+    "loading": ("SORTTIME", "Loading..."),
     "done": ("CHECKMARK", "Done"),
     "aborted": ("CANCEL", "Aborted"),
     "error": ("ERROR", "Error"),
@@ -32,24 +27,26 @@ STATUS_META: dict[str, tuple[str, str]] = {
 
 
 class Queue:
+    MAX_TASKS: int | None = None
+    TERMINAL_STATUSES = frozenset({"done", "error", "aborted"})
+
     @dataclass
     class Task:
         name: str
         prompt: str
         status: TaskStatus = "pending"
         id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-        # timing
         time_created: str = field(
             default_factory=lambda: datetime.now().isoformat(timespec="seconds")
         )
         time_finished: str = ""
-        generation_time: float = 0.0  # seconds, wall-clock
-        # generation params snapshot (so redo is reproducible)
+        generation_time: float = 0.0
         start_frame: int = 0
         duration: float = 0.0
         model: str = ""
 
     tasks: list[Task] = []
+    _tasks_by_id: dict[str, Task] = {}
     allow_new_task: bool = True
 
     @staticmethod
@@ -57,10 +54,13 @@ class Queue:
         return prompt[:32].strip() or "Untitled"
 
     @classmethod
+    def _refresh_allow_new_task(cls) -> None:
+        cls.allow_new_task = cls.MAX_TASKS is None or len(cls.tasks) < cls.MAX_TASKS
+
+    @classmethod
     def draw_task(cls, layout: bpy.types.UILayout, task: "Queue.Task") -> None:
         box = layout.box()
 
-        # ── row 1: id · status · gen time ────────────────────────────
         row = box.row(align=True)
         icon, status_label = STATUS_META.get(task.status, ("QUESTION", task.status))
         row.label(text=f"[{task.id}]")
@@ -68,23 +68,21 @@ class Queue:
         if task.generation_time > 0:
             row.label(text=f"{task.generation_time:.1f}s", icon="TEMP")
 
-        # ── row 2: prompt preview ─────────────────────────────────────
         row2 = box.row()
-        row2.label(text=task.prompt[:48] + ("…" if len(task.prompt) > 48 else ""), icon="TEXT")
+        prompt_preview = task.prompt[:48] + ("..." if len(task.prompt) > 48 else "")
+        row2.label(text=prompt_preview, icon="TEXT")
 
-        # ── row 3: params snapshot ────────────────────────────────────
         row3 = box.row(align=True)
         row3.label(text=f"frame {task.start_frame}", icon="KEYFRAME")
         row3.label(text=f"{task.duration}s", icon="TIME")
         row3.label(text=task.model, icon="SHADERFX")
 
-        # ── row 4: redo / discard (only when not running) ────────────
-        if task.status in ("done", "error", "aborted"):
+        if task.status in cls.TERMINAL_STATUSES:
             row4 = box.row(align=True)
-            op = row4.operator("queue.redo_task", text="Redo", icon="FILE_REFRESH")
-            op.task_id = task.id
-            op2 = row4.operator("queue.discard_task", text="", icon="X")
-            op2.task_id = task.id
+            redo = row4.operator("queue.redo_task", text="Redo", icon="FILE_REFRESH")
+            redo.task_id = task.id
+            discard = row4.operator("queue.discard_task", text="", icon="X")
+            discard.task_id = task.id
 
     @classmethod
     def draw(cls, layout: bpy.types.UILayout) -> None:
@@ -96,8 +94,16 @@ class Queue:
 
     @classmethod
     def add(
-        cls, prompt: str, start_frame: int = 0, duration: float = 0.0, model: str = ""
+        cls,
+        prompt: str,
+        start_frame: int = 0,
+        duration: float = 0.0,
+        model: str = "",
     ) -> "Queue.Task":
+        cls._refresh_allow_new_task()
+        if not cls.allow_new_task:
+            raise ValueError("Queue is full.")
+
         task = cls.Task(
             name=cls.generate_task_name(prompt),
             prompt=prompt,
@@ -106,22 +112,83 @@ class Queue:
             model=model,
         )
         cls.tasks.append(task)
+        cls._tasks_by_id[task.id] = task
+        cls._refresh_allow_new_task()
         return task
 
     @classmethod
+    def clone_task(cls, task: "Queue.Task") -> "Queue.Task":
+        return cls.add(
+            prompt=task.prompt,
+            start_frame=task.start_frame,
+            duration=task.duration,
+            model=task.model,
+        )
+
+    @classmethod
+    def clone(cls, task_id: str) -> "Queue.Task | None":
+        task = cls.get_by_id(task_id)
+        if task is None:
+            return None
+        return cls.clone_task(task)
+
+    @classmethod
     def get_by_id(cls, task_id: str) -> "Queue.Task | None":
-        return next((t for t in cls.tasks if t.id == task_id), None)
+        return cls._tasks_by_id.get(task_id)
+
+    @classmethod
+    def next_pending(cls) -> "Queue.Task | None":
+        return next((task for task in cls.tasks if task.status == "pending"), None)
+
+    @classmethod
+    def start_next(cls) -> "Queue.Task | None":
+        task = cls.next_pending()
+        if task is None:
+            return None
+        task.status = "loading"
+        return task
+
+    @classmethod
+    def set_status(cls, task_id: str, status: TaskStatus) -> "Queue.Task | None":
+        task = cls.get_by_id(task_id)
+        if task is None:
+            return None
+        task.status = status
+        return task
+
+    @classmethod
+    def finish(
+        cls,
+        task_id: str,
+        *,
+        status: TaskStatus,
+        generation_time: float | None = None,
+    ) -> "Queue.Task | None":
+        task = cls.set_status(task_id, status)
+        if task is None:
+            return None
+
+        task.time_finished = datetime.now().isoformat(timespec="seconds")
+        if generation_time is not None:
+            task.generation_time = generation_time
+        return task
 
     @classmethod
     def discard(cls, task: "Queue.Task") -> None:
-        try:
-            cls.tasks.remove(task)
-        except ValueError:
-            pass
+        cls.discard_by_id(task.id)
 
     @classmethod
     def discard_by_id(cls, task_id: str) -> None:
-        cls.tasks = [t for t in cls.tasks if t.id != task_id]
+        task = cls._tasks_by_id.pop(task_id, None)
+        if task is None:
+            return
+
+        try:
+            cls.tasks.remove(task)
+        except ValueError:
+            cls.tasks = [existing for existing in cls.tasks if existing.id != task_id]
+
+        cls._refresh_allow_new_task()
 
 
 def update_handler(context): ...
