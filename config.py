@@ -1,7 +1,9 @@
 import os
 
+
 class Config:
     """Configuration for the Avacapo addon."""
+
     ADDON_NAME = "avacapo"
     ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
     PLATFORM_URL = "https://service.avacapo.com/"

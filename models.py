@@ -19,9 +19,7 @@ def get_models_names() -> list[str]:
                 models = response.json().get("models", [])
                 _model_names_cache = models or Config.DEFAULT_MODELS
             else:
-                log.error(
-                    f"Failed to get models names: {response.status_code} {response.text}"
-                )
+                log.error(f"Failed to get models names: {response.status_code} {response.text}")
                 _model_names_cache = Config.DEFAULT_MODELS
         except Exception as exc:
             log.error(f"Failed to get models names: {exc}")

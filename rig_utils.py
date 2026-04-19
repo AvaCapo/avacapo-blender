@@ -4,6 +4,7 @@ from typing import Literal, TypeAlias
 
 from .config import Config
 from .logger import log
+
 config = Config()
 
 RigType = Literal["avacapo_bvh_v1", "unknown"]
@@ -110,6 +111,7 @@ def load_bone_tree(rig_name: str) -> BoneTree:
     bpy.data.objects.remove(rig_obj, do_unlink=True)
 
     return tree
+
 
 @persistent
 def _init_bone_trees_once(scene, depsgraph):

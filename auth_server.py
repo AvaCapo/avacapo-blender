@@ -25,20 +25,18 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == '/callback':
+        if parsed.path == "/callback":
             params = parse_qs(parsed.query)
-            token = params.get('token', [None])[0]
+            token = params.get("token", [None])[0]
             if token:
                 self.server.received_token = token
                 self.send_response(200)
-                self.send_header('Content-Type', 'text/html')
-                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(SUCCESS_HTML.encode())
                 # Shut down after receiving the token
-                threading.Thread(
-                    target=self.server.shutdown, daemon=True
-                ).start()
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
 
         self.send_response(404)
@@ -47,9 +45,9 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         """Handle CORS preflight for no-cors fetch."""
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', '*')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
         self.end_headers()
 
     def log_message(self, format, *args):
@@ -70,11 +68,11 @@ class PluginAuthServer:
         """Start the server on a random available port. Returns the port."""
         # Find a free port
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(('127.0.0.1', 0))
+        sock.bind(("127.0.0.1", 0))
         self.port = sock.getsockname()[1]
         sock.close()
 
-        self._server = HTTPServer(('127.0.0.1', self.port), _CallbackHandler)
+        self._server = HTTPServer(("127.0.0.1", self.port), _CallbackHandler)
         self._server.received_token = None
         self._server.timeout = 300  # 5 minute timeout
 

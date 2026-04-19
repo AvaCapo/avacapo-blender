@@ -19,3 +19,7 @@ ln -s ~/gits/avacapo-blender ~/.config/blender/5.0/extensions/user_default/avaca
 
 and for restarting just reload manually in settings
 folder name should be the same as name in manifest
+
+### formatting:
+pep8 + linelength 100 (according to blender docs)
+black used as formatter
