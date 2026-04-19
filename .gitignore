@@ -2,6 +2,7 @@
 storage.json
 
 # Byte-compiled / optimized / DLL files
+__stash.py
 __pycache__/
 *.py[codz]
 *$py.class

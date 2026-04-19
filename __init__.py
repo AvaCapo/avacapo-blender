@@ -158,7 +158,7 @@ class AVACAPO_OT_disconnect(bpy.types.Operator):
 
 
 class AVACAPO_OT_fetch(bpy.types.Operator):
-    bl_idname = "aitext.fetch"
+    bl_idname = "avacapo.fetch"
     bl_label = "Get Animation"
     bl_description = "Get AI Generated animation"
 
@@ -354,7 +354,7 @@ class QUEUE_OT_process(bpy.types.Operator):
             return {"FINISHED"}
 
         State.current_task_id = task.id
-        bpy.ops.aitext.fetch("INVOKE_DEFAULT")
+        bpy.ops.avacapo.fetch("INVOKE_DEFAULT")
         return {"FINISHED"}
 
 
@@ -415,24 +415,6 @@ class AVACAPO_OT_reload_addon(bpy.types.Operator):
         self.report({"INFO"}, "addon reloaded!")
         return {"FINISHED"}
 
-    def invoke(self, context, event: bpy.types.Event | None) -> set[str]:
-        return self.execute(context)
-
-
-class AVACAPO_OT_update_addon(bpy.types.Operator):
-    """update current addon after update"""
-
-    bl_idname = "avacapo.update_addon"
-    bl_label = "update Addon"
-    bl_options = {"REGISTER"}
-
-    def execute(self, context):
-        self.report({"INFO"}, "addon updated!")
-        return {"FINISHED"}
-
-    def invoke(self, context, event: bpy.types.Event | None) -> set[str]:
-        return self.execute(context)
-
 
 class AVACAPO_OT_create_avacapo(bpy.types.Operator):
     """Not yet implemented"""
@@ -444,62 +426,6 @@ class AVACAPO_OT_create_avacapo(bpy.types.Operator):
     def execute(self, context):
         self.report({"INFO"}, "avacapo created!")
         return {"FINISHED"}
-
-    def invoke(self, context, event: bpy.types.Event | None) -> set[str]:
-        return self.execute(context)
-
-
-class MY_OT_OpenTextPopover(bpy.types.Operator):
-    bl_idname = "my.open_text_popover"
-    bl_label = "Preview Text"
-
-    def invoke(self, context, event):
-        return context.window_manager.invoke_popup(self, width=400)
-
-    def draw(self, context):
-        layout = self.layout
-        settings = context.scene.avacapo_settings
-        text = settings.prompt
-
-        row = layout.row()
-        row.label(text="Preview:", icon="TEXT")
-        row.label(text=context.object.name, icon="OUTLINER_OB_ARMATURE")
-        row.label(text="5s", icon="TIME")
-        box = layout.box()
-
-        if text:
-            for line in text.split("\n"):
-                box.label(text=line if line else " ")
-        else:
-            box.label(text="(empty)", icon="INFO")
-
-        if not Queue.allow_new_task:
-            layout.label(text="Too musch in the queue, wait...", icon="TIME")
-        else:
-            layout.operator(
-                QUEUE_OT_add_task.bl_idname,
-                text="Generate",
-                icon="SHADERFX",
-            )
-        if State.server_status:
-            icon = "ERROR" if "Error" in State.server_status else "INFO"
-            layout.label(text=State.server_status, icon=icon)
-        layout.prop(settings, "model")
-
-    def execute(self, context):
-        return {"FINISHED"}
-
-
-# UTILS
-# --------------------------------------------------------------------
-
-
-def check_type_of_armature(armature):
-    return "AVACAPO_V1"
-
-
-def get_selected_obj(context) -> bpy.types.Object | None:
-    return context.object
 
 
 # Panel
@@ -561,7 +487,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
         # --- Generation Section ---
         box_obj = layout.box()
 
-        selected_obj = get_selected_obj(context)
+        selected_obj = context.object
         if selected_obj is None or selected_obj.type != "ARMATURE":
             if selected_obj is None:
                 box_obj.label(text="no selected object", icon="ERROR")
@@ -624,7 +550,6 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 box_prompt.separator(type="LINE")
                 row_desc = box_prompt.row(align=True)
                 row_desc.label(text="Prompt:", icon="TEXT")
-                row_desc.operator("my.open_text_popover", text="", icon="FULLSCREEN_ENTER")
                 row_prompt = box_prompt.row(align=True)
                 row_prompt.prop(settings, "prompt")
                 row = box_prompt.row(align=True)
@@ -652,7 +577,6 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 
 _classes = [
     AvacapoSettings,
-    MY_OT_OpenTextPopover,
     QUEUE_OT_add_task,
     QUEUE_OT_process,
     QUEUE_OT_redo_task,
@@ -661,7 +585,6 @@ _classes = [
     AVACAPO_OT_paste_token,
     AVACAPO_OT_disconnect,
     AVACAPO_OT_reload_addon,
-    AVACAPO_OT_update_addon,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
