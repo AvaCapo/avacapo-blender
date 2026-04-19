@@ -52,15 +52,10 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         description="setting 0.0 - 1.0 for neural network 'randomness'",
         default=1.0,
     )
-    # TODO: get from config
     model: bpy.props.EnumProperty(
         name="Model",
         description="generation model",
-        items=[
-            ("asm", "Asm", "Fast simple ASM"),
-            ("gen1", "Gen 1", "First generation GPAT"),
-            ("gen2", "Gen 2", "Second generation GPAT"),
-        ],
+        items=[(m, f"{m.capitalize()}", f"{m} model") for m in Config.DEFAULT_MODELS],
         default="asm",
     )
     token_input: bpy.props.StringProperty(
@@ -119,9 +114,7 @@ class AVACAPO_OT_login_browser(bpy.types.Operator):
         webbrowser.open(url)
         log.info(f"Opened browser for auth: {url}")
 
-        self._timer = context.window_manager.event_timer_add(
-            0.5, window=context.window
-        )
+        self._timer = context.window_manager.event_timer_add(0.5, window=context.window)
         context.window_manager.modal_handler_add(self)
         self.report({"INFO"}, "Waiting for browser auth...")
         return {"RUNNING_MODAL"}
