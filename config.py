@@ -20,3 +20,4 @@ class Config:
     AVACAPO_RIG_NAME = "avacapo_bvh_v1"
 
     DEFAULT_MODELS = ["asm", "gen1", "gen2"]
+    DEFAULT_TEMPERATURE = 1.0

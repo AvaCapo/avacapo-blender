@@ -50,13 +50,13 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     temperature: bpy.props.FloatProperty(
         name="temperature",
         description="setting 0.0 - 1.0 for neural network 'randomness'",
-        default=1.0,
+        default=config.DEFAULT_TEMPERATURE,
     )
     model: bpy.props.EnumProperty(
         name="Model",
         description="generation model",
-        items=[(m, f"{m.capitalize()}", f"{m} model") for m in Config.DEFAULT_MODELS],
-        default="asm",
+        items=[(m, f"{m.capitalize()}", f"{m} model") for m in config.DEFAULT_MODELS],
+        default=config.DEFAULT_MODELS[0],
     )
     token_input: bpy.props.StringProperty(
         name="Token",
