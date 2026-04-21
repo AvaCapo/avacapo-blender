@@ -1,4 +1,3 @@
-from typing import Self
 import bpy
 import os
 import threading
