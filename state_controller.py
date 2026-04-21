@@ -27,8 +27,8 @@ STATUS_META: dict[str, tuple[str, str]] = {
 
 
 class Queue:
-    MAX_TASKS: int | None = None
     TERMINAL_STATUSES = frozenset({"done", "error", "aborted"})
+    MAX_TASKS: int | None = None
 
     @dataclass
     class Task:
@@ -56,41 +56,6 @@ class Queue:
     @classmethod
     def _refresh_allow_new_task(cls) -> None:
         cls.allow_new_task = cls.MAX_TASKS is None or len(cls.tasks) < cls.MAX_TASKS
-
-    @classmethod
-    def draw_task(cls, layout: bpy.types.UILayout, task: "Queue.Task") -> None:
-        box = layout.box()
-
-        row = box.row(align=True)
-        icon, status_label = STATUS_META.get(task.status, ("QUESTION", task.status))
-        row.label(text=f"[{task.id}]")
-        row.label(text=status_label, icon=icon)
-        if task.generation_time > 0:
-            row.label(text=f"{task.generation_time:.1f}s", icon="TEMP")
-
-        row2 = box.row()
-        prompt_preview = task.prompt[:48] + ("..." if len(task.prompt) > 48 else "")
-        row2.label(text=prompt_preview, icon="TEXT")
-
-        row3 = box.row(align=True)
-        row3.label(text=f"frame {task.start_frame}", icon="KEYFRAME")
-        row3.label(text=f"{task.duration}s", icon="TIME")
-        row3.label(text=task.model, icon="SHADERFX")
-
-        if task.status in cls.TERMINAL_STATUSES:
-            row4 = box.row(align=True)
-            redo = row4.operator("queue.redo_task", text="Redo", icon="FILE_REFRESH")
-            redo.task_id = task.id
-            discard = row4.operator("queue.discard_task", text="", icon="X")
-            discard.task_id = task.id
-
-    @classmethod
-    def draw(cls, layout: bpy.types.UILayout) -> None:
-        if not cls.tasks:
-            layout.label(text="No tasks.", icon="INFO")
-            return
-        for task in cls.tasks:
-            cls.draw_task(layout, task)
 
     @classmethod
     def add(

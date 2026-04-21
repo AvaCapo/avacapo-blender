@@ -2,7 +2,7 @@
 import bpy
 from .storage import Storage
 from . import rig_utils
-from .state_controller import State, Queue
+from .state_controller import State, Queue, STATUS_META
 
 
 class AVACAPO_PT_main_panel(bpy.types.Panel):
@@ -143,4 +143,39 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 
                 # Queue
                 if layout is not None:
-                    Queue.draw(layout)
+                    draw_queue(layout)
+
+
+def draw_queue_task(layout: bpy.types.UILayout, task: "Queue.Task") -> None:
+    box = layout.box()
+
+    row = box.row(align=True)
+    icon, status_label = STATUS_META.get(task.status, ("QUESTION", task.status))
+    row.label(text=f"[{task.id}]")
+    row.label(text=status_label, icon=icon)
+    if task.generation_time > 0:
+        row.label(text=f"{task.generation_time:.1f}s", icon="TEMP")
+
+    row2 = box.row()
+    prompt_preview = task.prompt[:48] + ("..." if len(task.prompt) > 48 else "")
+    row2.label(text=prompt_preview, icon="TEXT")
+
+    row3 = box.row(align=True)
+    row3.label(text=f"frame {task.start_frame}", icon="KEYFRAME")
+    row3.label(text=f"{task.duration}s", icon="TIME")
+    row3.label(text=task.model, icon="SHADERFX")
+
+    if task.status in Queue.TERMINAL_STATUSES:
+        row4 = box.row(align=True)
+        redo = row4.operator("queue.redo_task", text="Redo", icon="FILE_REFRESH")
+        redo.task_id = task.id
+        discard = row4.operator("queue.discard_task", text="", icon="X")
+        discard.task_id = task.id
+
+
+def draw_queue(layout: bpy.types.UILayout) -> None:
+    if not Queue.tasks:
+        layout.label(text="No tasks.", icon="INFO")
+        return
+    for task in Queue.tasks:
+        draw_queue_task(layout, task)
