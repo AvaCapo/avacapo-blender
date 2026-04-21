@@ -154,6 +154,3 @@ class Queue:
             cls.tasks = [existing for existing in cls.tasks if existing.id != task_id]
 
         cls._refresh_allow_new_task()
-
-
-def update_handler(context): ...

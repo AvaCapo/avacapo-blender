@@ -1,3 +1,4 @@
+from typing import Self
 import bpy
 import os
 import threading
@@ -6,7 +7,7 @@ import webbrowser
 
 
 from .state_controller import State, Queue
-from .server import get_animation
+from .server import get_animation, get_fps
 from . import animation_utils
 from . import rig_utils
 from .storage import Storage
@@ -30,8 +31,18 @@ bl_info = {
 # --------------------------------------------------------------------
 
 
+# remember - we send to server (duration and fps)
 # stored globally (on Scene), to create a new "task" and start "attempt"(request) on it
 class AvacapoSettings(bpy.types.PropertyGroup):
+    def update_start(self, context):
+        self.end = self.start + self.end
+
+    def update_duration(self, context):
+        self.end = int(self.start + (self.duration * get_fps()))
+
+    def update_end(self, context):
+        self.duration = (self.end - self.start) / get_fps()
+
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     prompt: bpy.props.StringProperty(
         name="", default="A person is walking backward", description="Enter text here"
@@ -39,15 +50,18 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     start: bpy.props.IntProperty(
         name="start",
         default=0,
+        update=update_start,
     )
     duration: bpy.props.FloatProperty(
         name="duration",
         description="seconds",
         default=2.5,
+        update=update_duration,
     )
     end: bpy.props.IntProperty(
         name="end",
         default=120,
+        update=update_end,
     )
     temperature: bpy.props.FloatProperty(
         name="temperature",
