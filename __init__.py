@@ -34,8 +34,9 @@ bl_info = {
 # stored globally (on Scene), to create a new "task" and start "attempt"(request) on it
 class AvacapoSettings(bpy.types.PropertyGroup):
     def update_start(self, context):
-        self.end = self.start + self.end
+        self.end = int(self.start + (self.duration * get_fps()))
 
+    # TODO: maximum recursion depth exceeded, update_duration/update_end cycle
     def update_duration(self, context):
         self.end = int(self.start + (self.duration * get_fps()))
 

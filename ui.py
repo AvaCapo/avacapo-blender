@@ -2,6 +2,7 @@
 import bpy
 from .storage import Storage
 from . import rig_utils
+from .server import get_fps
 from .state_controller import State, Queue, STATUS_META
 
 
@@ -103,13 +104,13 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 box_prompt = layout.box()
                 row_top = box_prompt.row(align=True)
                 col = row_top.row(align=True)
-                col.label(text="Start")
+                col.label(text="Start frame", icon="KEYFRAME")
                 row_top.separator()
                 row_top.separator()
-                row_top.label(text="Duration", icon="TIME")
+                row_top.label(text="Seconds", icon="TIME")
                 row_top.separator()
                 row_top.separator()
-                row_top.label(text="End")
+                row_top.label(text="End frame", icon="KEYFRAME")
                 row = box_prompt.row(align=True)
                 row.operator("avacapo.create_avacapo", text="", icon="RECORD_ON")
                 row.prop(settings, "start", text="", expand=True)
@@ -119,7 +120,9 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row.separator()
                 row.separator()
                 row.prop(settings, "end", text="", expand=True)
-                row.operator("avacapo.create_avacapo", text="", icon="RECORD_ON")
+                # row.operator("avacapo.create_avacapo", text="", icon="RECORD_ON")
+                # ommit last frame lock for now
+                box_prompt.label(text=f"frame rate {get_fps()}")
                 box_prompt.separator(type="LINE")
                 row_desc = box_prompt.row(align=True)
                 row_desc.label(text="Prompt:", icon="TEXT")
