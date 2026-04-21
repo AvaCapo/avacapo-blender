@@ -154,3 +154,16 @@ class Queue:
             cls.tasks = [existing for existing in cls.tasks if existing.id != task_id]
 
         cls._refresh_allow_new_task()
+
+
+# application handlers:
+# ---------------------
+# https://docs.blender.org/api/current/bpy.app.handlers.html
+
+
+def frame_change_post(scene):
+    print(scene.frame_current)
+    if bpy.context.screen.is_animation_playing:
+        return
+    if scene.avacapo_settings.start_record_lock:
+        scene.avacapo_settings.start = scene.frame_current

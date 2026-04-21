@@ -112,7 +112,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row_top.separator()
                 row_top.label(text="End", icon="KEYFRAME")
                 row = box_prompt.row(align=True)
-                row.operator("avacapo.create_avacapo", text="", icon="RECORD_ON")
+                record_icon = "RECORD_ON" if settings.start_record_lock else "RECORD_OFF"
+                row.operator("avacapo.toggle_start_record_lock", text="", icon=record_icon)
                 row.prop(settings, "start", text="", expand=True)
                 row.separator()
                 row.separator()

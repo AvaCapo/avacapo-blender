@@ -5,7 +5,7 @@ import time
 import webbrowser
 
 
-from .state_controller import State, Queue
+from .state_controller import State, Queue, frame_change_post
 from .server import get_animation, get_fps
 from . import animation_utils
 from . import rig_utils
@@ -46,6 +46,10 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     prompt: bpy.props.StringProperty(
         name="", default="A person is walking backward", description="Enter text here"
+    )
+    start_record_lock: bpy.props.BoolProperty(
+        name="start_record_lock",
+        default=False,
     )
     start: bpy.props.IntProperty(
         name="start",
@@ -489,6 +493,22 @@ class AVACAPO_OT_reload_addon(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_toggle_start_record_lock(bpy.types.Operator):
+    """when moving the frame in timeline this start frame will be syncronized"""
+
+    bl_idname = "avacapo.toggle_start_record_lock"
+    bl_label = "Lock Start Frame to current frame"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        settings.start_record_lock = not (settings.start_record_lock)
+        self.report(
+            {"INFO"}, f"start record lock in {"on" if settings.start_record_lock else "off"}!"
+        )
+        return {"FINISHED"}
+
+
 class AVACAPO_OT_create_avacapo(bpy.types.Operator):
     """Not yet implemented"""
 
@@ -518,6 +538,7 @@ _classes = [
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
     AVACAPO_OT_select_by_name,
+    AVACAPO_OT_toggle_start_record_lock,
     AVACAPO_PT_main_panel,
 ]
 
@@ -526,6 +547,7 @@ def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.avacapo_settings = bpy.props.PointerProperty(type=AvacapoSettings)
+    bpy.app.handlers.frame_change_post.append(frame_change_post)
     bpy.app.handlers.depsgraph_update_post.append(rig_utils._init_bone_trees_once)
 
 
@@ -533,5 +555,6 @@ def unregister() -> None:
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.Scene.avacapo_settings
+    bpy.app.handlers.frame_change_post.remove(frame_change_post)
     if rig_utils._init_bone_trees_once in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(rig_utils._init_bone_trees_once)
