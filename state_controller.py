@@ -162,7 +162,6 @@ class Queue:
 
 
 def frame_change_post(scene):
-    print(scene.frame_current)
     if bpy.context.screen.is_animation_playing:
         return
     if scene.avacapo_settings.start_record_lock:
