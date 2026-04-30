@@ -1,5 +1,8 @@
 # all ui and draws:
 import bpy
+
+from dataclasses import dataclass
+
 from .storage import Storage
 from . import rig_utils
 from .server import get_fps
@@ -147,7 +150,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 
                 if layout is not None:
                     draw_queue(layout)
-                    draw_clip(layout)
+                    draw_clips(layout)
 
 
 def draw_queue_task(layout: bpy.types.UILayout, task: "Queue.Task") -> None:
@@ -178,12 +181,28 @@ def draw_queue_task(layout: bpy.types.UILayout, task: "Queue.Task") -> None:
 
 
 def draw_queue(layout: bpy.types.UILayout) -> None:
-    if not Queue.tasks:
-        layout.label(text="No tasks.", icon="INFO")
-        return
     for task in Queue.tasks:
         draw_queue_task(layout, task)
 
 
-def draw_clip(layout: bpy.types.UILayout) -> None:
+@dataclass
+class Clip:
+    name: str
+
+
+default_clip = Clip(name="Walking backwards")
+clips = [default_clip]
+CLIP_ICON = "RENDER_ANIMATION"
+
+
+def draw_clips(layout: bpy.types.UILayout) -> None:
+    if not clips:
+        layout.label(text="No clips.", icon=CLIP_ICON)
+        return
+    for clip in clips:
+        draw_clip(layout, clip)
+
+
+def draw_clip(layout: bpy.types.UILayout, clip=default_clip) -> None:
     box = layout.box()
+    box.label(text=clip.name, icon=CLIP_ICON)
