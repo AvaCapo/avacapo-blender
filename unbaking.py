@@ -52,11 +52,6 @@ class KeyPoint:
     handle_type_right: str = "FREE"
 
 
-def extract_samples(fcurve) -> List[Sample]:
-    """Return all keyframe (frame, value) pairs from *fcurve*, in order."""
-    return [Sample(kp.co.x, kp.co.y) for kp in fcurve.keyframe_points]
-
-
 def _safe_range(values: List[float]) -> float:
     r = max(values) - min(values)
     return r if r > 1e-9 else 1.0
@@ -347,7 +342,7 @@ def write_keypoints(fcurve, keypoints: List[KeyPoint]) -> None:
 
 def _unbake_single_fcurve(fcurve) -> None:
     """In-place unbake of one Blender FCurve."""
-    samples = extract_samples(fcurve)
+    samples = [Sample(kp.co.x, kp.co.y) for kp in fcurve.keyframe_points]
     if not samples:
         return
     keypoints = unbake_fcurve_samples(samples)

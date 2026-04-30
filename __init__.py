@@ -88,7 +88,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
 
 # stored locally (on Object), bound to single nla track
 # and have several "attempts"(requests/actions)
-class AvacapoTask(bpy.types.PropertyGroup):
+class AvacapoClip(bpy.types.PropertyGroup):
     prompt: bpy.props.StringProperty(
         name="", default="A person is walking backward", description="Enter text here"
     )

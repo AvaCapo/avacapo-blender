@@ -145,9 +145,9 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 if "Error" in State.server_status:
                     layout.label(text=State.server_status, icon="ERROR")
 
-                # Queue
                 if layout is not None:
                     draw_queue(layout)
+                    draw_clip(layout)
 
 
 def draw_queue_task(layout: bpy.types.UILayout, task: "Queue.Task") -> None:
@@ -183,3 +183,7 @@ def draw_queue(layout: bpy.types.UILayout) -> None:
         return
     for task in Queue.tasks:
         draw_queue_task(layout, task)
+
+
+def draw_clip(layout: bpy.types.UILayout) -> None:
+    box = layout.box()
