@@ -29,7 +29,6 @@ HANDLE_MODE: str = "CATMULL_ROM"  # 'CATMULL_ROM' | 'AUTO_CLAMPED'
 TANGENT_TENSION: float = 0.5
 AUTO_DETECT_CORNERS: bool = True
 CORNER_ANGLE_THRESHOLD_DEG: float = 45.0
-UNBAKED_SUFFIX: str = "_unbaked"
 
 
 @dataclass(frozen=True)
@@ -78,6 +77,7 @@ def normalise(samples: List[Sample]) -> List[Tuple[float, float]]:
     return [((s.frame - f0) / fs, (s.value - v0) / vs * VALUE_AXIS_WEIGHT) for s in samples]
 
 
+# TODO: what?
 def _perp_dist(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
     """Perpendicular distance from point P to segment AB."""
     dx, dy = bx - ax, by - ay
@@ -291,10 +291,6 @@ def adaptive_subdivide(samples: List[Sample], key_indices: List[int], vs: float)
 
 
 def unbake_fcurve_samples(samples: List[Sample]) -> List[KeyPoint]:
-    """
-    Full unbaking pipeline for one FCurve worth of samples.
-    Pure function: Sample list in, KeyPoint list out.
-    """
     if len(samples) <= 2:
         return build_keypoints(samples, list(range(len(samples))))
 
@@ -320,15 +316,12 @@ def write_keypoints(fcurve, keypoints: List[KeyPoint]) -> None:
     kfps = fcurve.keyframe_points
     kfps.add(len(keypoints))
 
-    use_auto = HANDLE_MODE == "AUTO_CLAMPED"
-
     for i, kp in enumerate(keypoints):
         kf = kfps[i]
         kf.co = (kp.frame, kp.value)
         kf.interpolation = "BEZIER"
 
-        if use_auto:
-            # Blender will recompute handles; type overrides our computed values
+        if HANDLE_MODE == "AUTO_CLAMPED":
             kf.handle_left_type = "AUTO_CLAMPED"
             kf.handle_right_type = "AUTO_CLAMPED"
         else:
@@ -341,8 +334,10 @@ def write_keypoints(fcurve, keypoints: List[KeyPoint]) -> None:
 
 
 def _unbake_single_fcurve(fcurve) -> None:
-    """In-place unbake of one Blender FCurve."""
-    samples = [Sample(kp.co.x, kp.co.y) for kp in fcurve.keyframe_points]
+    def extract_samples(fcurve) -> List[Sample]:
+        return [Sample(kp.co.x, kp.co.y) for kp in fcurve.keyframe_points]
+
+    samples = extract_samples(fcurve)
     if not samples:
         return
     keypoints = unbake_fcurve_samples(samples)
@@ -350,45 +345,23 @@ def _unbake_single_fcurve(fcurve) -> None:
     write_keypoints(fcurve, keypoints)
 
 
-def unbake(action: bpy.types.Action) -> bpy.types.Action:
-    new_action = action.copy()
-    new_action.name = action.name + UNBAKED_SUFFIX
-
-    src_fcurves = list(_iter_fcurves(action))
-    dst_fcurves = list(_iter_fcurves(new_action))
-
-    original_totals: List[int] = []
-    reduced_totals: List[int] = []
-
-    for src_fc, dst_fc in zip(src_fcurves, dst_fcurves):
-        original_totals.append(len(src_fc.keyframe_points))
-        _unbake_single_fcurve(dst_fc)
-        reduced_totals.append(len(dst_fc.keyframe_points))
-
-    total_in = sum(original_totals)
-    total_out = sum(reduced_totals)
-    ratio = 100.0 * (1.0 - total_out / total_in) if total_in else 0.0
-    print(
-        f"[unbake] '{action.name}' → '{new_action.name}' | "
-        f"{total_in} keys → {total_out} keys  "
-        f"({ratio:.1f}% reduction,  {len(src_fcurves)} curves)"
-    )
-    return new_action
+def unbake(action: bpy.types.Action):
+    fcurves = list(_iter_fcurves(action))
+    for fc in fcurves:
+        _unbake_single_fcurve(fc)
 
 
-def unbake_active() -> Optional[bpy.types.Action]:
+def unbake_active() -> None:
     obj = bpy.context.active_object
     if obj is None:
         print("[unbake] No active object.")
-        return None
+        return
     if obj.animation_data is None or obj.animation_data.action is None:
         print("[unbake] Active object has no action.")
-        return None
+        return
 
     original = obj.animation_data.action
-    result = unbake(original)
-    obj.animation_data.action = result
-    return result
+    unbake(original)
 
 
 if __name__ == "__main__":
