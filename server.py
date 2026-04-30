@@ -11,7 +11,10 @@ config = Config()
 
 def get_fps() -> int:
     """get fps from blender please"""
-    return bpy.context.scene.render.fps
+    try:
+        return bpy.context.scene.render.fps
+    except:
+        return config.DEFAULT_FPS
 
 
 def get_animation(

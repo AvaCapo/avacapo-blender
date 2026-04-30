@@ -21,3 +21,5 @@ class Config:
 
     DEFAULT_MODELS = ["asm", "gen1", "gen2"]
     DEFAULT_TEMPERATURE = 1.0
+    DEFAULT_DURATION = 2.5
+    DEFAULT_FPS = 24

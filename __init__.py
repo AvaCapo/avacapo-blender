@@ -33,15 +33,25 @@ bl_info = {
 # remember - we send to server (duration and fps)
 # stored globally (on Scene), to create a new "task" and start "attempt"(request) on it
 class AvacapoSettings(bpy.types.PropertyGroup):
+    _updating_time = False
+
     def update_start(self, context):
         self.end = int(self.start + (self.duration * get_fps()))
 
     # TODO: maximum recursion depth exceeded, update_duration/update_end cycle
     def update_duration(self, context):
+        if self._updating_time:
+            return
+        self._update_time = True
         self.end = int(self.start + (self.duration * get_fps()))
+        self._update_time = False
 
     def update_end(self, context):
+        if self._updating_time:
+            return
+        self._update_time = True
         self.duration = (self.end - self.start) / get_fps()
+        self._update_time = False
 
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     prompt: bpy.props.StringProperty(
@@ -64,7 +74,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     )
     end: bpy.props.IntProperty(
         name="end",
-        default=120,
+        default=int(config.DEFAULT_DURATION * get_fps()),
         update=update_end,
     )
     temperature: bpy.props.FloatProperty(
