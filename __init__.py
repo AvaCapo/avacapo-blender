@@ -35,23 +35,33 @@ bl_info = {
 class AvacapoSettings(bpy.types.PropertyGroup):
     _updating_time = False
 
-    def update_start(self, context):
-        self.end = int(self.start + (self.duration * get_fps()))
+    def _fps(self) -> int:
+        return max(1, int(get_fps()))
 
-    # TODO: maximum recursion depth exceeded, update_duration/update_end cycle
-    def update_duration(self, context):
-        if self._updating_time:
+    def _set_time_fields(self, callback) -> None:
+        cls = type(self)
+        if cls._updating_time:
             return
-        self._update_time = True
-        self.end = int(self.start + (self.duration * get_fps()))
-        self._update_time = False
+        cls._updating_time = True
+        try:
+            callback()
+        finally:
+            cls._updating_time = False
+
+    def update_start(self, context):
+        self._set_time_fields(
+            lambda: setattr(self, "end", int(round(self.start + (self.duration * self._fps()))))
+        )
+
+    def update_duration(self, context):
+        self._set_time_fields(
+            lambda: setattr(self, "end", int(round(self.start + (self.duration * self._fps()))))
+        )
 
     def update_end(self, context):
-        if self._updating_time:
-            return
-        self._update_time = True
-        self.duration = (self.end - self.start) / get_fps()
-        self._update_time = False
+        self._set_time_fields(
+            lambda: setattr(self, "duration", (self.end - self.start) / self._fps())
+        )
 
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     prompt: bpy.props.StringProperty(
