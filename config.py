@@ -9,7 +9,8 @@ class Config:
     PLATFORM_URL = "https://service.avacapo.com/"
     FRONTEND_URL = "https://app.avacapo.com/"
     GENERATION_URL = f"{PLATFORM_URL}api/v1/api-avacapo-prompt/"
-    GET_MODELS_NAMES_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
+    GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
+    GET_MODELS_NAMES_URL = GET_MODELS_URL
 
     BLEND_NAME = "rigs.blend"
     BLEND_PATH = os.path.join(ADDON_DIR, BLEND_NAME)
@@ -20,6 +21,20 @@ class Config:
     AVACAPO_RIG_NAME = "avacapo_bvh_v1"
 
     DEFAULT_MODELS = ["asm", "gen1", "gen2"]
+    DEFAULT_MODEL_DETAILS = {
+        "gen1": {
+            "name": "Standard",
+            "description": "Simple motion generation for quick results.",
+        },
+        "gen2": {
+            "name": "Advanced",
+            "description": "Fast, high-quality motion generation.",
+        },
+        "asm": {
+            "name": "Constructor",
+            "description": "Motion construction from a high-quality animation database.",
+        },
+    }
     DEFAULT_TEMPERATURE = 1.0
     DEFAULT_DURATION = 2.5
     DEFAULT_FPS = 24

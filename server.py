@@ -4,7 +4,7 @@ import requests
 from .storage import Storage
 from .logger import log
 from .config import Config
-from .models import get_models_names
+from .models import get_default_model_type, get_models_names
 
 config = Config()
 
@@ -22,10 +22,12 @@ def get_animation(
     prompt: str = "",
     duration: float = 5.0,
     temperature: float = 1.0,
-    model: str = "gen2",
+    model: str = "",
 ):
     """send prompt to server, get animation back"""
     model_names = get_models_names()
+    if not model:
+        model = get_default_model_type()
     if model not in model_names:
         message = f"Invalid model type: {model}. Must be one of {model_names}."
         log.error(message)

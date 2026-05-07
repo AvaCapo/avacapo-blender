@@ -12,6 +12,7 @@ from . import rig_utils
 from .storage import Storage
 from .logger import log
 from .config import Config
+from .models import clear_models_cache, get_model_enum_items, resolve_model_type
 from .ui import AVACAPO_PT_main_panel
 
 config = Config()
@@ -95,8 +96,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     model: bpy.props.EnumProperty(
         name="Model",
         description="generation model",
-        items=[(m, f"{m.capitalize()}", f"{m} model") for m in config.DEFAULT_MODELS],
-        default=config.DEFAULT_MODELS[0],
+        items=get_model_enum_items,
     )
     token_input: bpy.props.StringProperty(
         name="Token",
@@ -149,8 +149,7 @@ class AvacapoAttempt(bpy.types.PropertyGroup):
     model: bpy.props.EnumProperty(
         name="Model",
         description="generation model",
-        items=[(m, f"{m.capitalize()}", f"{m} model") for m in config.DEFAULT_MODELS],
-        default=config.DEFAULT_MODELS[0],
+        items=get_model_enum_items,
     )
     token_input: bpy.props.StringProperty(
         name="Token",
@@ -186,6 +185,7 @@ class AVACAPO_OT_login_browser(bpy.types.Operator):
             if self._auth_server.token:
                 Storage.api_token = self._auth_server.token
                 Storage.save()
+                clear_models_cache()
                 self.report({"INFO"}, "Connected successfully!")
                 log.info("Browser auth completed")
             else:
@@ -232,6 +232,7 @@ class AVACAPO_OT_paste_token(bpy.types.Operator):
 
         Storage.api_token = token
         Storage.save()
+        clear_models_cache()
         settings.token_input = ""
         self.report({"INFO"}, "Connected successfully!")
         return {"FINISHED"}
@@ -246,6 +247,7 @@ class AVACAPO_OT_disconnect(bpy.types.Operator):
     def execute(self, context):
         Storage.api_token = ""
         Storage.save()
+        clear_models_cache()
         self.report({"INFO"}, "Disconnected")
         return {"FINISHED"}
 
@@ -346,13 +348,14 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
     def _fetch(self):
         settings = bpy.context.scene.avacapo_settings
+        selected_model = resolve_model_type(settings.model)
         log.debug("Thread started, opening URL...")
         try:
             raw = get_animation(
                 prompt=settings.prompt,
                 duration=settings.duration,
                 temperature=settings.temperature,
-                model=settings.model,
+                model=selected_model,
             )
             log.debug(f"Raw response ({len(raw)} bytes): {raw[:120]}")
             self._result = raw
@@ -417,11 +420,12 @@ class QUEUE_OT_add_task(bpy.types.Operator):
             return {"CANCELLED"}
 
         try:
+            selected_model = resolve_model_type(settings.model)
             task = Queue.add(
                 prompt=settings.prompt.strip(),
                 start_frame=settings.start,
                 duration=settings.duration,
-                model=settings.model,
+                model=selected_model,
             )
         except ValueError as exc:
             self.report({"WARNING"}, str(exc))
