@@ -205,4 +205,8 @@ def draw_clips(layout: bpy.types.UILayout) -> None:
 
 def draw_clip(layout: bpy.types.UILayout, clip=default_clip) -> None:
     box = layout.box()
-    box.label(text=clip.name, icon=CLIP_ICON)
+    row = box.row(align=True)
+    row.label(text=clip.name, icon=CLIP_ICON)
+    # row.operator("avacapo.create_avacapo", text="", icon="FULLSCREEN_ENTER")
+    box.separator()
+    box.label(text="attempts")
