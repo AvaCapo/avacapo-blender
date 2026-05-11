@@ -1,7 +1,7 @@
-Documentation:
---------------
+How it works:
 
-
+you create clips per object
+clip
 
 # CLIP/ATTEMPT:
 

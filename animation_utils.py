@@ -10,31 +10,16 @@ from bpy_extras import anim_utils
 from .logger import log
 from .rig_utils import infer_rig_type
 
-AnimationType = Literal["bvh_avocapo_v1"]
 
-
-class Animation:
-    """animation, animation data"""
-
-    data: str
-    _type: AnimationType
-
-    def __init__(self, data) -> None:
-        self.data = data
-        self._type = "bvh_avocapo_v1"
-
-
-def apply_animation(obj: bpy.types.Object, animation_data: Animation):
-    """strategy, choose and apply"""
-    animation = Animation(animation_data)
-    match infer_rig_type(obj), animation._type:
-        case "avacapo_v1", "bvh_avocapo_v1":
-            apply_bvh(obj, animation_data)
+def apply_animation(obj: bpy.types.Object, bvh_bytes, action: bpy.types.Action):
+    match infer_rig_type(obj):
+        case "avacapo_bvh_v1":
+            apply_bvh(obj, bvh_bytes, action)
         case _:
-            log.error(f"cannot apply animation of type {animation._type} to {infer_rig_type}")
+            log.error(f"cannot apply animation to {infer_rig_type}")
 
 
-def apply_bvh(skeleton: bpy.types.Object, bvh_bytes):
+def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
     # https://claude.ai/chat/b30e6841-94a8-40dc-a085-cbefe520c23b
     # this function was written with claude!
     # it was mainly copied from blender sources
@@ -85,7 +70,7 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes):
         else:
             pose_bone.rotation_mode = rotate_mode
 
-    action = bpy.data.actions.new(name="BVH_Action")
+    action = action
     action_slot = action.slots.new(skeleton.id_type, "Slot")
     channelbag = anim_utils.action_ensure_channelbag_for_slot(action, action_slot)
 
@@ -169,3 +154,18 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes):
                         rotate[frame_i][axis_i],
                     )
                     curve.keyframe_points[frame_i].interpolation = "LINEAR"
+
+
+def find_attempt(obj_name: str, attempt_uid: str):  # -> attempt(runtime type) | none
+    obj = bpy.data.objects[obj_name]
+    if obj is None:
+        return None
+    return next(
+        (
+            attempt
+            for clip in obj.avacapo_clips.clips
+            for attempt in clip.attempts
+            if attempt.uid == attempt_uid
+        ),
+        None,
+    )

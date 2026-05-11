@@ -3,9 +3,12 @@ import os
 import threading
 import time
 import webbrowser
+import uuid
+
+from bpy.props import CollectionProperty
 
 
-from .state_controller import State, Queue, frame_change_post
+from .state_controller import frame_change_post
 from .server import get_animation, get_fps
 from . import animation_utils
 from . import rig_utils
@@ -66,7 +69,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
 
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
     prompt: bpy.props.StringProperty(
-        name="", default="A person is walking backward", description="Enter text here"
+        name="", default="walking backward", description="Enter text here"
     )
     start_record_lock: bpy.props.BoolProperty(
         name="start_record_lock",
@@ -88,6 +91,16 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         default=int(config.DEFAULT_DURATION * get_fps()),
         update=update_end,
     )
+    fadein: bpy.props.IntProperty(
+        name="fadein",
+        description="frames",
+        default=50,
+    )
+    fadeout: bpy.props.IntProperty(
+        name="fadeout",
+        description="frames",
+        default=50,
+    )
     temperature: bpy.props.FloatProperty(
         name="temperature",
         description="setting 0.0 - 1.0 for neural network 'randomness'",
@@ -108,39 +121,17 @@ class AvacapoSettings(bpy.types.PropertyGroup):
 
 # stored locally (on Object), bound to single nla track
 # and have several "attempts"(requests/actions)
-class AvacapoClip(bpy.types.PropertyGroup):
-    prompt: bpy.props.StringProperty(
-        name="", default="A person is walking backward", description="Enter text here"
-    )
-    start: bpy.props.IntProperty(
-        name="start",
-        default=0,
-    )
-    duration: bpy.props.FloatProperty(
-        name="duration",
-        description="seconds",
-        default=2.5,
-    )
-    end: bpy.props.IntProperty(
-        name="end",
-        default=120,
-    )
-    fadein: bpy.props.IntProperty(
-        name="fadein",
-        description="frames",
-        default=50,
-    )
-    fadeout: bpy.props.IntProperty(
-        name="fadeout",
-        description="frames",
-        default=50,
-    )
-    attempts: ...
-    nla_track: ...
-
-
 # attempt - a single trial, or
 class AvacapoAttempt(bpy.types.PropertyGroup):
+    # Take_2_asm_0.8
+    # Take_3_gen2_1.0
+    uid: bpy.props.StringProperty()
+    name: bpy.props.StringProperty()
+    action_name: bpy.props.StringProperty()
+    status: bpy.props.StringProperty()  # | Error | Pending | Fetching | Done
+
+    # to restart attempt if something goes off
+    # all the request props to restart the attempt
     temperature: bpy.props.FloatProperty(
         name="temperature",
         description="setting 0.0 - 1.0 for neural network 'randomness'",
@@ -151,15 +142,62 @@ class AvacapoAttempt(bpy.types.PropertyGroup):
         description="generation model",
         items=get_model_enum_items,
     )
-    token_input: bpy.props.StringProperty(
-        name="Token",
-        description="Paste your API token here",
-        default="",
-        subtype="PASSWORD",
+    prompt: bpy.props.StringProperty()
+    duration: bpy.props.FloatProperty()
+
+
+class AvacapoClip(bpy.types.PropertyGroup):
+    # nla_track.name = clip_name
+    def create_name(self) -> str:
+        max_len = 16
+        uid = str(uuid.uuid4().hex[:6])
+        if len(self.prompt) > max_len:
+            words = self.prompt[:max_len].split(" ")[:-1]
+        else:
+            words = self.prompt.split(" ")
+        return "_".join([*words, uid])
+
+    prompt: bpy.props.StringProperty(
+        name="", default="walking backward", description="Enter text here"
     )
-    queue_task: ...
-    # when done:
-    action: ...
+    name: bpy.props.StringProperty()
+    start: bpy.props.IntProperty(
+        name="start",
+        default=0,
+    )
+    end: bpy.props.IntProperty(
+        name="end",
+        default=120,
+    )
+    # duration is calculated live, no note
+    fadein: bpy.props.IntProperty(
+        name="fadein",
+        description="frames",
+        default=50,
+    )
+    fadeout: bpy.props.IntProperty(
+        name="fadeout",
+        description="frames",
+        default=50,
+    )
+    # here we have request props again,
+    # to create new attempts
+    temperature: bpy.props.FloatProperty(
+        name="temperature",
+        description="setting 0.0 - 1.0 for neural network 'randomness'",
+        default=config.DEFAULT_TEMPERATURE,
+    )
+    model: bpy.props.EnumProperty(
+        name="Model",
+        description="generation model",
+        items=get_model_enum_items,
+    )
+
+    attempts: CollectionProperty(type=AvacapoAttempt)
+
+
+class AvacapoClips(bpy.types.PropertyGroup):
+    clips: CollectionProperty(type=AvacapoClip)
 
 
 # Auth Operators:
@@ -266,6 +304,10 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
     _error = None
     _timer = None
 
+    clip_name: bpy.props.StringProperty()
+    attempt_uid: bpy.props.StringProperty()
+    obj_name: bpy.props.StringProperty()
+
     def modal(self, context, event):
         time_start = time.time()
         if event.type != "TIMER":
@@ -275,67 +317,30 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             log.debug("Background thread finished, cleaning up timer")
             context.window_manager.event_timer_remove(self._timer)
 
-            task_id = State.current_task_id
-
-            State.server_busy = False
-            State.current_task_id = ""
-            State.server_status = ""
-
             if self._error:
                 msg = f"Request failed: {self._error}"
                 log.error(msg)
                 self.report({"ERROR"}, msg)
-                State.server_status = f"Error: {self._error}"
-                if task_id:
-                    Queue.finish(
-                        task_id,
-                        status="error",
-                        generation_time=time.time() - self._time_start,
-                    )
                 return {"CANCELLED"}
 
             log.info(f"BVH received: {self._result!r}")
             try:
-                self._execute(self._result, context.object)
+                self._execute(self._result, self.obj_name, self.attempt_uid)
             except Exception as exc:
                 message = f"Applying animation failed: {exc}"
                 log.exception(message)
                 self.report({"ERROR"}, message)
-                State.server_status = f"Error: {exc}"
-                if task_id:
-                    Queue.finish(
-                        task_id,
-                        status="error",
-                        generation_time=time.time() - self._time_start,
-                    )
                 return {"CANCELLED"}
 
-            if task_id:
-                Queue.finish(
-                    task_id,
-                    status="done",
-                    generation_time=time.time() - self._time_start,
-                )
-            State.server_status = "Done!"
             self.report({"INFO"}, "animation applied")
             time_end = time.time()
             log.debug(f"time of modal operator animation apply is {time_end - time_start}")
-
-            # chain: process the next pending task if any
-            bpy.ops.queue.process()
             return {"FINISHED"}
 
         return {"PASS_THROUGH"}
 
     def invoke(self, context, event):
         self._time_start = time.time()
-        if State.server_busy:
-            self.report({"WARNING"}, "Already fetching, please wait...")
-            return {"CANCELLED"}
-
-        log.debug("Starting fetch")
-        State.server_busy = True
-        State.server_status = "Fetching..."
         self._result = None
         self._error = None
 
@@ -347,14 +352,14 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def _fetch(self):
-        settings = bpy.context.scene.avacapo_settings
-        selected_model = resolve_model_type(settings.model)
+        attempt = animation_utils.find_attempt(self.obj_name, self.attempt_uid)
+        selected_model = resolve_model_type(attempt.model)
         log.debug("Thread started, opening URL...")
         try:
             raw = get_animation(
-                prompt=settings.prompt,
-                duration=settings.duration,
-                temperature=settings.temperature,
+                prompt=attempt.prompt,
+                duration=attempt.duration,
+                temperature=attempt.temperature,
                 model=selected_model,
             )
             log.debug(f"Raw response ({len(raw)} bytes): {raw[:120]}")
@@ -364,98 +369,80 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             log.exception("Unexpected error in fetch thread")
 
     @staticmethod
-    def _execute(fetch_result, obj):
-        log.debug("applying animation")
-        animation_utils.apply_bvh(obj, fetch_result)
+    def _execute(fetch_result, obj_name, attempt_uid):
+        obj = bpy.data.objects[obj_name]
+        attempt = animation_utils.find_attempt(obj, attempt_uid)
+        action = bpy.data.actions[attempt.action_name]
+        if not action:
+            log.debug("no action found")
+        else:
+            animation_utils.apply_animation(obj, fetch_result, action)
 
 
-class QUEUE_OT_redo_task(bpy.types.Operator):
-    bl_idname = "queue.redo_task"
-    bl_label = "Redo Task"
+class Avacapo_OT_add_clip(bpy.types.Operator):
+    bl_idname = "avacapo.add_clip"
+    bl_label = "Add new clip"
 
-    task_id: bpy.props.StringProperty()
-
-    def execute(self, context):
-        original = Queue.get_by_id(self.task_id)
-        if not original:
-            self.report({"WARNING"}, "Task not found.")
-            return {"CANCELLED"}
-
-        # clone with same params, fresh status
-        try:
-            task = Queue.clone_task(original)
-        except ValueError as exc:
-            self.report({"WARNING"}, str(exc))
-            return {"CANCELLED"}
-
-        bpy.ops.queue.discard_task(task_id=self.task_id)
-        self.report({"INFO"}, f"Re-queued: {task.id}")
-        if not State.server_busy:
-            bpy.ops.queue.process()
-        return {"FINISHED"}
-
-
-class QUEUE_OT_discard_task(bpy.types.Operator):
-    bl_idname = "queue.discard_task"
-    bl_label = "Discard Task"
-
-    task_id: bpy.props.StringProperty()
+    prompt: bpy.props.StringProperty()
+    start: bpy.props.IntProperty()
+    end: bpy.props.IntProperty()
+    fadein: bpy.props.IntProperty()
+    fadeout: bpy.props.IntProperty()
+    temperature: bpy.props.FloatProperty()
+    model: bpy.props.StringProperty()
 
     def execute(self, context):
-        Queue.discard_by_id(self.task_id)
-        return {"FINISHED"}
+        obj = context.object
 
+        # create the clip props
+        new_clip = obj.avacapo_clips.clips.add()
+        new_clip.prompt = self.prompt
+        new_clip.name = new_clip.create_name()
+        new_clip.start = self.start
+        new_clip.end = self.start
+        new_clip.fadein = self.fadein
+        new_clip.fadeout = self.fadeout
 
-class QUEUE_OT_add_task(bpy.types.Operator):
-    bl_idname = "queue.add_task"
-    bl_label = "Add Task"
-    bl_description = "Queue a generation task from the current prompt"
+        # generate new attempt
+        new_attempt = new_clip.attempts.add()
+        new_attempt.uid = uuid.uuid4().hex[:6]
+        new_attempt.prompt = self.prompt
+        # request params
+        new_attempt.temperature = self.temperature
+        new_attempt.model = self.model
+        n = len(new_clip.attempts)
+        new_attempt.name = f"Take_{n}_{self.model}_{self.temperature}"
+        new_attempt.action_name = f"{new_clip.name}_{n}"
+        new_attempt.duration = (self.end - self.start) / get_fps()
+        bpy.data.actions.new(name=new_attempt.action_name)
 
-    def execute(self, context):
-        settings = context.scene.avacapo_settings
-        prompt = settings.prompt.strip()
+        # add the attempt to queue and start fetching it
+        # GlobalQueue.add_attempt(new_attempt.uid)
 
-        if not prompt:
-            self.report({"WARNING"}, "Prompt is empty.")
-            return {"CANCELLED"}
+        # because you cannot pass custom datablock into operator
+        bpy.ops.avacapo.fetch(
+            "INVOKE_DEFAULT",
+            clip_name=new_clip.name,
+            attempt_uid=new_attempt.uid,
+            obj_name=obj.name,
+        )
 
-        try:
-            selected_model = resolve_model_type(settings.model)
-            task = Queue.add(
-                prompt=settings.prompt.strip(),
-                start_frame=settings.start,
-                duration=settings.duration,
-                model=selected_model,
-            )
-        except ValueError as exc:
-            self.report({"WARNING"}, str(exc))
-            return {"CANCELLED"}
+        # bind nla
+        nla_tracks = obj.animation_data.nla_tracks
+        nla_track = nla_tracks.new(prev=None)
+        nla_track.name = new_clip.name
+        action = bpy.data.actions.get(new_attempt.action_name)
+        nla_strip = nla_track.strips.new(
+            name=new_attempt.action_name,
+            start=self.start,
+            action=action,
+        )
+        nla_strip.action_frame_start = 1
+        nla_strip.action_frame_end = self.end
+        nla_strip.blend_in = self.fadein
+        nla_strip.blend_out = self.fadeout
+        nla_strip.blend_type = "REPLACE"
 
-        self.report({"INFO"}, f"Task queued: {task.name} [{task.id}]")
-
-        # kick off processing immediately if nothing is running
-        if not State.server_busy:
-            bpy.ops.queue.process()
-
-        return {"FINISHED"}
-
-
-class QUEUE_OT_process(bpy.types.Operator):
-    """Pick the next pending task and start the fetch operator"""
-
-    bl_idname = "queue.process"
-    bl_label = "Process Queue"
-
-    def execute(self, context):
-        if State.server_busy:
-            return {"FINISHED"}  # fetch already running, it will chain on its own
-
-        task = Queue.start_next()
-        if task is None:
-            return {"FINISHED"}
-
-        State.current_task_id = task.id
-        bpy.ops.avacapo.fetch("INVOKE_DEFAULT")
         return {"FINISHED"}
 
 
@@ -550,14 +537,14 @@ class AVACAPO_OT_create_avacapo(bpy.types.Operator):
 
 _classes = [
     AvacapoSettings,
-    QUEUE_OT_add_task,
-    QUEUE_OT_process,
-    QUEUE_OT_redo_task,
-    QUEUE_OT_discard_task,
+    AvacapoAttempt,
+    AvacapoClip,
+    AvacapoClips,
     AVACAPO_OT_login_browser,
     AVACAPO_OT_paste_token,
     AVACAPO_OT_disconnect,
     AVACAPO_OT_reload_addon,
+    Avacapo_OT_add_clip,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
@@ -571,6 +558,7 @@ def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.avacapo_settings = bpy.props.PointerProperty(type=AvacapoSettings)
+    bpy.types.Object.avacapo_clips = bpy.props.PointerProperty(type=AvacapoClips)
     bpy.app.handlers.frame_change_post.append(frame_change_post)
     bpy.app.handlers.depsgraph_update_post.append(rig_utils._init_bone_trees_once)
 
@@ -578,6 +566,7 @@ def register() -> None:
 def unregister() -> None:
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
+    del bpy.types.Object.avacapo_clips
     del bpy.types.Scene.avacapo_settings
     bpy.app.handlers.frame_change_post.remove(frame_change_post)
     if rig_utils._init_bone_trees_once in bpy.app.handlers.depsgraph_update_post:

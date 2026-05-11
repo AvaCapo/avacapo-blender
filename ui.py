@@ -139,18 +139,25 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 if not Queue.allow_new_task:
                     row.label(text="Queue is full...", icon="TIME")
                 else:
-                    row.operator(
-                        "queue.add_task",
+                    add_clip_op = row.operator(
+                        "avacapo.add_clip",
                         text="Generate",
                         icon="SHADERFX",
                     )
+                    add_clip_op.prompt = settings.prompt
+                    add_clip_op.start = settings.start
+                    add_clip_op.end = settings.end
+                    add_clip_op.fadein = settings.fadein
+                    add_clip_op.fadeout = settings.fadeout
+                    add_clip_op.temperature = settings.temperature
+                    add_clip_op.model = settings.model
 
                 if "Error" in State.server_status:
                     layout.label(text=State.server_status, icon="ERROR")
 
                 if layout is not None:
                     draw_queue(layout)
-                    draw_clips(layout)
+                    draw_clips(layout, context.object)
 
 
 def draw_queue_task(layout: bpy.types.UILayout, task: "Queue.Task") -> None:
@@ -190,12 +197,16 @@ class Clip:
     name: str
 
 
-default_clip = Clip(name="Walking backwards")
-clips = [default_clip]
 CLIP_ICON = "RENDER_ANIMATION"
 
 
-def draw_clips(layout: bpy.types.UILayout) -> None:
+def draw_clips(layout: bpy.types.UILayout, obj: bpy.types.Object | None) -> None:
+    if obj is None:
+        return
+    if not hasattr(obj, "avacapo_clips"):
+        # property not initialized
+        return
+    clips = obj.avacapo_clips.clips
     if not clips:
         layout.label(text="No clips.", icon=CLIP_ICON)
         return
@@ -203,10 +214,8 @@ def draw_clips(layout: bpy.types.UILayout) -> None:
         draw_clip(layout, clip)
 
 
-def draw_clip(layout: bpy.types.UILayout, clip=default_clip) -> None:
+def draw_clip(layout: bpy.types.UILayout, clip) -> None:
     box = layout.box()
     row = box.row(align=True)
     row.label(text=clip.name, icon=CLIP_ICON)
     # row.operator("avacapo.create_avacapo", text="", icon="FULLSCREEN_ENTER")
-    box.separator()
-    box.label(text="attempts")
