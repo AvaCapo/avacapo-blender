@@ -4,8 +4,7 @@ import threading
 import time
 import webbrowser
 import uuid
-
-from bpy.props import CollectionProperty
+import textwrap
 
 
 from .state_controller import frame_change_post
@@ -68,6 +67,11 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         )
 
     text_block: bpy.props.PointerProperty(type=bpy.types.Text)
+    animation_mode: bpy.props.EnumProperty(
+        name="Model",
+        description="generation model",
+        items=[("NLA", "NLA", "Use nla editor for animation")],
+    )
     prompt: bpy.props.StringProperty(
         name="", default="walking backward", description="Enter text here"
     )
@@ -161,27 +165,6 @@ class AvacapoClip(bpy.types.PropertyGroup):
         name="", default="walking backward", description="Enter text here"
     )
     name: bpy.props.StringProperty()
-    start: bpy.props.IntProperty(
-        name="start",
-        default=0,
-    )
-    end: bpy.props.IntProperty(
-        name="end",
-        default=120,
-    )
-    # duration is calculated live, no note
-    fadein: bpy.props.IntProperty(
-        name="fadein",
-        description="frames",
-        default=50,
-    )
-    fadeout: bpy.props.IntProperty(
-        name="fadeout",
-        description="frames",
-        default=50,
-    )
-    # here we have request props again,
-    # to create new attempts
     temperature: bpy.props.FloatProperty(
         name="temperature",
         description="setting 0.0 - 1.0 for neural network 'randomness'",
@@ -193,11 +176,12 @@ class AvacapoClip(bpy.types.PropertyGroup):
         items=get_model_enum_items,
     )
 
-    attempts: CollectionProperty(type=AvacapoAttempt)
+    attempts: bpy.props.CollectionProperty(type=AvacapoAttempt)
+    active_attempt: bpy.props.StringProperty()
 
 
 class AvacapoClips(bpy.types.PropertyGroup):
-    clips: CollectionProperty(type=AvacapoClip)
+    clips: bpy.props.CollectionProperty(type=AvacapoClip)
 
 
 # Auth Operators:
@@ -370,16 +354,18 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
     @staticmethod
     def _execute(fetch_result, obj_name, attempt_uid):
-        obj = bpy.data.objects[obj_name]
-        attempt = animation_utils.find_attempt(obj, attempt_uid)
+        settings = bpy.data.scenes[0].avacapo_settings
+        attempt = animation_utils.find_attempt(obj_name, attempt_uid)
         action = bpy.data.actions[attempt.action_name]
+        obj = bpy.data.objects[obj_name]
         if not action:
             log.debug("no action found")
         else:
             animation_utils.apply_animation(obj, fetch_result, action)
+            obj.animation_data.action = None
 
 
-class Avacapo_OT_add_clip(bpy.types.Operator):
+class AVACAPO_OT_add_clip(bpy.types.Operator):
     bl_idname = "avacapo.add_clip"
     bl_label = "Add new clip"
 
@@ -398,10 +384,6 @@ class Avacapo_OT_add_clip(bpy.types.Operator):
         new_clip = obj.avacapo_clips.clips.add()
         new_clip.prompt = self.prompt
         new_clip.name = new_clip.create_name()
-        new_clip.start = self.start
-        new_clip.end = self.start
-        new_clip.fadein = self.fadein
-        new_clip.fadeout = self.fadeout
 
         # generate new attempt
         new_attempt = new_clip.attempts.add()
@@ -414,18 +396,11 @@ class Avacapo_OT_add_clip(bpy.types.Operator):
         new_attempt.name = f"Take_{n}_{self.model}_{self.temperature}"
         new_attempt.action_name = f"{new_clip.name}_{n}"
         new_attempt.duration = (self.end - self.start) / get_fps()
-        bpy.data.actions.new(name=new_attempt.action_name)
+        action = bpy.data.actions.new(name=new_attempt.action_name)
+        slot = action.slots.new(obj.id_type, name=obj.name)
 
         # add the attempt to queue and start fetching it
         # GlobalQueue.add_attempt(new_attempt.uid)
-
-        # because you cannot pass custom datablock into operator
-        bpy.ops.avacapo.fetch(
-            "INVOKE_DEFAULT",
-            clip_name=new_clip.name,
-            attempt_uid=new_attempt.uid,
-            obj_name=obj.name,
-        )
 
         # bind nla
         nla_tracks = obj.animation_data.nla_tracks
@@ -433,15 +408,89 @@ class Avacapo_OT_add_clip(bpy.types.Operator):
         nla_track.name = new_clip.name
         action = bpy.data.actions.get(new_attempt.action_name)
         nla_strip = nla_track.strips.new(
-            name=new_attempt.action_name,
+            name=new_clip.name,
             start=self.start,
             action=action,
         )
+
+        nla_strip.action_slot = slot
+        # nla_strip.action_slot = action.slots[f"OB{obj.name}"]
         nla_strip.action_frame_start = 1
         nla_strip.action_frame_end = self.end
         nla_strip.blend_in = self.fadein
         nla_strip.blend_out = self.fadeout
         nla_strip.blend_type = "REPLACE"
+
+        bpy.ops.avacapo.fetch(
+            "INVOKE_DEFAULT",
+            clip_name=new_clip.name,
+            attempt_uid=new_attempt.uid,
+            obj_name=obj.name,
+        )
+
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_new_attempt(bpy.types.Operator):
+    bl_idname = "avacapo.new_attempt"
+    bl_label = "Select objct by name"
+    bl_options = {"REGISTER", "UNDO"}
+
+    clip_uid: bpy.props.StringProperty()
+
+    def execute(self, context):
+        obj = context.object
+        for given_clip in context.object.avacapo_clips.clips:
+            if given_clip.name == self.clip_uid:
+                clip = given_clip
+
+        nla_strip = obj.animation_data.nla_tracks[clip.name].strips[clip.name]
+
+        new_attempt = clip.attempts.add()
+        new_attempt.uid = uuid.uuid4().hex[:6]
+        new_attempt.prompt = clip.prompt
+        # request params
+        new_attempt.temperature = clip.temperature
+        new_attempt.model = clip.model
+        n = len(clip.attempts)
+        new_attempt.name = f"Take_{n}_{clip.model}_{clip.temperature}"
+        new_attempt.action_name = f"{clip.name}_{n}"
+        new_attempt.duration = (nla_strip.frame_start_ui - nla_strip.frame_end_ui) / get_fps()
+        action = bpy.data.actions.new(name=new_attempt.action_name)
+        slot = action.slots.new(obj.id_type, name=obj.name)
+
+        nla_strip.action = action
+        nla_strip.action_slot = action.slots[f"OB{obj.name}"]
+
+        bpy.ops.avacapo.fetch(
+            "INVOKE_DEFAULT",
+            clip_name=clip.name,
+            attempt_uid=new_attempt.uid,
+            obj_name=obj.name,
+        )
+
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_SelectAttempt(bpy.types.Operator):
+    bl_idname = "avacapo.select_attempt"
+    bl_label = "Select Attempt"
+
+    attempt_uid: bpy.props.StringProperty()
+    clip_uid: bpy.props.StringProperty()
+
+    def execute(self, context):
+        obj = context.object
+        attempt = animation_utils.find_attempt(obj.name, self.attempt_uid)
+        for given_clip in context.object.avacapo_clips.clips:
+            if given_clip.name == self.clip_uid:
+                clip = given_clip
+
+        clip.active_attempt = self.attempt_uid
+
+        nla_strip = obj.animation_data.nla_tracks[clip.name].strips[clip.name]
+        action = bpy.data.actions[attempt.action_name]
+        nla_strip.action = action
 
         return {"FINISHED"}
 
@@ -532,6 +581,27 @@ class AVACAPO_OT_create_avacapo(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_OpenTextPopover(bpy.types.Operator):
+    bl_idname = "avacapo.open_text_popover"
+    bl_label = "Preview Text"
+
+    info_str: bpy.props.StringProperty()
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self, width=600)
+
+    def draw(self, context):
+        layout = self.layout
+        box = layout.box()
+
+        lines = textwrap.wrap(self.info_str, width=200)
+        for line in lines:
+            box.label(text=line)
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
 # Registration
 # --------------------------------------------------------------------
 
@@ -544,12 +614,15 @@ _classes = [
     AVACAPO_OT_paste_token,
     AVACAPO_OT_disconnect,
     AVACAPO_OT_reload_addon,
-    Avacapo_OT_add_clip,
+    AVACAPO_OT_add_clip,
+    AVACAPO_OT_new_attempt,
     AVACAPO_OT_fetch,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
     AVACAPO_OT_select_by_name,
     AVACAPO_OT_toggle_start_record_lock,
+    AVACAPO_OT_OpenTextPopover,
+    AVACAPO_OT_SelectAttempt,
     AVACAPO_PT_main_panel,
 ]
 

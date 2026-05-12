@@ -211,11 +211,39 @@ def draw_clips(layout: bpy.types.UILayout, obj: bpy.types.Object | None) -> None
         layout.label(text="No clips.", icon=CLIP_ICON)
         return
     for clip in clips:
-        draw_clip(layout, clip)
+        draw_clip(layout, obj, clip)
 
 
-def draw_clip(layout: bpy.types.UILayout, clip) -> None:
+def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
+    nla_strip = obj.animation_data.nla_tracks[clip.name].strips[clip.name]
     box = layout.box()
     row = box.row(align=True)
     row.label(text=clip.name, icon=CLIP_ICON)
-    # row.operator("avacapo.create_avacapo", text="", icon="FULLSCREEN_ENTER")
+    op = row.operator("avacapo.open_text_popover", text="", icon="FULLSCREEN_ENTER")
+    op.info_str = clip.prompt
+    row = box.row(align=True)
+    row.prop(nla_strip, "frame_start_ui", text="start")
+    row.prop(nla_strip, "frame_end_ui", text="end")
+    row = box.row(align=True)
+    row.prop(nla_strip, "blend_in", text="fade in")
+    row.prop(nla_strip, "blend_out", text="fade out")
+    row = box.row()
+    row.prop(nla_strip, "use_auto_blend", text="auto fade")
+    box_attempts = box.box()
+    row = box_attempts.row()
+    row.prop(clip, "temperature")
+    row.prop(clip, "model")
+    op = row.operator("avacapo.new_attempt", text="new take", icon="OUTLINER_OB_CAMERA")
+    op.clip_uid = clip.name
+    box = box_attempts.box()
+    box.prop(clip, "attempts")
+    for attempt in clip.attempts:
+        row = box.row()
+        # Highlight the active one
+        is_active = attempt.name == clip.active_attempt
+        row.alert = is_active  # tints red — optional visual cue
+        op = row.operator("avacapo.select_attempt", text=attempt.name, depress=is_active)
+        op.attempt_uid = attempt.uid
+        op.clip_uid = clip.name
+
+    # for attempt in clip.attempts:

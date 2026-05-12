@@ -10,6 +10,11 @@ from bpy_extras import anim_utils
 from .logger import log
 from .rig_utils import infer_rig_type
 
+# action and slots are different from blender 4.4
+# now action is animation for MULTIPLE objects
+# which makes a structure called "slot"
+# https://claude.ai/chat/9a507fcf-bcd6-4225-bb25-6b80c7ae423e
+
 
 def apply_animation(obj: bpy.types.Object, bvh_bytes, action: bpy.types.Action):
     match infer_rig_type(obj):
@@ -20,13 +25,8 @@ def apply_animation(obj: bpy.types.Object, bvh_bytes, action: bpy.types.Action):
 
 
 def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
+    action_slot = action.slots[f"OB{skeleton.name}"]
     # https://claude.ai/chat/b30e6841-94a8-40dc-a085-cbefe520c23b
-    # this function was written with claude!
-    # it was mainly copied from blender sources
-    # no, you cannot just use bpy.ops.import_bvh here, we are using function from it
-    # we cannot use operators due to syncronicity of operators, inside import_bvh uses ops heavily
-    # so we just to apply data in the function, sadly, they have this piece not as function
-    # so i copied it from there.
     """which is the final step - just apply animation"""
     log.debug(f"""
         applying animation:
@@ -70,8 +70,6 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
         else:
             pose_bone.rotation_mode = rotate_mode
 
-    action = action
-    action_slot = action.slots.new(skeleton.id_type, "Slot")
     channelbag = anim_utils.action_ensure_channelbag_for_slot(action, action_slot)
 
     skeleton.animation_data_create()
@@ -156,6 +154,8 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
                     curve.keyframe_points[frame_i].interpolation = "LINEAR"
 
 
+# why obj_name and not obj? because threading and stale data:
+# read gotcha in documentation
 def find_attempt(obj_name: str, attempt_uid: str):  # -> attempt(runtime type) | none
     obj = bpy.data.objects[obj_name]
     if obj is None:
