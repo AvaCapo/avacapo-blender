@@ -24,6 +24,95 @@ def apply_animation(obj: bpy.types.Object, bvh_bytes, action: bpy.types.Action):
             log.error(f"cannot apply animation to {infer_rig_type}")
 
 
+def _iter_action_fcurves(action: bpy.types.Action):
+    if hasattr(action, "fcurves"):
+        yield from action.fcurves
+
+    for layer in getattr(action, "layers", ()):
+        for strip in getattr(layer, "strips", ()):
+            for channelbag in getattr(strip, "channelbags", ()):
+                yield from channelbag.fcurves
+
+
+def _root_location_data_path(
+    obj: bpy.types.Object, action: bpy.types.Action
+) -> str | None:
+    location_paths = {
+        fcurve.data_path
+        for fcurve in _iter_action_fcurves(action)
+        if fcurve.data_path.startswith('pose.bones["') and fcurve.data_path.endswith('"].location')
+    }
+    if not location_paths:
+        return None
+    if len(location_paths) == 1:
+        return next(iter(location_paths))
+
+    root_bone_names = {bone.name for bone in obj.data.bones if bone.parent is None}
+    for bone_name in root_bone_names:
+        candidate = f'pose.bones["{escape_identifier(bone_name)}"].location'
+        if candidate in location_paths:
+            return candidate
+
+    return sorted(location_paths)[0]
+
+
+def _location_curves_by_axis(
+    obj: bpy.types.Object, action: bpy.types.Action
+) -> dict[int, bpy.types.FCurve]:
+    data_path = _root_location_data_path(obj, action)
+    if data_path is None:
+        return {}
+
+    return {
+        fcurve.array_index: fcurve
+        for fcurve in _iter_action_fcurves(action)
+        if fcurve.data_path == data_path
+    }
+
+
+def evaluate_root_location(
+    obj: bpy.types.Object, action: bpy.types.Action, frame: float
+) -> Vector | None:
+    curves = _location_curves_by_axis(obj, action)
+    if not curves:
+        return None
+
+    return Vector(tuple(curves.get(axis).evaluate(frame) if axis in curves else 0.0 for axis in range(3)))
+
+
+def offset_root_location(
+    obj: bpy.types.Object,
+    action: bpy.types.Action,
+    *,
+    source_frame: float,
+    target_location: Vector,
+) -> bool:
+    curves = _location_curves_by_axis(obj, action)
+    if not curves:
+        return False
+
+    source_location = Vector(
+        tuple(curves.get(axis).evaluate(source_frame) if axis in curves else 0.0 for axis in range(3))
+    )
+    delta = target_location - source_location
+
+    if delta.length_squared == 0.0:
+        return True
+
+    for axis, axis_delta in enumerate(delta):
+        curve = curves.get(axis)
+        if curve is None:
+            continue
+
+        for keyframe in curve.keyframe_points:
+            keyframe.co[1] += axis_delta
+            keyframe.handle_left[1] += axis_delta
+            keyframe.handle_right[1] += axis_delta
+        curve.update()
+
+    return True
+
+
 def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
     action_slot = action.slots[f"OB{skeleton.name}"]
     # https://claude.ai/chat/b30e6841-94a8-40dc-a085-cbefe520c23b
@@ -71,12 +160,15 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
             pose_bone.rotation_mode = rotate_mode
 
     channelbag = anim_utils.action_ensure_channelbag_for_slot(action, action_slot)
+    for fcurve in list(channelbag.fcurves):
+        channelbag.fcurves.remove(fcurve)
 
     skeleton.animation_data_create()
     skeleton.animation_data.action = action
     skeleton.animation_data.action_slot = action_slot
 
-    skip_frame = 1
+    # Keep the very first BVH sample so the clip starts from the true source pose.
+    skip_frame = 0
     num_frame = len(next(iter(bvh_nodes_list)).anim_data) - skip_frame
     time = [float(1 + i) for i in range(num_frame)]
 

@@ -95,15 +95,21 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         default=int(config.DEFAULT_DURATION * get_fps()),
         update=update_end,
     )
+    transition: bpy.props.IntProperty(
+        name="transition",
+        description="frames of overlap when chaining clips",
+        default=0,
+        min=0,
+    )
     fadein: bpy.props.IntProperty(
         name="fadein",
         description="frames",
-        default=50,
+        default=0,
     )
     fadeout: bpy.props.IntProperty(
         name="fadeout",
         description="frames",
-        default=50,
+        default=0,
     )
     temperature: bpy.props.FloatProperty(
         name="temperature",
@@ -182,6 +188,144 @@ class AvacapoClip(bpy.types.PropertyGroup):
 
 class AvacapoClips(bpy.types.PropertyGroup):
     clips: bpy.props.CollectionProperty(type=AvacapoClip)
+
+
+def _frame_count_from_bounds(start_frame: float, end_frame: float) -> int:
+    return max(1, int(round(end_frame - start_frame)))
+
+
+def _frame_count_from_action(action: bpy.types.Action) -> int:
+    frame_start, frame_end = action.frame_range
+    return max(1, int(round(frame_end - frame_start + 1)))
+
+
+def _frame_count_from_strip(nla_strip: bpy.types.NlaStrip) -> int:
+    return _frame_count_from_bounds(nla_strip.frame_start_ui, nla_strip.frame_end_ui)
+
+
+def _configure_strip_timing(
+    nla_strip: bpy.types.NlaStrip,
+    *,
+    start_frame: float,
+    frame_count: int,
+    blend_in: int,
+    blend_out: int,
+) -> None:
+    safe_frame_count = max(1, int(frame_count))
+    max_blend = max(0, safe_frame_count - 1)
+
+    nla_strip.frame_start_ui = int(round(start_frame))
+    nla_strip.frame_end_ui = int(round(start_frame + safe_frame_count))
+    nla_strip.action_frame_start = 1
+    nla_strip.action_frame_end = safe_frame_count
+    nla_strip.use_auto_blend = False
+    nla_strip.blend_in = min(int(blend_in), max_blend)
+    nla_strip.blend_out = min(int(blend_out), max_blend)
+    nla_strip.blend_type = "REPLACE"
+
+
+def _sync_strip_to_action(nla_strip: bpy.types.NlaStrip, action: bpy.types.Action) -> None:
+    _configure_strip_timing(
+        nla_strip,
+        start_frame=nla_strip.frame_start_ui,
+        frame_count=_frame_count_from_action(action),
+        blend_in=int(nla_strip.blend_in),
+        blend_out=int(nla_strip.blend_out),
+    )
+
+
+def _find_latest_strip(obj: bpy.types.Object) -> bpy.types.NlaStrip | None:
+    if obj.animation_data is None:
+        return None
+
+    latest_strip = None
+    latest_end = float("-inf")
+    for nla_track in obj.animation_data.nla_tracks:
+        for nla_strip in nla_track.strips:
+            if nla_strip.frame_end_ui > latest_end:
+                latest_end = nla_strip.frame_end_ui
+                latest_strip = nla_strip
+    return latest_strip
+
+
+def _iter_all_strips(obj: bpy.types.Object):
+    if obj.animation_data is None:
+        return
+
+    for nla_track in obj.animation_data.nla_tracks:
+        for nla_strip in nla_track.strips:
+            yield nla_strip
+
+
+def _chain_start_frame(
+    obj: bpy.types.Object,
+    requested_start: int,
+    requested_frame_count: int,
+    transition_frames: int,
+) -> tuple[int, int]:
+    latest_strip = _find_latest_strip(obj)
+    if latest_strip is None:
+        return requested_start, 0
+
+    safe_transition = min(
+        max(0, int(transition_frames)),
+        max(0, requested_frame_count - 1),
+        max(0, _frame_count_from_strip(latest_strip) - 1),
+    )
+    start_frame = int(round(latest_strip.frame_end_ui - safe_transition))
+    return start_frame, safe_transition
+
+
+def _move_generation_cursor(settings: AvacapoSettings, frame_end: float) -> None:
+    settings.start = int(round(frame_end))
+
+
+def _strip_handoff_frame(nla_strip: bpy.types.NlaStrip) -> float:
+    return float(nla_strip.frame_start_ui + nla_strip.blend_in)
+
+
+def _strip_action_frame_at_timeline(
+    nla_strip: bpy.types.NlaStrip, timeline_frame: float
+) -> float:
+    local_frame = float(nla_strip.action_frame_start + (timeline_frame - nla_strip.frame_start_ui))
+    return max(float(nla_strip.action_frame_start), min(float(nla_strip.action_frame_end), local_frame))
+
+
+def _find_preceding_strip(
+    obj: bpy.types.Object, current_strip: bpy.types.NlaStrip
+) -> bpy.types.NlaStrip | None:
+    handoff_frame = _strip_handoff_frame(current_strip)
+    previous_strip = None
+    previous_end = float("-inf")
+
+    for nla_strip in _iter_all_strips(obj):
+        if nla_strip == current_strip:
+            continue
+        if nla_strip.frame_end_ui <= handoff_frame and nla_strip.frame_end_ui > previous_end:
+            previous_end = nla_strip.frame_end_ui
+            previous_strip = nla_strip
+
+    return previous_strip
+
+
+def _align_strip_root_motion(obj: bpy.types.Object, nla_strip: bpy.types.NlaStrip) -> None:
+    previous_strip = _find_preceding_strip(obj, nla_strip)
+    if previous_strip is None or previous_strip.action is None or nla_strip.action is None:
+        return
+
+    handoff_frame = _strip_handoff_frame(nla_strip)
+    target_frame = _strip_action_frame_at_timeline(previous_strip, handoff_frame)
+    source_frame = _strip_action_frame_at_timeline(nla_strip, handoff_frame)
+    target_location = animation_utils.evaluate_root_location(obj, previous_strip.action, target_frame)
+    if target_location is None:
+        return
+
+    animation_utils.offset_root_location(
+        obj,
+        nla_strip.action,
+        source_frame=source_frame,
+        target_location=target_location,
+    )
 
 
 # Auth Operators:
@@ -309,7 +453,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
             log.info(f"BVH received: {self._result!r}")
             try:
-                self._execute(self._result, self.obj_name, self.attempt_uid)
+                self._execute(self._result, self.obj_name, self.attempt_uid, self.clip_name)
             except Exception as exc:
                 message = f"Applying animation failed: {exc}"
                 log.exception(message)
@@ -353,7 +497,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             log.exception("Unexpected error in fetch thread")
 
     @staticmethod
-    def _execute(fetch_result, obj_name, attempt_uid):
+    def _execute(fetch_result, obj_name, attempt_uid, clip_name):
         settings = bpy.data.scenes[0].avacapo_settings
         attempt = animation_utils.find_attempt(obj_name, attempt_uid)
         action = bpy.data.actions[attempt.action_name]
@@ -362,6 +506,10 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             log.debug("no action found")
         else:
             animation_utils.apply_animation(obj, fetch_result, action)
+            nla_strip = obj.animation_data.nla_tracks[clip_name].strips[clip_name]
+            _align_strip_root_motion(obj, nla_strip)
+            _sync_strip_to_action(nla_strip, action)
+            _move_generation_cursor(settings, nla_strip.frame_end_ui)
             obj.animation_data.action = None
 
 
@@ -372,6 +520,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
     prompt: bpy.props.StringProperty()
     start: bpy.props.IntProperty()
     end: bpy.props.IntProperty()
+    transition: bpy.props.IntProperty()
     fadein: bpy.props.IntProperty()
     fadeout: bpy.props.IntProperty()
     temperature: bpy.props.FloatProperty()
@@ -379,6 +528,8 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.object
+        settings = context.scene.avacapo_settings
+        obj.animation_data_create()
 
         # create the clip props
         new_clip = obj.avacapo_clips.clips.add()
@@ -386,6 +537,14 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         new_clip.name = new_clip.create_name()
 
         # generate new attempt
+        requested_frame_count = _frame_count_from_bounds(self.start, self.end)
+        clip_start, clip_transition = _chain_start_frame(
+            obj,
+            requested_start=self.start,
+            requested_frame_count=requested_frame_count,
+            transition_frames=self.transition,
+        )
+
         new_attempt = new_clip.attempts.add()
         new_attempt.uid = uuid.uuid4().hex[:6]
         new_attempt.prompt = self.prompt
@@ -395,7 +554,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         n = len(new_clip.attempts)
         new_attempt.name = f"Take_{n}_{self.model}_{self.temperature}"
         new_attempt.action_name = f"{new_clip.name}_{n}"
-        new_attempt.duration = (self.end - self.start) / get_fps()
+        new_attempt.duration = requested_frame_count / get_fps()
         action = bpy.data.actions.new(name=new_attempt.action_name)
         slot = action.slots.new(obj.id_type, name=obj.name)
 
@@ -409,17 +568,19 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         action = bpy.data.actions.get(new_attempt.action_name)
         nla_strip = nla_track.strips.new(
             name=new_clip.name,
-            start=self.start,
+            start=clip_start,
             action=action,
         )
 
         nla_strip.action_slot = slot
-        # nla_strip.action_slot = action.slots[f"OB{obj.name}"]
-        nla_strip.action_frame_start = 1
-        nla_strip.action_frame_end = self.end
-        nla_strip.blend_in = self.fadein
-        nla_strip.blend_out = self.fadeout
-        nla_strip.blend_type = "REPLACE"
+        _configure_strip_timing(
+            nla_strip,
+            start_frame=clip_start,
+            frame_count=requested_frame_count,
+            blend_in=clip_transition,
+            blend_out=0,
+        )
+        _move_generation_cursor(settings, nla_strip.frame_end_ui)
 
         bpy.ops.avacapo.fetch(
             "INVOKE_DEFAULT",
@@ -455,7 +616,10 @@ class AVACAPO_OT_new_attempt(bpy.types.Operator):
         n = len(clip.attempts)
         new_attempt.name = f"Take_{n}_{clip.model}_{clip.temperature}"
         new_attempt.action_name = f"{clip.name}_{n}"
-        new_attempt.duration = (nla_strip.frame_start_ui - nla_strip.frame_end_ui) / get_fps()
+        new_attempt.duration = (
+            _frame_count_from_bounds(nla_strip.frame_start_ui, nla_strip.frame_end_ui)
+            / get_fps()
+        )
         action = bpy.data.actions.new(name=new_attempt.action_name)
         slot = action.slots.new(obj.id_type, name=obj.name)
 
@@ -491,6 +655,7 @@ class AVACAPO_OT_SelectAttempt(bpy.types.Operator):
         nla_strip = obj.animation_data.nla_tracks[clip.name].strips[clip.name]
         action = bpy.data.actions[attempt.action_name]
         nla_strip.action = action
+        _sync_strip_to_action(nla_strip, action)
 
         return {"FINISHED"}
 

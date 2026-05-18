@@ -134,6 +134,9 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row_prompt.prop(settings, "prompt")
                 row = box_prompt.row(align=True)
                 row.prop(settings, "model")
+                row = box_prompt.row(align=True)
+                row.prop(settings, "transition", text="Transition")
+                row = box_prompt.row(align=True)
 
                 # Generate button — now queues a task instead of fetching directly
                 if not Queue.allow_new_task:
@@ -147,6 +150,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     add_clip_op.prompt = settings.prompt
                     add_clip_op.start = settings.start
                     add_clip_op.end = settings.end
+                    add_clip_op.transition = settings.transition
                     add_clip_op.fadein = settings.fadein
                     add_clip_op.fadeout = settings.fadeout
                     add_clip_op.temperature = settings.temperature
