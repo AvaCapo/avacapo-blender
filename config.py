@@ -14,6 +14,9 @@ class Config:
 
     BLEND_NAME = "rigs.blend"
     BLEND_PATH = os.path.join(ADDON_DIR, BLEND_NAME)
+    RIGS_DIR = os.path.join(ADDON_DIR, "rigs")
+    MIXAMO_BVH_NAME = "mixamo.bvh"
+    MIXAMO_BVH_PATH = os.path.join(RIGS_DIR, MIXAMO_BVH_NAME)
 
     STORAGE = "storage.json"
     STORAGE_PATH = os.path.join(ADDON_DIR, STORAGE)
@@ -36,5 +39,5 @@ class Config:
         },
     }
     DEFAULT_TEMPERATURE = 1.0
-    DEFAULT_DURATION = 2.5
+    DEFAULT_DURATION = 5
     DEFAULT_FPS = 24

@@ -94,8 +94,9 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 
         else:
             armature = context.object
+            rig_type = rig_utils.infer_rig_type(armature)
             box_obj.label(text=f"{context.object.name}", icon="OUTLINER_OB_ARMATURE")
-            if rig_utils.infer_rig_type(armature) != "avacapo_bvh_v1":
+            if rig_type == "unknown":
                 box_obj.label(text="Unknown rig", icon="ERROR")
                 box_obj.operator(
                     "avacapo.create_avacapo",
@@ -103,7 +104,11 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     icon="SHADERFX",
                 )
             else:
-                box_obj.label(text="AvaCapo rig v1", icon="CHECKBOX_HLT")
+                rig_label = {
+                    "avacapo_bvh_v1": "AvaCapo rig v1",
+                    "mixamo": "Mixamo rig",
+                }.get(rig_type, rig_type)
+                box_obj.label(text=rig_label, icon="CHECKBOX_HLT")
                 box_prompt = layout.box()
                 row_top = box_prompt.row(align=True)
                 col = row_top.row(align=True)

@@ -15,6 +15,7 @@ generated takes as separate Blender actions.
 - Chain newly generated clips after the previous one
 - Continue root motion so later clips start where the previous clip ended
 - Add optional frame overlap for smoother transitions between clips
+- Retarget generated motion to Mixamo armatures inside Blender
 - Authenticate from the UI with browser login or a pasted API token
 
 ## Requirements
@@ -34,7 +35,7 @@ The current add-on is focused on a simple, fast, artist-facing workflow:
 
 ## Current Limitations
 
-- Retargeting to Mixamo, Rigify, and arbitrary rigs is not implemented yet
+- Rigify and arbitrary-rig retargeting are not implemented yet
 - `Try to Convert` is currently a placeholder
 - Generation depends on the online AvaCapo service and does not work offline
 - The add-on is designed around short clip generation, not full-scene authoring
@@ -127,10 +128,10 @@ Each generated clip exposes:
 
 ## Supported Rig
 
-The add-on currently expects the bundled AvaCapo armature layout:
+The add-on currently supports:
 
-- rig object name in the bundled library: `avacapo_bvh_v1`
-- bundled library file: `rigs.blend`
+- the bundled AvaCapo rig: `avacapo_bvh_v1`
+- Mixamo-style armatures, including the usual `mixamorig:` bone naming
 
 If Blender shows `Unknown rig`, the selected armature does not match the currently
 supported structure.

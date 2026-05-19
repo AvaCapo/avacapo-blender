@@ -4,10 +4,11 @@ from typing import Literal, TypeAlias
 
 from .config import Config
 from .logger import log
+from .retarget_maps import MIXAMO_REQUIRED_BONES, canonical_bone_name
 
 config = Config()
 
-RigType = Literal["avacapo_bvh_v1", "unknown"]
+RigType = Literal["avacapo_bvh_v1", "mixamo", "unknown"]
 
 # https://claude.ai/chat/aa912047-04f3-4aa8-ba49-b8a4d4309936
 
@@ -129,4 +130,7 @@ def infer_rig_type(obj: bpy.types.Object) -> RigType:
         return "unknown"
     if AVACAPO_BVH_V1_BONE_TREE and check_if_same_rigtype(obj, AVACAPO_BVH_V1_BONE_TREE):
         return "avacapo_bvh_v1"
+    canonical_bones = {canonical_bone_name(bone.name) for bone in obj.data.bones}
+    if MIXAMO_REQUIRED_BONES.issubset(canonical_bones):
+        return "mixamo"
     return "unknown"

@@ -93,7 +93,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     transition: bpy.props.IntProperty(
         name="transition",
         description="frames of overlap when chaining clips",
-        default=0,
+        default=10,
         min=0,
     )
     fadein: bpy.props.IntProperty(
@@ -669,13 +669,37 @@ class AVACAPO_OT_select_by_name(bpy.types.Operator):
 
 
 class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
-    """create avacapo rig"""
+    """Create a new armature preset"""
 
     bl_idname = "avacapo.create_avacapo_v1"
-    bl_label = "Create avacapo rig"
+    bl_label = "Create Armature"
     bl_options = {"REGISTER", "UNDO"}
 
-    def execute(self, context):
+    armature_preset: bpy.props.EnumProperty(
+        name="Armature",
+        description="Armature preset to create",
+        items=[
+            ("avacapo", "AvaCapo", "Append the bundled AvaCapo rig"),
+            ("mixamo", "Mixamo", "Import the bundled Mixamo BVH rig"),
+        ],
+        default="avacapo",
+    )
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "armature_preset", expand=True)
+
+    def _select_created_object(self, context, obj: bpy.types.Object, success_message: str):
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        self.report({"INFO"}, success_message)
+        return {"FINISHED"}
+
+    def _append_avacapo_rig(self, context):
         inner_path = "Object"
         object_name = config.AVACAPO_RIG_NAME
 
@@ -687,15 +711,55 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
 
         obj = context.scene.objects.get(object_name)
         if obj:
-            bpy.ops.object.select_all(action="DESELECT")
-            obj.select_set(True)
-            context.view_layer.objects.active = obj
-            self.report({"INFO"}, "avacapo rig created!")
-        else:
-            self.report({"WARNING"}, f"Object '{object_name}' not found after append")
+            return self._select_created_object(context, obj, "AvaCapo rig created!")
+
+        self.report({"WARNING"}, f"Object '{object_name}' not found after append")
+        return {"CANCELLED"}
+
+    def _import_mixamo_rig(self, context):
+        if not os.path.exists(config.MIXAMO_BVH_PATH):
+            self.report({"ERROR"}, f"Mixamo BVH not found: {config.MIXAMO_BVH_PATH}")
             return {"CANCELLED"}
 
-        return {"FINISHED"}
+        existing_object_names = set(bpy.data.objects.keys())
+        existing_action_names = set(bpy.data.actions.keys())
+
+        bpy.ops.import_anim.bvh(
+            filepath=config.MIXAMO_BVH_PATH,
+            update_scene_fps=False,
+            update_scene_duration=False,
+        )
+
+        created_armatures = [
+            obj
+            for obj in bpy.data.objects
+            if obj.name not in existing_object_names and obj.type == "ARMATURE"
+        ]
+        if not created_armatures:
+            self.report({"WARNING"}, "Mixamo armature was not created from BVH import")
+            return {"CANCELLED"}
+
+        obj = created_armatures[-1]
+        obj.name = "mixamo"
+        if obj.data is not None:
+            obj.data.name = f"{obj.name}_data"
+
+        created_actions = [
+            action for action in bpy.data.actions if action.name not in existing_action_names
+        ]
+        if obj.animation_data is not None:
+            obj.animation_data.action = None
+        for action in created_actions:
+            if action.users == 0:
+                bpy.data.actions.remove(action)
+
+        return self._select_created_object(context, obj, "Mixamo rig created!")
+
+    def execute(self, context):
+        if self.armature_preset == "mixamo":
+            return self._import_mixamo_rig(context)
+
+        return self._append_avacapo_rig(context)
 
 
 class AVACAPO_OT_reload_addon(bpy.types.Operator):
