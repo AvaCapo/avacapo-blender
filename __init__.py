@@ -29,12 +29,7 @@ bl_info = {
 }
 
 
-# Props:
-# --------------------------------------------------------------------
 
-
-# remember - we send to server (duration and fps)
-# stored globally (on Scene), to create a new "task" and start "attempt"(request) on it
 class AvacapoSettings(bpy.types.PropertyGroup):
     _updating_time = False
 
@@ -87,7 +82,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     duration: bpy.props.FloatProperty(
         name="duration",
         description="seconds",
-        default=2.5,
+        default=5,
         update=update_duration,
     )
     end: bpy.props.IntProperty(
@@ -113,7 +108,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     )
     temperature: bpy.props.FloatProperty(
         name="temperature",
-        description="setting 0.0 - 1.0 for neural network 'randomness'",
+        description="setting 0.0 - 1.0 for generation temperature",
         default=config.DEFAULT_TEMPERATURE,
     )
     model: bpy.props.EnumProperty(
@@ -133,18 +128,16 @@ class AvacapoSettings(bpy.types.PropertyGroup):
 # and have several "attempts"(requests/actions)
 # attempt - a single trial, or
 class AvacapoAttempt(bpy.types.PropertyGroup):
-    # Take_2_asm_0.8
-    # Take_3_gen2_1.0
+    
     uid: bpy.props.StringProperty()
     name: bpy.props.StringProperty()
     action_name: bpy.props.StringProperty()
     status: bpy.props.StringProperty()  # | Error | Pending | Fetching | Done
 
-    # to restart attempt if something goes off
-    # all the request props to restart the attempt
+    
     temperature: bpy.props.FloatProperty(
         name="temperature",
-        description="setting 0.0 - 1.0 for neural network 'randomness'",
+        description="setting 0.0 - 1.0 for generation temperature",
         default=config.DEFAULT_TEMPERATURE,
     )
     model: bpy.props.EnumProperty(
