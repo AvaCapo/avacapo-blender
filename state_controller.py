@@ -13,6 +13,17 @@ class State:
     server_status: str = ""
     current_fps: int = 24
     current_task_id: str = ""
+    _active_generations: int = 0
+
+    @classmethod
+    def begin_generation(cls) -> None:
+        cls._active_generations += 1
+        cls.server_busy = cls._active_generations > 0
+
+    @classmethod
+    def end_generation(cls) -> None:
+        cls._active_generations = max(0, cls._active_generations - 1)
+        cls.server_busy = cls._active_generations > 0
 
 
 TaskStatus = Literal["pending", "loading", "done", "aborted", "error"]

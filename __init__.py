@@ -6,8 +6,7 @@ import webbrowser
 import uuid
 import textwrap
 
-
-from .state_controller import frame_change_post
+from .state_controller import State, frame_change_post
 from .server import get_animation, get_fps
 from . import animation_utils
 from . import rig_utils
@@ -288,6 +287,16 @@ def _move_generation_cursor(settings: AvacapoSettings, frame_end: float) -> None
     settings.start = int(round(frame_end))
 
 
+def _tag_ui_redraw(context: bpy.types.Context | None = None) -> None:
+    screen = getattr(context, "screen", None) or getattr(bpy.context, "screen", None)
+    if screen is None:
+        return
+
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
 def _strip_handoff_frame(nla_strip: bpy.types.NlaStrip) -> float:
     return float(nla_strip.frame_start_ui + nla_strip.blend_in)
 
@@ -451,41 +460,64 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
         if self._thread and not self._thread.is_alive():
             log.debug("Background thread finished, cleaning up timer")
-            context.window_manager.event_timer_remove(self._timer)
-
-            if self._error:
-                msg = f"Request failed: {self._error}"
-                log.error(msg)
-                self.report({"ERROR"}, msg)
-                return {"CANCELLED"}
-
-            log.info(f"BVH received: {self._result!r}")
+            if self._timer is not None:
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
             try:
-                self._execute(self._result, self.obj_name, self.attempt_uid, self.clip_name)
-            except Exception as exc:
-                message = f"Applying animation failed: {exc}"
-                log.exception(message)
-                self.report({"ERROR"}, message)
-                return {"CANCELLED"}
+                if self._error:
+                    msg = f"Request failed: {self._error}"
+                    log.error(msg)
+                    self.report({"ERROR"}, msg)
+                    return {"CANCELLED"}
 
-            self.report({"INFO"}, "animation applied")
-            time_end = time.time()
-            log.debug(f"time of modal operator animation apply is {time_end - time_start}")
-            return {"FINISHED"}
+                log.info(f"BVH received: {self._result!r}")
+                try:
+                    self._execute(self._result, self.obj_name, self.attempt_uid, self.clip_name)
+                except Exception as exc:
+                    message = f"Applying animation failed: {exc}"
+                    log.exception(message)
+                    self.report({"ERROR"}, message)
+                    return {"CANCELLED"}
+
+                self.report({"INFO"}, "animation applied")
+                time_end = time.time()
+                log.debug(f"time of modal operator animation apply is {time_end - time_start}")
+                return {"FINISHED"}
+            finally:
+                State.end_generation()
+                _tag_ui_redraw(context)
 
         return {"PASS_THROUGH"}
 
     def invoke(self, context, event):
+        if State.server_busy:
+            self.report({"INFO"}, "Generation already in progress.")
+            return {"CANCELLED"}
+
         self._time_start = time.time()
         self._result = None
         self._error = None
 
         self._thread = threading.Thread(target=self._fetch, daemon=True)
-        self._thread.start()
+        State.begin_generation()
+        try:
+            self._thread.start()
+        except Exception as exc:
+            State.end_generation()
+            self.report({"ERROR"}, f"Failed to start generation: {exc}")
+            return {"CANCELLED"}
 
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
+        _tag_ui_redraw(context)
         return {"RUNNING_MODAL"}
+
+    def cancel(self, context):
+        if self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        State.end_generation()
+        _tag_ui_redraw(context)
 
     def _fetch(self):
         attempt = animation_utils.find_attempt(self.obj_name, self.attempt_uid)
@@ -537,6 +569,10 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
     in_place: bpy.props.BoolProperty()
 
     def execute(self, context):
+        if State.server_busy:
+            self.report({"INFO"}, "Generation already in progress.")
+            return {"CANCELLED"}
+
         obj = context.object
         settings = context.scene.avacapo_settings
         obj.animation_data_create()
@@ -614,6 +650,10 @@ class AVACAPO_OT_new_attempt(bpy.types.Operator):
     clip_uid: bpy.props.StringProperty()
 
     def execute(self, context):
+        if State.server_busy:
+            self.report({"INFO"}, "Generation already in progress.")
+            return {"CANCELLED"}
+
         obj = context.object
         for given_clip in context.object.avacapo_clips.clips:
             if given_clip.name == self.clip_uid:

@@ -143,12 +143,15 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row.prop(settings, "in_place", text="In Place")
                 row = box_prompt.row(align=True)
                 row.prop(settings, "transition", text="Transition")
+                if State.server_busy:
+                    box_prompt.row(align=True).label(text="In processing...", icon="TIME")
                 row = box_prompt.row(align=True)
 
                 # Generate button — now queues a task instead of fetching directly
                 if not Queue.allow_new_task:
                     row.label(text="Queue is full...", icon="TIME")
                 else:
+                    row.enabled = not State.server_busy
                     add_clip_op = row.operator(
                         "avacapo.add_clip",
                         text="Generate",
@@ -247,8 +250,12 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     row.prop(clip, "model")
     row = box_attempts.row()
     row.prop(clip, "in_place", text="In Place")
-    op = row.operator("avacapo.new_attempt", text="new take", icon="OUTLINER_OB_CAMERA")
+    action_row = box_attempts.row(align=True)
+    action_row.enabled = not State.server_busy
+    op = action_row.operator("avacapo.new_attempt", text="new take", icon="OUTLINER_OB_CAMERA")
     op.clip_uid = clip.name
+    if State.server_busy:
+        box_attempts.row(align=True).label(text="In processing...", icon="TIME")
     box = box_attempts.box()
     box.prop(clip, "attempts")
     for attempt in clip.attempts:
