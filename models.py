@@ -29,6 +29,20 @@ def _get_default_model_catalog(model_types: list[str] | None = None) -> list[dic
     return [_build_default_model_entry(model_type) for model_type in (model_types or Config.DEFAULT_MODELS)]
 
 
+def _prioritize_default_model(catalog: list[dict[str, str]]) -> list[dict[str, str]]:
+    preferred_type = Config.DEFAULT_MODEL_TYPE
+    preferred_index = next(
+        (index for index, model in enumerate(catalog) if model.get("type") == preferred_type),
+        None,
+    )
+
+    if preferred_index in (None, 0):
+        return catalog
+
+    preferred_model = catalog[preferred_index]
+    return [preferred_model, *catalog[:preferred_index], *catalog[preferred_index + 1 :]]
+
+
 def _normalize_model_catalog(payload: dict) -> list[dict[str, str]]:
     raw_model_types = payload.get("model_types", [])
     raw_models = payload.get("models", [])
@@ -74,7 +88,7 @@ def _normalize_model_catalog(payload: dict) -> list[dict[str, str]]:
         if model_type not in seen:
             catalog.append(model_info)
 
-    return catalog or _get_default_model_catalog()
+    return _prioritize_default_model(catalog or _get_default_model_catalog())
 
 
 def get_model_catalog() -> list[dict[str, str]]:
@@ -84,21 +98,22 @@ def get_model_catalog() -> list[dict[str, str]]:
         return _model_catalog_cache
 
     if not Storage.api_token:
-        _model_catalog_cache = _get_default_model_catalog()
+        _model_catalog_cache = _prioritize_default_model(_get_default_model_catalog())
         return _model_catalog_cache
 
     payload = {"api_token": Storage.api_token}
-
+    log.info("Fetching model catalog from server...")
     try:
         response = requests.get(Config.GET_MODELS_URL, params=payload, timeout=10)
         if response.status_code == 200:
+            log.info("Model catalog fetched successfully, models: " + ", ".join(response.json().get("model_types", [])))
             _model_catalog_cache = _normalize_model_catalog(response.json())
         else:
             log.error(f"Failed to get models: {response.status_code} {response.text}")
-            _model_catalog_cache = _get_default_model_catalog()
+            _model_catalog_cache = _prioritize_default_model(_get_default_model_catalog())
     except Exception as exc:
         log.error(f"Failed to get models: {exc}")
-        _model_catalog_cache = _get_default_model_catalog()
+        _model_catalog_cache = _prioritize_default_model(_get_default_model_catalog())
 
     return _model_catalog_cache
 

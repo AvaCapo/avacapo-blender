@@ -116,6 +116,11 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         description="generation model",
         items=get_model_enum_items,
     )
+    in_place: bpy.props.BoolProperty(
+        name="In Place",
+        description="Generate animation without root motion translation",
+        default=False,
+    )
     token_input: bpy.props.StringProperty(
         name="Token",
         description="Paste your API token here",
@@ -145,6 +150,11 @@ class AvacapoAttempt(bpy.types.PropertyGroup):
         description="generation model",
         items=get_model_enum_items,
     )
+    in_place: bpy.props.BoolProperty(
+        name="In Place",
+        description="Generate animation without root motion translation",
+        default=False,
+    )
     prompt: bpy.props.StringProperty()
     duration: bpy.props.FloatProperty()
 
@@ -173,6 +183,11 @@ class AvacapoClip(bpy.types.PropertyGroup):
         name="Model",
         description="generation model",
         items=get_model_enum_items,
+    )
+    in_place: bpy.props.BoolProperty(
+        name="In Place",
+        description="Generate animation without root motion translation",
+        default=False,
     )
 
     attempts: bpy.props.CollectionProperty(type=AvacapoAttempt)
@@ -482,6 +497,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 duration=attempt.duration,
                 temperature=attempt.temperature,
                 model=selected_model,
+                in_place=attempt.in_place,
             )
             log.debug(f"Raw response ({len(raw)} bytes): {raw[:120]}")
             self._result = raw
@@ -518,6 +534,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
     fadeout: bpy.props.IntProperty()
     temperature: bpy.props.FloatProperty()
     model: bpy.props.StringProperty()
+    in_place: bpy.props.BoolProperty()
 
     def execute(self, context):
         obj = context.object
@@ -528,6 +545,9 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         new_clip = obj.avacapo_clips.clips.add()
         new_clip.prompt = self.prompt
         new_clip.name = new_clip.create_name()
+        new_clip.temperature = self.temperature
+        new_clip.model = self.model
+        new_clip.in_place = self.in_place
 
         # generate new attempt
         requested_frame_count = _frame_count_from_bounds(self.start, self.end)
@@ -544,6 +564,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         # request params
         new_attempt.temperature = self.temperature
         new_attempt.model = self.model
+        new_attempt.in_place = self.in_place
         n = len(new_clip.attempts)
         new_attempt.name = f"Take_{n}_{self.model}_{self.temperature}"
         new_attempt.action_name = f"{new_clip.name}_{n}"
@@ -606,6 +627,7 @@ class AVACAPO_OT_new_attempt(bpy.types.Operator):
         # request params
         new_attempt.temperature = clip.temperature
         new_attempt.model = clip.model
+        new_attempt.in_place = clip.in_place
         n = len(clip.attempts)
         new_attempt.name = f"Take_{n}_{clip.model}_{clip.temperature}"
         new_attempt.action_name = f"{clip.name}_{n}"
@@ -786,7 +808,7 @@ class AVACAPO_OT_toggle_start_record_lock(bpy.types.Operator):
         settings = context.scene.avacapo_settings
         settings.start_record_lock = not (settings.start_record_lock)
         self.report(
-            {"INFO"}, f"start record lock in {"on" if settings.start_record_lock else "off"}!"
+            {"INFO"}, f"start record lock in {'on' if settings.start_record_lock else 'off'}!"
         )
         return {"FINISHED"}
 

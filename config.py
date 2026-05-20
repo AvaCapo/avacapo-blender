@@ -23,7 +23,8 @@ class Config:
 
     AVACAPO_RIG_NAME = "avacapo_bvh_v1"
 
-    DEFAULT_MODELS = ["asm", "gen1", "gen2"]
+    DEFAULT_MODEL_TYPE = "gen2"
+    DEFAULT_MODELS = ["gen2", "asm", "gen1"]
     DEFAULT_MODEL_DETAILS = {
         "gen1": {
             "name": "Standard",
