@@ -23,6 +23,7 @@ def get_animation(
     duration: float = 5.0,
     temperature: float = 1.0,
     model: str = "",
+    in_place: bool = False,
 ):
     """send prompt to server, get animation back"""
     model_names = get_models_names()
@@ -42,6 +43,8 @@ def get_animation(
         "api_token": Storage.api_token,
         "model": model,
         "extension": "bvh",
+        "include_skin": False,
+        "in_place": in_place,
     }
     log.info(f"Sending request with payload: {payload}")
 

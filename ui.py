@@ -140,6 +140,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row = box_prompt.row(align=True)
                 row.prop(settings, "model")
                 row = box_prompt.row(align=True)
+                row.prop(settings, "in_place", text="In Place")
+                row = box_prompt.row(align=True)
                 row.prop(settings, "transition", text="Transition")
                 row = box_prompt.row(align=True)
 
@@ -160,6 +162,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     add_clip_op.fadeout = settings.fadeout
                     add_clip_op.temperature = settings.temperature
                     add_clip_op.model = settings.model
+                    add_clip_op.in_place = settings.in_place
 
                 if "Error" in State.server_status:
                     layout.label(text=State.server_status, icon="ERROR")
@@ -242,6 +245,8 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     row = box_attempts.row()
     row.prop(clip, "temperature")
     row.prop(clip, "model")
+    row = box_attempts.row()
+    row.prop(clip, "in_place", text="In Place")
     op = row.operator("avacapo.new_attempt", text="new take", icon="OUTLINER_OB_CAMERA")
     op.clip_uid = clip.name
     box = box_attempts.box()
