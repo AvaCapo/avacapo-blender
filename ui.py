@@ -237,6 +237,10 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     op = row.operator("avacapo.open_text_popover", text="", icon="FULLSCREEN_ENTER")
     op.info_str = clip.prompt
     row = box.row(align=True)
+    row.label(text="Prompt:", icon="TEXT")
+    row = box.row(align=True)
+    row.prop(clip, "prompt", text="")
+    row = box.row(align=True)
     row.prop(nla_strip, "frame_start_ui", text="start")
     row.prop(nla_strip, "frame_end_ui", text="end")
     row = box.row(align=True)
