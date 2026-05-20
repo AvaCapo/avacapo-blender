@@ -265,9 +265,11 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     for attempt in clip.attempts:
         row = box.row()
         # Highlight the active one
-        is_active = attempt.name == clip.active_attempt
+        is_active = attempt.uid == clip.active_attempt
         row.alert = is_active  # tints red — optional visual cue
-        op = row.operator("avacapo.select_attempt", text=attempt.name, depress=is_active)
+        button_row = row.row()
+        button_row.alert = False
+        op = button_row.operator("avacapo.select_attempt", text=attempt.name, depress=is_active)
         op.attempt_uid = attempt.uid
         op.clip_uid = clip.name
 
