@@ -36,6 +36,72 @@ def apply_animation(obj: bpy.types.Object, bvh_bytes, action: bpy.types.Action):
             log.error(f"cannot apply animation to {infer_rig_type}")
 
 
+def reset_pose_transforms(obj: bpy.types.Object) -> None:
+    if obj.type != "ARMATURE" or obj.pose is None:
+        return
+
+    for pose_bone in obj.pose.bones:
+        pose_bone.location = (0.0, 0.0, 0.0)
+        pose_bone.scale = (1.0, 1.0, 1.0)
+        pose_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pose_bone.rotation_euler = (0.0, 0.0, 0.0)
+        pose_bone.rotation_axis_angle = (0.0, 0.0, 1.0, 0.0)
+
+    bpy.context.view_layer.update()
+
+
+def freeze_action_pose(
+    obj: bpy.types.Object, action: bpy.types.Action, *, frame: int = 1
+) -> bool:
+    if obj.type != "ARMATURE" or obj.pose is None:
+        return False
+
+    animation_data = obj.animation_data_create()
+    action_slots = list(getattr(action, "slots", ()))
+    if not action_slots:
+        return False
+
+    previous_frame = bpy.context.scene.frame_current
+    snapshot: dict[str, dict[str, tuple[float, ...]]] = {}
+
+    try:
+        animation_data.action = action
+        animation_data.action_slot = action_slots[0]
+        bpy.context.scene.frame_set(max(1, int(frame)))
+        bpy.context.view_layer.update()
+
+        for pose_bone in obj.pose.bones:
+            snapshot[pose_bone.name] = {
+                "location": tuple(float(value) for value in pose_bone.location),
+                "rotation_quaternion": tuple(
+                    float(value) for value in pose_bone.rotation_quaternion
+                ),
+                "rotation_euler": tuple(float(value) for value in pose_bone.rotation_euler),
+                "rotation_axis_angle": tuple(
+                    float(value) for value in pose_bone.rotation_axis_angle
+                ),
+                "scale": tuple(float(value) for value in pose_bone.scale),
+            }
+    finally:
+        animation_data.action = None
+        bpy.context.scene.frame_set(previous_frame)
+
+    reset_pose_transforms(obj)
+
+    for pose_bone in obj.pose.bones:
+        bone_snapshot = snapshot.get(pose_bone.name)
+        if bone_snapshot is None:
+            continue
+        pose_bone.location = bone_snapshot["location"]
+        pose_bone.rotation_quaternion = bone_snapshot["rotation_quaternion"]
+        pose_bone.rotation_euler = bone_snapshot["rotation_euler"]
+        pose_bone.rotation_axis_angle = bone_snapshot["rotation_axis_angle"]
+        pose_bone.scale = bone_snapshot["scale"]
+
+    bpy.context.view_layer.update()
+    return True
+
+
 def _load_reference_rig() -> bpy.types.Object:
     with bpy.data.libraries.load(config.BLEND_PATH, link=False) as (data_from, data_to):
         if config.AVACAPO_RIG_NAME not in data_from.objects:
@@ -417,6 +483,8 @@ def _bake_target_action(
 def apply_bvh_to_mixamo(
     target_obj: bpy.types.Object, bvh_bytes, target_action: bpy.types.Action
 ) -> None:
+    reset_pose_transforms(target_obj)
+
     source_obj = _load_reference_rig()
     source_obj.name = f"{config.AVACAPO_RIG_NAME}_retarget_{uuid.uuid4().hex[:6]}"
     source_obj.matrix_world = target_obj.matrix_world.copy()

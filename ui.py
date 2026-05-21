@@ -109,6 +109,12 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     "mixamo": "Mixamo rig",
                 }.get(rig_type, rig_type)
                 box_obj.label(text=rig_label, icon="CHECKBOX_HLT")
+                if rig_type == "mixamo":
+                    box_obj.operator(
+                        "avacapo.reset_import_pose",
+                        text="Reset Imported Pose",
+                        icon="ARMATURE_DATA",
+                    )
                 box_prompt = layout.box()
                 row_top = box_prompt.row(align=True)
                 col = row_top.row(align=True)

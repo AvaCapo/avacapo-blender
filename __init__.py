@@ -865,6 +865,28 @@ class AVACAPO_OT_select_by_name(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_reset_import_pose(bpy.types.Operator):
+    """Reset imported armature pose to its rest pose"""
+
+    bl_idname = "avacapo.reset_import_pose"
+    bl_label = "Reset Imported Pose"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        obj = context.object
+        if obj is None or obj.type != "ARMATURE":
+            self.report({"ERROR"}, "Select an armature first.")
+            return {"CANCELLED"}
+
+        if rig_utils.infer_rig_type(obj) != "mixamo":
+            self.report({"ERROR"}, "This action is only available for Mixamo rigs.")
+            return {"CANCELLED"}
+
+        animation_utils.reset_pose_transforms(obj)
+        self.report({"INFO"}, "Mixamo rig reset to rest pose.")
+        return {"FINISHED"}
+
+
 class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
     """Create a new armature preset"""
 
@@ -946,6 +968,7 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
         ]
         if obj.animation_data is not None:
             obj.animation_data.action = None
+        animation_utils.reset_pose_transforms(obj)
         for action in created_actions:
             if action.users == 0:
                 bpy.data.actions.remove(action)
@@ -1039,6 +1062,7 @@ _classes = [
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
     AVACAPO_OT_select_by_name,
+    AVACAPO_OT_reset_import_pose,
     AVACAPO_OT_toggle_start_record_lock,
     AVACAPO_OT_OpenTextPopover,
     AVACAPO_OT_SelectAttempt,
