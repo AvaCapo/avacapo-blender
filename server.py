@@ -17,8 +17,13 @@ def get_fps() -> int:
         return config.DEFAULT_FPS
 
 
+def _build_animation_name(prompt: str) -> str:
+    normalized_prompt = "_".join(prompt.split())[:15]
+    return f"blender_{normalized_prompt or 'animation'}"
+
+
 def get_animation(
-    name: str = "test_animation",
+    name: str | None = None,
     prompt: str = "",
     duration: float = 5.0,
     temperature: float = 1.0,
@@ -39,7 +44,7 @@ def get_animation(
         "prompt_duration": duration,
         "prompt_fps": get_fps(),
         "prompt_temperature": temperature,
-        "name": name,
+        "name": name or _build_animation_name(prompt),
         "api_token": Storage.api_token,
         "model": model,
         "extension": "bvh",
