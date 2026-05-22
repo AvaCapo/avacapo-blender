@@ -1,14 +1,4 @@
-# this queue is purely python, no blender
 
-# Usage:
-# in fetch operator:
-# hey, queue, whats my atempt status?
-# can i actually fetch the server?
-# aha, got you queue
-
-# queue manages just the queue
-
-# module-level singleton
 class GlobalQueue:
     max_concurrent: int = 5
     attempts_to_process: list[str]

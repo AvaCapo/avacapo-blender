@@ -10,9 +10,7 @@ config = Config()
 
 RigType = Literal["avacapo_bvh_v1", "mixamo", "unknown"]
 
-# https://claude.ai/chat/aa912047-04f3-4aa8-ba49-b8a4d4309936
 
-# Recursive nested dict: { bone_name: { child_name: {...} } }
 BoneTree: TypeAlias = dict[str, "BoneTree"]
 AVACAPO_BVH_V1_BONE_TREE: BoneTree | None = None
 
@@ -123,8 +121,7 @@ def _init_bone_trees_once(scene, depsgraph):
 
 
 def infer_rig_type(obj: bpy.types.Object) -> RigType:
-    # log.debug(
-    # f"infer rig type: matching {obj} against AVACAPO_BVH_V1_BONE_TREE")
+    
     if obj.type != "ARMATURE":
         log.error(f"{obj.name} is not armature, cannot infer rig type")
         return "unknown"

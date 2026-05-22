@@ -1,6 +1,5 @@
 from bpy.utils import escape_identifier
 import bpy
-from typing import Literal
 import tempfile
 import os
 import uuid
@@ -19,11 +18,6 @@ from .retarget_maps import (
 )
 
 config = Config()
-
-# action and slots are different from blender 4.4
-# now action is animation for MULTIPLE objects
-# which makes a structure called "slot"
-# https://claude.ai/chat/9a507fcf-bcd6-4225-bb25-6b80c7ae423e
 
 
 def apply_animation(obj: bpy.types.Object, bvh_bytes, action: bpy.types.Action):

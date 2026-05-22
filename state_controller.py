@@ -13,6 +13,11 @@ class State:
     server_status: str = ""
     current_fps: int = 24
     current_task_id: str = ""
+    current_addon_version: tuple[int, ...] = ()
+    latest_addon_version: tuple[int, ...] = ()
+    update_available: bool = False
+    update_check_started: bool = False
+    update_check_done: bool = False
     _active_generations: int = 0
 
     @classmethod

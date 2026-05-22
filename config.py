@@ -11,6 +11,7 @@ class Config:
     GENERATION_URL = f"{PLATFORM_URL}api/v1/api-avacapo-prompt/"
     GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
     GET_MODELS_NAMES_URL = GET_MODELS_URL
+    GET_ADDON_VERSION_URL = f"{PLATFORM_URL}api/v1/get-addon-version/"
 
     BLEND_NAME = "rigs.blend"
     BLEND_PATH = os.path.join(ADDON_DIR, BLEND_NAME)

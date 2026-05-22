@@ -15,12 +15,14 @@ from .logger import log
 from .config import Config
 from .models import clear_models_cache, get_model_enum_items, resolve_model_type
 from .ui import AVACAPO_PT_main_panel
+from .update_checker import reset_update_check_state, start_update_check
+from .version import ADDON_VERSION
 
 config = Config()
 bl_info = {
     "name": "AvaCapo AI animation",
     "author": "agamurian",
-    "version": (0, 1),
+    "version": ADDON_VERSION,
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Avacapo",
     "description": "Automating charecter animation with AI",
@@ -471,6 +473,7 @@ class AVACAPO_OT_login_browser(bpy.types.Operator):
                 Storage.api_token = self._auth_server.token
                 Storage.save()
                 clear_models_cache()
+                start_update_check(force=True)
                 self.report({"INFO"}, "Connected successfully!")
                 log.info("Browser auth completed")
             else:
@@ -518,6 +521,7 @@ class AVACAPO_OT_paste_token(bpy.types.Operator):
         Storage.api_token = token
         Storage.save()
         clear_models_cache()
+        start_update_check(force=True)
         settings.token_input = ""
         self.report({"INFO"}, "Connected successfully!")
         return {"FINISHED"}
@@ -533,6 +537,8 @@ class AVACAPO_OT_disconnect(bpy.types.Operator):
         Storage.api_token = ""
         Storage.save()
         clear_models_cache()
+        reset_update_check_state()
+        _tag_ui_redraw(context)
         self.report({"INFO"}, "Disconnected")
         return {"FINISHED"}
 
@@ -1077,6 +1083,7 @@ def register() -> None:
     bpy.types.Object.avacapo_clips = bpy.props.PointerProperty(type=AvacapoClips)
     bpy.app.handlers.frame_change_post.append(frame_change_post)
     bpy.app.handlers.depsgraph_update_post.append(rig_utils._init_bone_trees_once)
+    start_update_check(force=True)
 
 
 def unregister() -> None:

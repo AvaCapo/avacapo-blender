@@ -7,6 +7,21 @@ from .storage import Storage
 from . import rig_utils
 from .server import get_fps
 from .state_controller import State, Queue, STATUS_META
+from .version import version_to_string
+
+
+def _draw_update_notice(layout: bpy.types.UILayout) -> None:
+    if not State.update_available:
+        return
+
+    box = layout.box()
+    box.alert = True
+    box.label(text="New addon version available. Please download it.", icon="ERROR")
+
+    current_version = version_to_string(State.current_addon_version)
+    latest_version = version_to_string(State.latest_addon_version)
+    if current_version and latest_version:
+        box.label(text=f"{current_version} -> {latest_version}", icon="FILE_REFRESH")
 
 
 class AVACAPO_PT_main_panel(bpy.types.Panel):
@@ -21,8 +36,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
     def draw(self, context) -> None:
         layout = self.layout
         settings = context.scene.avacapo_settings
+        _draw_update_notice(layout)
 
-        # --- Auth Section ---
         if Storage.api_token != "":
             row = layout.row(align=True)
             row.label(text="Connected", icon="CHECKMARK")
@@ -59,9 +74,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 text="",
                 icon="MESH_UVSPHERE",
             )
-            return  # Don't show generation UI when disconnected
+            return  
 
-        # --- Generation Section ---
         box_obj = layout.box()
 
         selected_obj = context.object
@@ -135,9 +149,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row.separator()
                 row.separator()
                 row.prop(settings, "end", text="", expand=True)
-                # row.operator("avacapo.create_avacapo", text="", icon="RECORD_ON")
-                # ommit last frame lock for now
-                # box_prompt.label(text=f"frame rate {get_fps()}")
+                
                 box_prompt.separator(type="LINE")
                 row_desc = box_prompt.row(align=True)
                 row_desc.label(text="Prompt:", icon="TEXT")
@@ -153,7 +165,6 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     box_prompt.row(align=True).label(text="In processing...", icon="TIME")
                 row = box_prompt.row(align=True)
 
-                # Generate button — now queues a task instead of fetching directly
                 if not Queue.allow_new_task:
                     row.label(text="Queue is full...", icon="TIME")
                 else:
@@ -270,7 +281,6 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     box.prop(clip, "attempts")
     for attempt in clip.attempts:
         row = box.row()
-        # Highlight the active one
         is_active = attempt.uid == clip.active_attempt
         row.alert = is_active  # tints red — optional visual cue
         button_row = row.row()
@@ -279,4 +289,3 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
         op.attempt_uid = attempt.uid
         op.clip_uid = clip.name
 
-    # for attempt in clip.attempts:
