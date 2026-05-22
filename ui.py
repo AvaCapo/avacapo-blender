@@ -3,11 +3,14 @@ import bpy
 
 from dataclasses import dataclass
 
+from .config import Config
 from .storage import Storage
 from . import rig_utils
 from .server import get_fps
 from .state_controller import State, Queue, STATUS_META
 from .version import version_to_string
+
+config = Config()
 
 
 def _draw_update_notice(layout: bpy.types.UILayout) -> None:
@@ -22,6 +25,13 @@ def _draw_update_notice(layout: bpy.types.UILayout) -> None:
     latest_version = version_to_string(State.latest_addon_version)
     if current_version and latest_version:
         box.label(text=f"{current_version} -> {latest_version}", icon="FILE_REFRESH")
+
+    download_op = box.operator(
+        "wm.url_open",
+        text="AvaCapo/avacapo-blender",
+        icon="URL",
+    )
+    download_op.url = config.ADDON_DOWNLOAD_URL
 
 
 class AVACAPO_PT_main_panel(bpy.types.Panel):

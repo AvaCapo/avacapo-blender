@@ -8,6 +8,7 @@ class Config:
     ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
     PLATFORM_URL = "https://service.avacapo.com/"
     FRONTEND_URL = "https://app.avacapo.com/"
+    ADDON_DOWNLOAD_URL = "https://github.com/AvaCapo/avacapo-blender"
     GENERATION_URL = f"{PLATFORM_URL}api/v1/api-avacapo-prompt/"
     GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
     GET_MODELS_NAMES_URL = GET_MODELS_URL
