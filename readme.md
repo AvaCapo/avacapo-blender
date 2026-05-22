@@ -20,7 +20,7 @@ generated takes as separate Blender actions.
 
 ## Requirements
 
-- Blender 4.2 or newer
+- Blender 5.1 or newer
 - An AvaCapo API token or browser login
 - Internet access to the AvaCapo service
 

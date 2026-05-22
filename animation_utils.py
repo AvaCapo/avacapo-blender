@@ -611,7 +611,6 @@ def offset_root_location(
 
 def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
     action_slot = action.slots[f"OB{skeleton.name}"]
-    # https://claude.ai/chat/b30e6841-94a8-40dc-a085-cbefe520c23b
     """which is the final step - just apply animation"""
     log.debug(f"""
         applying animation:

@@ -23,7 +23,7 @@ bl_info = {
     "name": "AvaCapo AI animation",
     "author": "agamurian",
     "version": ADDON_VERSION,
-    "blender": (4, 2, 0),
+    "blender": (5, 1, 0),
     "location": "View3D > Sidebar > Avacapo",
     "description": "Automating charecter animation with AI",
     "category": "Animation",
