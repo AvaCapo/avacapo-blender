@@ -1,7 +1,14 @@
+# Storage, user-local settings, as important as .env, contains the api_token
+storage.json
+
 # Byte-compiled / optimized / DLL files
+__stash.py
 __pycache__/
 *.py[codz]
 *$py.class
+
+# Blender specific
+*.blend1
 
 # C extensions
 *.so
