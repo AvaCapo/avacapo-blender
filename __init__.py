@@ -132,7 +132,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
 
 # stored locally (on Object), bound to single nla track
 # and have several "attempts"(requests/actions)
-# attempt - a single trial, or
+# attempt - a single trial
 class AvacapoAttempt(bpy.types.PropertyGroup):
     
     uid: bpy.props.StringProperty()
@@ -449,8 +449,6 @@ def _realign_following_strips(
         _align_strip_root_motion(obj, nla_strip)
 
 
-# Auth Operators:
-# --------------------------------------------------------------------
 
 
 class AVACAPO_OT_login_browser(bpy.types.Operator):
@@ -543,8 +541,6 @@ class AVACAPO_OT_disconnect(bpy.types.Operator):
         return {"FINISHED"}
 
 
-# Operators:
-# --------------------------------------------------------------------
 
 
 class AVACAPO_OT_fetch(bpy.types.Operator):
