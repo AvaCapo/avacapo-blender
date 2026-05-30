@@ -495,7 +495,7 @@ class AVACAPO_OT_login_browser(bpy.types.Operator):
         port = self._auth_server.start()
 
         # Open the token page with plugin auth params
-        url = f"{config.FRONTEND_URL}/app/api-tokens?plugin_auth=true&port={port}"
+        url = f"{config.FRONTEND_URL}app/api-tokens?plugin_auth=true&port={port}"
         webbrowser.open(url)
         log.info(f"Opened browser for auth: {url}")
 
