@@ -1,4 +1,5 @@
 import bpy
+import math
 import os
 import threading
 import time
@@ -9,6 +10,7 @@ import textwrap
 from .state_controller import State, frame_change_post
 from .server import get_animation, get_fps
 from . import animation_utils
+from . import bvh_smpl
 from . import rig_utils
 from .storage import Storage
 from .logger import log
@@ -574,7 +576,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                     self.report({"ERROR"}, msg)
                     return {"CANCELLED"}
 
-                log.info(f"BVH received: {self._result!r}")
+                log.info("BVH received: %s bytes", len(self._result))
                 try:
                     self._execute(self._result, self.obj_name, self.attempt_uid, self.clip_name)
                 except Exception as exc:
@@ -635,7 +637,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 model=selected_model,
                 in_place=attempt.in_place,
             )
-            log.debug(f"Raw response ({len(raw)} bytes): {raw[:120]}")
+            log.debug("Raw BVH response received: %s bytes", len(raw))
             self._result = raw
         except Exception as e:
             self._error = str(e)
@@ -650,13 +652,83 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         if not action:
             log.debug("no action found")
         else:
-            animation_utils.apply_animation(obj, fetch_result, action)
+            document = bvh_smpl.cache_bvh_document(action.name, fetch_result)
+            animation_utils.apply_animation(obj, document, action)
             nla_strip = obj.animation_data.nla_tracks[clip_name].strips[clip_name]
             _sync_strip_to_action(nla_strip, action)
             _align_strip_root_motion(obj, nla_strip)
             _realign_following_strips(obj, nla_strip)
             _move_generation_cursor(settings, nla_strip.frame_end_ui)
             obj.animation_data.action = None
+
+
+class AVACAPO_OT_convert_smpl_preview_range(bpy.types.Operator):
+    """Convert the timeline preview range to an in-memory SMPL-X NPZ payload"""
+
+    bl_idname = "avacapo.convert_smpl_preview_range"
+    bl_label = "Convert Preview Range"
+    bl_description = "Convert this take's Timeline Preview Range to SMPL-X in memory"
+
+    clip_name: bpy.props.StringProperty()
+    attempt_uid: bpy.props.StringProperty()
+
+    def execute(self, context):
+        scene = context.scene
+        obj = context.object
+        if obj is None:
+            self.report({"ERROR"}, "Select the armature containing this clip")
+            return {"CANCELLED"}
+        if not scene.use_preview_range:
+            self.report({"ERROR"}, "Set a Timeline Preview Range first (press P)")
+            return {"CANCELLED"}
+
+        clip = _find_clip_by_name(obj, self.clip_name)
+        attempt = animation_utils.find_attempt(obj.name, self.attempt_uid)
+        if clip is None or attempt is None:
+            self.report({"ERROR"}, "Clip take not found")
+            return {"CANCELLED"}
+        if clip.active_attempt != attempt.uid:
+            self.report({"ERROR"}, "Select this take before converting it")
+            return {"CANCELLED"}
+
+        nla_strip = _get_strip_for_clip(obj, clip)
+        action = bpy.data.actions.get(attempt.action_name)
+        if nla_strip is None or action is None:
+            self.report({"ERROR"}, "Clip action not found")
+            return {"CANCELLED"}
+
+        visible_start = int(math.ceil(nla_strip.frame_start_ui))
+        visible_end = int(math.ceil(nla_strip.frame_end_ui)) - 1
+        timeline_start = max(int(scene.frame_preview_start), visible_start)
+        timeline_end = min(int(scene.frame_preview_end), visible_end)
+        if timeline_end < timeline_start:
+            self.report({"ERROR"}, "Preview Range does not overlap this clip")
+            return {"CANCELLED"}
+
+        action_start = _strip_action_frame_at_timeline(nla_strip, timeline_start)
+        action_end = _strip_action_frame_at_timeline(nla_strip, timeline_end)
+        source_start = max(0, int(round(action_start)) - 1)
+        source_end = int(round(action_end))
+
+        try:
+            conversion = bvh_smpl.convert_cached_action_range(
+                action.name,
+                start_frame=source_start,
+                end_frame=source_end,
+            )
+        except Exception as exc:
+            message = f"SMPL-X conversion failed: {exc}"
+            log.exception(message)
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+
+        size_kib = len(conversion) / 1024.0
+        self.report(
+            {"INFO"},
+            f"Converted  {size_kib:.1f} KiB in memory",
+        )
+        _tag_ui_redraw(context)
+        return {"FINISHED"}
 
 
 class AVACAPO_OT_add_clip(bpy.types.Operator):
@@ -1061,6 +1133,7 @@ _classes = [
     AVACAPO_OT_add_clip,
     AVACAPO_OT_new_attempt,
     AVACAPO_OT_fetch,
+    AVACAPO_OT_convert_smpl_preview_range,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
     AVACAPO_OT_select_by_name,
@@ -1083,6 +1156,7 @@ def register() -> None:
 
 
 def unregister() -> None:
+    bvh_smpl.clear_memory_cache()
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.Object.avacapo_clips

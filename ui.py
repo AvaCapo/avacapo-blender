@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from .config import Config
 from .storage import Storage
+from . import bvh_smpl
 from . import rig_utils
 from .server import get_fps
 from .state_controller import State, Queue, STATUS_META
@@ -285,6 +286,32 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     action_row.enabled = not State.server_busy
     op = action_row.operator("avacapo.new_attempt", text="new take", icon="OUTLINER_OB_CAMERA")
     op.clip_uid = clip.name
+
+    active_attempt = next(
+        (attempt for attempt in clip.attempts if attempt.uid == clip.active_attempt),
+        None,
+    )
+    if active_attempt is not None:
+        convert_row = box_attempts.row(align=True)
+        convert_row.enabled = not State.server_busy
+        convert_op = convert_row.operator(
+            "avacapo.convert_smpl_preview_range",
+            text="Convert Preview Range",
+            icon="FILE_CACHE",
+        )
+        convert_op.clip_name = clip.name
+        convert_op.attempt_uid = active_attempt.uid
+
+        conversion = bvh_smpl.get_cached_conversion(active_attempt.action_name)
+        if conversion is not None:
+            size_kib = len(conversion) / 1024.0
+            box_attempts.label(
+                text=(
+                    f"SMPL-X in memory:"
+                    f"{size_kib:.1f} KiB"
+                ),
+                icon="CHECKMARK",
+            )
     if State.server_busy:
         box_attempts.row(align=True).label(text="In processing...", icon="TIME")
     box = box_attempts.box()
