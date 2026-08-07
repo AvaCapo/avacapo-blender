@@ -43,6 +43,7 @@ class Config:
             "description": "Motion construction from a high-quality animation database.",
         },
     }
+    REQUEST_TIMEOUT = 120
     DEFAULT_TEMPERATURE = 1.0
     DEFAULT_DURATION = 5
     DEFAULT_FPS = 24
