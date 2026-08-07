@@ -51,7 +51,8 @@ def get_animation(
         "include_skin": False,
         "in_place": in_place,
     }
-    log.info(f"Sending request with payload: {payload}")
+    safe_payload = {**payload, "api_token": "***" if payload["api_token"] else ""}
+    log.info("Sending request with payload: %s", safe_payload)
 
     try:
         response = requests.post(config.GENERATION_URL, json=payload, timeout=60)

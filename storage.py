@@ -37,4 +37,4 @@ class Storage:
 
 
 Storage.load()
-log.debug(Storage.api_token)
+log.debug("Storage loaded; API token configured: %s", bool(Storage.api_token))
