@@ -10,6 +10,8 @@ class Config:
     FRONTEND_URL = "https://app.avacapo.com/"
     ADDON_DOWNLOAD_URL = "https://github.com/AvaCapo/avacapo-blender"
     GENERATION_URL = f"{PLATFORM_URL}api/v1/api-avacapo-prompt/"
+    GENERATION_CONSTRAINTS_URL = f"{PLATFORM_URL}/api/v1/api-avacapo-prompt-with-constraints/"
+    INBETWEENING_URL = f"{PLATFORM_URL}/api/v1/api-avacapo-prompt-inbetween/"
     GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
     GET_MODELS_NAMES_URL = GET_MODELS_URL
     GET_ADDON_VERSION_URL = f"{PLATFORM_URL}api/v1/get-addon-version/"
@@ -44,3 +46,6 @@ class Config:
     DEFAULT_TEMPERATURE = 1.0
     DEFAULT_DURATION = 5
     DEFAULT_FPS = 24
+    ROOT_TRANSLATION_SCALE = 1.0
+    KEEP_Y_UP = False
+    GENDER = "neutral"
