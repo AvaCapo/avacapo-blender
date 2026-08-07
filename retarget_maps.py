@@ -65,6 +65,29 @@ MIXAMO_SCALE_REFERENCE_BONES = [
     "RightHand",
 ]
 
-
+SMPLX_TO_SMPL_BVH = (
+    ("pelvis", "Hips", -1),
+    ("left_hip", "LeftUpLeg", 0),
+    ("right_hip", "RightUpLeg", 0),
+    ("spine1", "Spine", 0),
+    ("left_knee", "LeftLeg", 1),
+    ("right_knee", "RightLeg", 2),
+    ("spine2", "Spine1", 3),
+    ("left_ankle", "LeftFoot", 4),
+    ("right_ankle", "RightFoot", 5),
+    ("spine3", "Spine2", 6),
+    ("left_foot", "LeftToe", 7),
+    ("right_foot", "RightToe", 8),
+    ("neck", "Neck", 9),
+    ("left_collar", "LeftShoulder", 9),
+    ("right_collar", "RightShoulder", 9),
+    ("head", "Head", 12),
+    ("left_shoulder", "LeftArm", 13),
+    ("right_shoulder", "RightArm", 14),
+    ("left_elbow", "LeftForeArm", 16),
+    ("right_elbow", "RightForeArm", 17),
+    ("left_wrist", "LeftHand", 18),
+    ("right_wrist", "RightHand", 19),
+)
 def canonical_bone_name(name: str) -> str:
     return name.split(":")[-1].strip().casefold()
