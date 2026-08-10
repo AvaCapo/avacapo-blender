@@ -26,7 +26,9 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
+# Bundled Blender extension dependencies are release inputs.
+wheels/*
+!wheels/*.whl
 share/python-wheels/
 *.egg-info/
 .installed.cfg
