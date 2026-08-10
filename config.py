@@ -50,3 +50,16 @@ class Config:
     ROOT_TRANSLATION_SCALE = 1.0
     KEEP_Y_UP = False
     GENDER = "neutral"
+    CONSTRAINT_TYPES = frozenset(
+        {
+            "fullbody",
+            "end-effector",
+            "left-hand",
+            "right-hand",
+            "left-foot",
+            "right-foot",
+        }
+    )
+    END_EFFECTOR_JOINTS = frozenset(
+        {"LeftFoot", "RightFoot", "LeftHand", "RightHand", "Hips"}
+    )
