@@ -210,10 +210,11 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         default="fullbody",
     )
     constraint_joint_name: bpy.props.EnumProperty(
-        name="Joint",
-        description="End effector constrained by the input",
+        name="Joints",
+        description="End effectors constrained by the input",
         items=constraint_utils.END_EFFECTOR_ITEMS,
-        default="LeftFoot",
+        options={"ENUM_FLAG"},
+        default={"LeftFoot"},
     )
     constraint_source_armature: bpy.props.PointerProperty(
         name="Armature",
@@ -312,7 +313,11 @@ class AvacapoAttempt(bpy.types.PropertyGroup):
     use_constraints: bpy.props.BoolProperty(default=False)
     constraint_input: bpy.props.StringProperty(default="POSE")
     constraint_type: bpy.props.StringProperty(default="fullbody")
-    constraint_joint_name: bpy.props.StringProperty(default="")
+    constraint_joint_name: bpy.props.EnumProperty(
+        items=constraint_utils.END_EFFECTOR_ITEMS,
+        options={"ENUM_FLAG"},
+        default={"LeftFoot"},
+    )
     constraint_source_frame: bpy.props.IntProperty(default=0, min=0)
     constraint_target_frame: bpy.props.IntProperty(default=0, min=0)
     constraint_num_frames: bpy.props.IntProperty(default=1, min=1)
@@ -504,7 +509,7 @@ def _configure_attempt_constraints(
     use_constraints: bool,
     constraint_input: str = "POSE",
     constraint_type: str = "fullbody",
-    joint_name: str = "",
+    joint_name=None,
     source_frame: int = 0,
     target_frame: int = 0,
     num_frames: int = 1,
@@ -520,7 +525,11 @@ def _configure_attempt_constraints(
 
     attempt.constraint_input = constraint_input
     attempt.constraint_type = constraint_type
-    attempt.constraint_joint_name = joint_name if constraint_type == "end-effector" else ""
+    attempt.constraint_joint_name = (
+        set(constraint_utils.selected_joint_names(joint_name))
+        if constraint_type == "end-effector"
+        else set()
+    )
     attempt.constraint_source_frame = max(0, int(source_frame))
     attempt.constraint_target_frame = max(0, int(target_frame))
     attempt.constraint_num_frames = max(1, int(num_frames))
@@ -541,7 +550,9 @@ def _copy_attempt_constraints(source_attempt, target_attempt) -> None:
         use_constraints=source_attempt.use_constraints,
         constraint_input=source_attempt.constraint_input,
         constraint_type=source_attempt.constraint_type,
-        joint_name=source_attempt.constraint_joint_name,
+        joint_name=constraint_utils.selected_joint_names(
+            source_attempt.constraint_joint_name
+        ),
         source_frame=source_attempt.constraint_source_frame,
         target_frame=source_attempt.constraint_target_frame,
         num_frames=source_attempt.constraint_num_frames,
@@ -848,7 +859,9 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                 {
                     "constraint_input": str(attempt.constraint_input),
                     "constraint_type": str(attempt.constraint_type),
-                    "joint_name": str(attempt.constraint_joint_name),
+                    "joint_name": constraint_utils.selected_joint_names(
+                        attempt.constraint_joint_name
+                    ),
                     "source_frame": int(attempt.constraint_source_frame),
                     "target_frame": int(attempt.constraint_target_frame),
                     "num_frames": int(attempt.constraint_num_frames),
@@ -1024,7 +1037,11 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
     generation_mode: bpy.props.StringProperty(default="STANDARD")
     constraint_input: bpy.props.StringProperty(default="POSE")
     constraint_type: bpy.props.StringProperty(default="fullbody")
-    constraint_joint_name: bpy.props.StringProperty(default="")
+    constraint_joint_name: bpy.props.EnumProperty(
+        items=constraint_utils.END_EFFECTOR_ITEMS,
+        options={"ENUM_FLAG"},
+        default={"LeftFoot"},
+    )
     constraint_source_frame: bpy.props.IntProperty(default=0, min=0)
     constraint_target_frame: bpy.props.IntProperty(default=0, min=0)
     constraint_text_weight: bpy.props.FloatProperty(default=2.0, min=0.0)
@@ -1074,7 +1091,9 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
             "use_constraints": use_constraints,
             "constraint_input": self.constraint_input,
             "constraint_type": self.constraint_type,
-            "joint_name": self.constraint_joint_name,
+            "joint_name": constraint_utils.selected_joint_names(
+                self.constraint_joint_name
+            ),
             "source_frame": source_frame,
             "target_frame": self.constraint_target_frame,
             "num_frames": requested_frame_count,

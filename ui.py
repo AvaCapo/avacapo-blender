@@ -41,7 +41,7 @@ def _draw_constraint_settings(
         constraint_box.prop(settings, "constraint_input", expand=True)
         constraint_box.prop(settings, "constraint_type")
         if settings.constraint_type == "end-effector":
-            constraint_box.prop(settings, "constraint_joint_name")
+            constraint_box.prop(settings, "constraint_joint_name", expand=True)
 
         if settings.constraint_input == "POSE":
             constraint_box.prop(settings, "constraint_source_armature")

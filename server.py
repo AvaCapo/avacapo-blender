@@ -74,7 +74,7 @@ def get_animation_constraints(
     constraint_type: str = "fullbody",
     source_frame: int = 0,
     target_frame: int | None = None,
-    joint_name: list[str]| None = None,
+    joint_name: list[str] | None = None,
     seed: int = 42,
     text_weight: float = 2.0,
     constraint_weight: float = 2.5,
@@ -94,14 +94,20 @@ def get_animation_constraints(
             f"Invalid constraint_type: {constraint_type}. "
             f"Must be one of {sorted(config.CONSTRAINT_TYPES)}."
         )
+    joint_names = list(joint_name or [])
+
     if constraint_type == "end-effector":
-        if joint_name not in config.END_EFFECTOR_JOINTS:
+        invalid_joint_names = [
+            name for name in joint_names if name not in config.END_EFFECTOR_JOINTS
+        ]
+        if not joint_names or invalid_joint_names:
             raise ValueError(
-                f"Invalid joint_name: {joint_name}. "
-                f"Must be one of {sorted(config.END_EFFECTOR_JOINTS)}."
+                f"Invalid joint_name: {joint_names}. "
+                "Select one or more values from "
+                f"{sorted(config.END_EFFECTOR_JOINTS)}."
             )
     else:
-        joint_name = []
+        joint_names = []
 
     if (target_frame is None) and (constraint_pose is not None):
         raise ValueError("target_frame must be provided when constraint_pose is given.")
@@ -147,7 +153,7 @@ def get_animation_constraints(
         "constraint_type": constraint_type,
         "source_frame": source_frame,
         "target_frame": target_frame,
-        "joint_names": joint_name,
+        "joint_names": joint_names,
         "seed": seed,
         "text_weight": text_weight,
         "constraint_weight": constraint_weight,

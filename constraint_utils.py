@@ -24,15 +24,16 @@ CONSTRAINT_TYPE_ITEMS = (
 )
 
 END_EFFECTOR_ITEMS = (
-    ("LeftFoot", "Left Foot", "Use the left foot as the end effector"),
-    ("RightFoot", "Right Foot", "Use the right foot as the end effector"),
-    ("LeftHand", "Left Hand", "Use the left hand as the end effector"),
-    ("RightHand", "Right Hand", "Use the right hand as the end effector"),
-    ("Hips", "Hips", "Use the hips as the end effector"),
+    ("LeftFoot", "Left Foot", "Use the left foot as an end effector", 1),
+    ("RightFoot", "Right Foot", "Use the right foot as an end effector", 2),
+    ("LeftHand", "Left Hand", "Use the left hand as an end effector", 4),
+    ("RightHand", "Right Hand", "Use the right hand as an end effector", 8),
+    ("Hips", "Hips", "Use the hips as an end effector", 16),
 )
 
 CONSTRAINT_TYPES = frozenset(item[0] for item in CONSTRAINT_TYPE_ITEMS)
 END_EFFECTOR_NAMES = frozenset(item[0] for item in END_EFFECTOR_ITEMS)
+END_EFFECTOR_ORDER = tuple(item[0] for item in END_EFFECTOR_ITEMS)
 
 # The generated BVH uses LeftToe/RightToe while Mixamo normally uses *ToeBase.
 _BONE_ALIASES = {
@@ -41,6 +42,16 @@ _BONE_ALIASES = {
 }
 
 _constraint_payloads: dict[str, bytes] = {}
+
+
+def selected_joint_names(value: Iterable[str] | str | None) -> list[str]:
+    """Return selected end effectors as a stable, API-ready list."""
+
+    if isinstance(value, str):
+        selected = {value} if value else set()
+    else:
+        selected = set(value or ())
+    return [name for name in END_EFFECTOR_ORDER if name in selected]
 
 
 def cache_constraint_payload(key: str, payload: bytes) -> None:
@@ -101,11 +112,10 @@ def validate_constraint_settings(context: bpy.types.Context, settings) -> str | 
     num_frames = output_frame_count(settings)
     if settings.constraint_type not in CONSTRAINT_TYPES:
         return "Invalid constraint type"
-    if (
-        settings.constraint_type == "end-effector"
-        and settings.constraint_joint_name not in END_EFFECTOR_NAMES
-    ):
-        return "Select an end-effector joint"
+    if settings.constraint_type == "end-effector":
+        joint_names = set(settings.constraint_joint_name)
+        if not joint_names or not joint_names.issubset(END_EFFECTOR_NAMES):
+            return "Select at least one end-effector joint"
 
     if settings.constraint_input == "DIRECTION":
         direction = np.asarray(settings.constraint_direction, dtype=np.float64)
