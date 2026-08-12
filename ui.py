@@ -262,9 +262,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row.prop(settings, "model")
                 row = box_prompt.row(align=True)
                 row.prop(settings, "generation_mode", expand=True)
-                if settings.generation_mode == "STANDARD":
-                    row = box_prompt.row(align=True)
-                    row.prop(settings, "in_place", text="In Place")
+                row = box_prompt.row(align=True)
+                row.prop(settings, "in_place", text="In Place")
                 constraint_error = _draw_constraint_settings(
                     box_prompt, context, settings
                 )

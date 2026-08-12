@@ -918,6 +918,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                     direction=(None if is_pose_constraint else list(request["direction"])),
                     constraint_pose=(request["constraint_pose"] if is_pose_constraint else None),
                     model=selected_model,
+                    in_place=request["in_place"],
                 )
             else:
                 raw = get_animation(

@@ -82,6 +82,7 @@ def get_animation_constraints(
     direction: list[float] | None = None,
     constraint_pose: bytes | None = None,
     model: str = "gen2",
+    in_place: bool = False,
 ):
     """send prompt to server with constraints, get animation back"""
 
@@ -163,6 +164,7 @@ def get_animation_constraints(
         "api_token": Storage.api_token,
         "extension": "bvh",
         "include_skin": False,
+        "in_place": bool(in_place),
         "metadata": json.dumps(
             metadata,
             ensure_ascii=False,
