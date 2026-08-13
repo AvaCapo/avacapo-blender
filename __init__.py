@@ -1372,6 +1372,7 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
     def _append_avacapo_rig(self, context):
         inner_path = "Object"
         object_name = config.AVACAPO_RIG_NAME
+        existing_object_names = set(bpy.data.objects.keys())
 
         bpy.ops.wm.append(
             filepath=os.path.join(config.BLEND_PATH, inner_path, object_name),
@@ -1379,11 +1380,19 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
             filename=object_name,
         )
 
-        obj = context.scene.objects.get(object_name)
-        if obj:
-            return self._select_created_object(context, obj, "AvaCapo rig created!")
+        created_armatures = [
+            obj
+            for obj in bpy.data.objects
+            if obj.name not in existing_object_names and obj.type == "ARMATURE"
+        ]
+        if created_armatures:
+            return self._select_created_object(
+                context,
+                created_armatures[-1],
+                "AvaCapo rig created!",
+            )
 
-        self.report({"WARNING"}, f"Object '{object_name}' not found after append")
+        self.report({"WARNING"}, f"Object '{object_name}' was not created after append")
         return {"CANCELLED"}
 
     def _import_mixamo_rig(self, context):

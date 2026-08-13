@@ -180,6 +180,11 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
             return  
 
         box_obj = layout.box()
+        box_obj.operator(
+            "avacapo.create_avacapo_v1",
+            text="New Armature",
+            icon="OUTLINER_OB_ARMATURE",
+        )
 
         selected_obj = context.object
         if selected_obj is None or selected_obj.type != "ARMATURE":
@@ -203,11 +208,6 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     row_select_armature.label(text=armature.name, icon="OUTLINER_OB_ARMATURE")
             else:
                 box_obj.label(text="no armatures", icon="OUTLINER_OB_ARMATURE")
-            box_obj.operator(
-                "avacapo.create_avacapo_v1",
-                text="New Armature",
-                icon="OUTLINER_OB_ARMATURE",
-            )
 
         else:
             armature = context.object
