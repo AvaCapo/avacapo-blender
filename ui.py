@@ -233,25 +233,30 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                         icon="ARMATURE_DATA",
                     )
                 box_prompt = layout.box()
-                row_top = box_prompt.row(align=True)
-                col = row_top.row(align=True)
-                col.label(text="Start", icon="KEYFRAME")
-                row_top.separator()
-                row_top.separator()
-                row_top.label(text="Seconds", icon="TIME")
-                row_top.separator()
-                row_top.separator()
-                row_top.label(text="End", icon="KEYFRAME")
-                row = box_prompt.row(align=True)
-                record_icon = "RECORD_ON" if settings.start_record_lock else "RECORD_OFF"
-                row.operator("avacapo.toggle_start_record_lock", text="", icon=record_icon)
-                row.prop(settings, "start", text="", expand=True)
-                row.separator()
-                row.separator()
-                row.prop(settings, "duration", text="", expand=True)
-                row.separator()
-                row.separator()
-                row.prop(settings, "end", text="", expand=True)
+                if settings.generation_mode == "INBETWEEN":
+                    row_top = box_prompt.row(align=True)
+                    row_top.label(text="Inbetween Duration", icon="TIME")
+                    row_top.prop(settings, "duration", text="Seconds")
+                else:
+                    row_top = box_prompt.row(align=True)
+                    col = row_top.row(align=True)
+                    col.label(text="Start", icon="KEYFRAME")
+                    row_top.separator()
+                    row_top.separator()
+                    row_top.label(text="Seconds", icon="TIME")
+                    row_top.separator()
+                    row_top.separator()
+                    row_top.label(text="End", icon="KEYFRAME")
+                    row = box_prompt.row(align=True)
+                    record_icon = "RECORD_ON" if settings.start_record_lock else "RECORD_OFF"
+                    row.operator("avacapo.toggle_start_record_lock", text="", icon=record_icon)
+                    row.prop(settings, "start", text="", expand=True)
+                    row.separator()
+                    row.separator()
+                    row.prop(settings, "duration", text="", expand=True)
+                    row.separator()
+                    row.separator()
+                    row.prop(settings, "end", text="", expand=True)
                 
                 box_prompt.separator(type="LINE")
                 row_desc = box_prompt.row(align=True)
@@ -264,11 +269,41 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 row.prop(settings, "generation_mode", expand=True)
                 row = box_prompt.row(align=True)
                 row.prop(settings, "in_place", text="In Place")
-                constraint_error = _draw_constraint_settings(
-                    box_prompt, context, settings
-                )
-                row = box_prompt.row(align=True)
-                row.prop(settings, "transition", text="Transition")
+                generation_error = None
+                if settings.generation_mode == "INBETWEEN":
+                    inbetween_box = box_prompt.box()
+                    inbetween_box.label(text="Inbetween Sources", icon="ARMATURE_DATA")
+                    inbetween_box.prop(settings, "inbetween_left_armature")
+                    inbetween_box.prop(settings, "inbetween_right_armature")
+                    gap_frames = int(round(settings.duration * get_fps()))
+                    inbetween_box.label(
+                        text=f"Generated gap: {gap_frames} frames",
+                        icon="TIME",
+                    )
+
+                    left_obj = settings.inbetween_left_armature
+                    right_obj = settings.inbetween_right_armature
+                    if left_obj is None or right_obj is None:
+                        generation_error = "Select both source armatures"
+                    elif left_obj == right_obj:
+                        generation_error = "Source armatures must be different"
+                    elif rig_utils.infer_rig_type(left_obj) == "unknown":
+                        generation_error = "First Armature is not supported"
+                    elif rig_utils.infer_rig_type(right_obj) == "unknown":
+                        generation_error = "Second Armature is not supported"
+                    elif gap_frames <= 0:
+                        generation_error = "Duration must be positive"
+
+                    if generation_error:
+                        error_row = inbetween_box.row()
+                        error_row.alert = True
+                        error_row.label(text=generation_error, icon="ERROR")
+                else:
+                    generation_error = _draw_constraint_settings(
+                        box_prompt, context, settings
+                    )
+                    row = box_prompt.row(align=True)
+                    row.prop(settings, "transition", text="Transition")
                 if State.server_busy:
                     box_prompt.row(align=True).label(text="In processing...", icon="TIME")
                 row = box_prompt.row(align=True)
@@ -276,31 +311,38 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 if not Queue.allow_new_task:
                     row.label(text="Queue is full...", icon="TIME")
                 else:
-                    row.enabled = not State.server_busy and constraint_error is None
-                    add_clip_op = row.operator(
-                        "avacapo.add_clip",
-                        text="Generate",
-                        icon="SHADERFX",
-                    )
-                    add_clip_op.prompt = settings.prompt
-                    add_clip_op.start = settings.start
-                    add_clip_op.end = settings.end
-                    add_clip_op.transition = settings.transition
-                    add_clip_op.fadein = settings.fadein
-                    add_clip_op.fadeout = settings.fadeout
-                    add_clip_op.temperature = settings.temperature
-                    add_clip_op.model = settings.model
-                    add_clip_op.in_place = settings.in_place
-                    add_clip_op.generation_mode = settings.generation_mode
-                    add_clip_op.constraint_input = settings.constraint_input
-                    add_clip_op.constraint_type = settings.constraint_type
-                    add_clip_op.constraint_joint_name = settings.constraint_joint_name
-                    add_clip_op.constraint_source_frame = settings.constraint_source_frame
-                    add_clip_op.constraint_target_frame = settings.constraint_target_frame
-                    add_clip_op.constraint_text_weight = settings.constraint_text_weight
-                    add_clip_op.constraint_weight = settings.constraint_weight
-                    add_clip_op.constraint_first_heading = settings.constraint_first_heading
-                    add_clip_op.constraint_direction = settings.constraint_direction
+                    row.enabled = not State.server_busy and generation_error is None
+                    if settings.generation_mode == "INBETWEEN":
+                        row.operator(
+                            "avacapo.generate_inbetween",
+                            text="Generate Inbetween",
+                            icon="SHADERFX",
+                        )
+                    else:
+                        add_clip_op = row.operator(
+                            "avacapo.add_clip",
+                            text="Generate",
+                            icon="SHADERFX",
+                        )
+                        add_clip_op.prompt = settings.prompt
+                        add_clip_op.start = settings.start
+                        add_clip_op.end = settings.end
+                        add_clip_op.transition = settings.transition
+                        add_clip_op.fadein = settings.fadein
+                        add_clip_op.fadeout = settings.fadeout
+                        add_clip_op.temperature = settings.temperature
+                        add_clip_op.model = settings.model
+                        add_clip_op.in_place = settings.in_place
+                        add_clip_op.generation_mode = settings.generation_mode
+                        add_clip_op.constraint_input = settings.constraint_input
+                        add_clip_op.constraint_type = settings.constraint_type
+                        add_clip_op.constraint_joint_name = settings.constraint_joint_name
+                        add_clip_op.constraint_source_frame = settings.constraint_source_frame
+                        add_clip_op.constraint_target_frame = settings.constraint_target_frame
+                        add_clip_op.constraint_text_weight = settings.constraint_text_weight
+                        add_clip_op.constraint_weight = settings.constraint_weight
+                        add_clip_op.constraint_first_heading = settings.constraint_first_heading
+                        add_clip_op.constraint_direction = settings.constraint_direction
 
                 if "Error" in State.server_status:
                     layout.label(text=State.server_status, icon="ERROR")
