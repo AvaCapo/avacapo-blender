@@ -192,3 +192,107 @@ def get_animation_constraints(
         log.error(f"Animation request with constraints failed: {exc}")
         raise RuntimeError("Failed to fetch animation with constraints from server.") from exc
     return response.content
+
+
+def get_animation_inbetween(
+    left_context_pose: bytes,
+    right_context_pose: bytes,
+    name: str | None = None,
+    prompt: str = "",
+    left_frame: int = 0,
+    right_frame: int = 0,
+    left_context_frames: int = 1,
+    right_context_frames: int = 1,
+    inbetween_frames: int = 150,
+    seed: int = 42,
+    model: str = "gen2",
+    in_place: bool = False,
+    end_offset_x: float = 0.0,
+    end_offset_z: float = 0.0,
+    align_heading: bool = True,
+):
+    """send prompt to server for inbetweening task, get animation back"""
+
+    left_frame = int(left_frame)
+    right_frame = int(right_frame)
+    left_context_frames = int(left_context_frames)
+    right_context_frames = int(right_context_frames)
+    inbetween_frames = int(inbetween_frames)
+
+    if inbetween_frames <= 0:
+        raise ValueError("inbetween_frames must be positive.")
+
+    if left_context_frames <= 0:
+        raise ValueError("left_context_frames must be positive.")
+    if right_context_frames <= 0:
+        raise ValueError("right_context_frames must be positive.")
+    if left_frame < 0 or right_frame < 0:
+        raise ValueError("left_frame and right_frame must be non-negative.")
+
+    for label, value in (
+        ("end_offset_x", end_offset_x),
+        ("end_offset_z", end_offset_z),
+    ):
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{label} must be finite.")
+
+    model_names = get_models_names()
+    if not model:
+        model = get_default_model_type()
+    if model not in model_names:
+        message = f"Invalid model type: {model}. Must be one of {model_names}."
+        log.error(message)
+        raise ValueError(message)
+
+    metadata = {
+        "text_prompt": prompt,
+        "bvh_filename": name or _build_animation_name(prompt),
+        "model": model,
+        "left_frame": left_frame,
+        "left_context_frames": left_context_frames,
+        "right_frame": right_frame,
+        "right_context_frames": right_context_frames,
+        "gap_frames": inbetween_frames,
+        "end_offset_x": end_offset_x,
+        "end_offset_z": end_offset_z,
+        "align_heading": align_heading,
+        "seed": seed,
+    }
+
+    data = {
+        "api_token": Storage.api_token,
+        "extension": "bvh",
+        "include_skin": False,
+        "in_place": bool(in_place),
+        "metadata": json.dumps(
+            metadata,
+            ensure_ascii=False,
+        ),
+    }
+
+    files = {
+        "left_motion": (
+            "left_context_pose.npz",
+            left_context_pose,
+            "application/octet-stream",
+        ),
+        "right_motion": (
+            "right_context_pose.npz",
+            right_context_pose,
+            "application/octet-stream",
+        ),
+    }
+
+    try:
+        response = requests.post(
+            config.INBETWEENING_URL,
+            data=data,
+            files=files,
+            timeout=config.REQUEST_TIMEOUT,
+        )
+
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        log.error(f"Inbetween animation request failed: {exc}")
+        raise RuntimeError("Failed to fetch inbetween animation from server.") from exc
+    return response.content
