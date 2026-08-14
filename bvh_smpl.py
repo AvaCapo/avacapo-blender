@@ -8,7 +8,7 @@ add-on is reloaded, disabled, or explicitly cleared.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from threading import RLock
 
@@ -21,6 +21,7 @@ from broom.bvh.schemas import BVHDocument
 
 from .retarget_maps import SMPLX_TO_SMPL_BVH
 from .config import Config
+from .logger import log
 
 config = Config()
 
@@ -194,22 +195,115 @@ def create_smpl_npz_bytes(
         return buffer.getvalue()
 
 
+def sanitize_bvh_document(document: BVHDocument) -> BVHDocument:
+    """Interpolate non-finite motion samples without changing valid channels."""
+
+    motion_values = np.asarray(document.motion_values, dtype=np.float64)
+    invalid = ~np.isfinite(motion_values)
+    invalid_count = int(invalid.sum())
+    if invalid_count == 0:
+        return document
+
+    repaired = motion_values.copy()
+    frame_indices = np.arange(document.frame_count, dtype=np.float64)
+    for channel_index in np.flatnonzero(invalid.any(axis=0)):
+        finite = np.isfinite(repaired[:, channel_index])
+        if finite.any():
+            repaired[~finite, channel_index] = np.interp(
+                frame_indices[~finite],
+                frame_indices[finite],
+                repaired[finite, channel_index],
+            )
+        else:
+            repaired[:, channel_index] = 0.0
+
+    log.warning(
+        "Repaired %s NaN/Inf BVH channel samples across %s frames",
+        invalid_count,
+        document.frame_count,
+    )
+    return replace(document, motion_rows=(), motion_values=repaired)
+
+
 def cache_bvh_document(
     action_name: str,
-    bvh_bytes: bytes | bytearray | memoryview,
+    bvh_bytes: bytes | bytearray | memoryview | BVHDocument,
 ) -> BVHDocument:
     """Parse and retain one action's source BVH only in process memory."""
 
-    document = load_bvh_document_from_bytes(bvh_bytes)
+    document = (
+        bvh_bytes
+        if isinstance(bvh_bytes, BVHDocument)
+        else load_bvh_document_from_bytes(bvh_bytes)
+    )
+    document = sanitize_bvh_document(document)
     with _cache_lock:
         _source_documents[action_name] = document
         _converted_payloads.pop(action_name, None)
     return document
 
 
+def concatenate_bvh_documents(
+    *documents: BVHDocument,
+    align_root_translation: bool = True,
+) -> BVHDocument:
+    """Join compatible motions while keeping the first document's skeleton."""
+
+    if not documents:
+        raise ValueError("At least one BVH document is required")
+
+    reference = documents[0]
+    reference_layout = tuple(
+        (joint.name, joint.parent, joint.channels, joint.channel_start)
+        for joint in reference.joints
+    )
+    segments: list[np.ndarray] = []
+
+    root_joint = reference.joints[reference.joint_index[reference.root_name]]
+    root_position_indices = tuple(
+        root_joint.channel_start + index
+        for index, channel in enumerate(root_joint.channels)
+        if channel.endswith("position")
+    )
+
+    for document in documents:
+        layout = tuple(
+            (joint.name, joint.parent, joint.channels, joint.channel_start)
+            for joint in document.joints
+        )
+        if layout != reference_layout or document.total_channels != reference.total_channels:
+            raise ValueError("Cannot join BVH motions with different skeleton layouts")
+        if document.frame_count <= 0:
+            raise ValueError("Cannot join an empty BVH motion")
+
+        document = sanitize_bvh_document(document)
+        segment = np.asarray(document.motion_values, dtype=np.float64).copy()
+        if align_root_translation and segments and root_position_indices:
+            previous_root = segments[-1][-1, root_position_indices]
+            current_root = segment[0, root_position_indices]
+            segment[:, root_position_indices] += previous_root - current_root
+        segments.append(segment)
+
+    motion_values = np.concatenate(segments, axis=0)
+    return replace(
+        reference,
+        motion_rows=(),
+        motion_values=motion_values,
+        declared_frames=int(motion_values.shape[0]),
+    )
+
+
 def get_cached_bvh_document(action_name: str) -> BVHDocument | None:
     with _cache_lock:
-        return _source_documents.get(action_name)
+        document = _source_documents.get(action_name)
+    if document is None:
+        return None
+
+    sanitized = sanitize_bvh_document(document)
+    if sanitized is not document:
+        with _cache_lock:
+            _source_documents[action_name] = sanitized
+    return sanitized
 
 
 def convert_cached_action_range(
