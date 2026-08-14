@@ -8,7 +8,12 @@ import uuid
 import textwrap
 
 from .state_controller import State, frame_change_post
-from .server import get_animation, get_animation_constraints, get_fps
+from .server import (
+    get_animation,
+    get_animation_constraints,
+    get_animation_inbetween,
+    get_fps,
+)
 from . import animation_utils
 from . import bvh_smpl
 from . import constraint_utils
@@ -186,8 +191,25 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         items=(
             ("STANDARD", "Standard", "Generate motion from the text prompt"),
             ("CONSTRAINTS", "Constraints", "Generate motion with a pose or direction constraint"),
+            (
+                "INBETWEEN",
+                "Inbetween",
+                "Generate a transition between two armature animations",
+            ),
         ),
         default="STANDARD",
+    )
+    inbetween_left_armature: bpy.props.PointerProperty(
+        name="First Armature",
+        description="Armature whose animation is placed before the generated transition",
+        type=bpy.types.Object,
+        poll=constraint_utils.armature_poll,
+    )
+    inbetween_right_armature: bpy.props.PointerProperty(
+        name="Second Armature",
+        description="Armature whose animation is placed after the generated transition",
+        type=bpy.types.Object,
+        poll=constraint_utils.armature_poll,
     )
     show_constraint_settings: bpy.props.BoolProperty(
         name="Constraint Settings",
@@ -646,6 +668,34 @@ def _sorted_strips(obj: bpy.types.Object) -> list[bpy.types.NlaStrip]:
     )
 
 
+def _inbetween_source_document(obj: bpy.types.Object):
+    animation_data = obj.animation_data
+    if animation_data is None:
+        return None
+
+    if animation_data.action is not None:
+        return bvh_smpl.get_cached_bvh_document(animation_data.action.name)
+
+    actions = []
+    for nla_track in animation_data.nla_tracks:
+        if nla_track.mute:
+            continue
+        for nla_strip in nla_track.strips:
+            if getattr(nla_strip, "mute", False) or nla_strip.action is None:
+                continue
+            if nla_strip.action not in actions:
+                actions.append(nla_strip.action)
+
+    if not actions:
+        return None
+    if len(actions) != 1:
+        raise ValueError(
+            f"{obj.name} must have exactly one active source clip for Inbetween"
+        )
+
+    return bvh_smpl.get_cached_bvh_document(actions[0].name)
+
+
 def _align_strip_root_motion(obj: bpy.types.Object, nla_strip: bpy.types.NlaStrip) -> None:
     previous_strip = _find_preceding_strip(obj, nla_strip)
     if previous_strip is None or previous_strip.action is None or nla_strip.action is None:
@@ -951,6 +1001,221 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             _realign_following_strips(obj, nla_strip)
             _move_generation_cursor(settings, nla_strip.frame_end_ui)
             obj.animation_data.action = None
+
+
+class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
+    bl_idname = "avacapo.generate_inbetween"
+    bl_label = "Generate Inbetween"
+    bl_description = "Join two animations with an AI-generated transition"
+    bl_options = {"REGISTER", "UNDO"}
+
+    _thread = None
+    _result = None
+    _error = None
+    _timer = None
+    _request = None
+    _left_document = None
+    _right_document = None
+
+    def modal(self, context, event):
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        if self._thread and not self._thread.is_alive():
+            if self._timer is not None:
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
+            try:
+                if self._error:
+                    message = f"Inbetween request failed: {self._error}"
+                    log.error(message)
+                    self.report({"ERROR"}, message)
+                    return {"CANCELLED"}
+
+                try:
+                    total_frames = self._apply_result(context)
+                except Exception as exc:
+                    message = f"Applying inbetween failed: {exc}"
+                    log.exception(message)
+                    self.report({"ERROR"}, message)
+                    return {"CANCELLED"}
+
+                self.report({"INFO"}, f"Inbetween applied: {total_frames} frames")
+                return {"FINISHED"}
+            finally:
+                State.end_generation()
+                _tag_ui_redraw(context)
+
+        return {"PASS_THROUGH"}
+
+    def invoke(self, context, event):
+        if State.server_busy:
+            self.report({"INFO"}, "Generation already in progress.")
+            return {"CANCELLED"}
+
+        settings = context.scene.avacapo_settings
+        left_obj = settings.inbetween_left_armature
+        right_obj = settings.inbetween_right_armature
+        if left_obj is None or right_obj is None:
+            self.report({"ERROR"}, "Select both source armatures")
+            return {"CANCELLED"}
+        if left_obj == right_obj:
+            self.report({"ERROR"}, "First and Second Armature must be different")
+            return {"CANCELLED"}
+        if rig_utils.infer_rig_type(left_obj) == "unknown":
+            self.report({"ERROR"}, "First Armature must use an AvaCapo or Mixamo rig")
+            return {"CANCELLED"}
+        if rig_utils.infer_rig_type(right_obj) == "unknown":
+            self.report({"ERROR"}, "Second Armature must use an AvaCapo or Mixamo rig")
+            return {"CANCELLED"}
+
+        gap_frames = int(round(float(settings.duration) * get_fps()))
+        if gap_frames <= 0:
+            self.report({"ERROR"}, "Inbetween duration must be positive")
+            return {"CANCELLED"}
+
+        try:
+            self._left_document = _inbetween_source_document(left_obj)
+            self._right_document = _inbetween_source_document(right_obj)
+            if self._left_document is None:
+                left_payload, _frame_count = constraint_utils.create_pose_constraint_npz(
+                    context,
+                    left_obj,
+                    "CURRENT_POSE",
+                )
+            else:
+                left_payload = bvh_smpl.create_smpl_npz_bytes(
+                    bvh_smpl.convert_bvh_smpl(
+                        self._left_document,
+                        start_frame=self._left_document.frame_count - 1,
+                        end_frame=self._left_document.frame_count,
+                        target_fps=get_fps(),
+                    )
+                )
+            if self._right_document is None:
+                right_payload, _frame_count = constraint_utils.create_pose_constraint_npz(
+                    context,
+                    right_obj,
+                    "CURRENT_POSE",
+                )
+            else:
+                right_payload = bvh_smpl.create_smpl_npz_bytes(
+                    bvh_smpl.convert_bvh_smpl(
+                        self._right_document,
+                        start_frame=0,
+                        end_frame=1,
+                        target_fps=get_fps(),
+                    )
+                )
+        except Exception as exc:
+            message = f"Preparing Inbetween input failed: {exc}"
+            log.exception(message)
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+
+        self._request = {
+            "left_context_pose": left_payload,
+            "right_context_pose": right_payload,
+            "name": f"inbetween_{left_obj.name}_{right_obj.name}",
+            "prompt": str(settings.prompt),
+            "left_frame": 0,
+            "right_frame": 0,
+            "left_context_frames": 1,
+            "right_context_frames": 1,
+            "inbetween_frames": gap_frames,
+            "model": resolve_model_type(settings.model),
+            "in_place": bool(settings.in_place),
+            # The final right animation keeps its original heading. Asking the
+            # server to rotate only the gap would create a discontinuity.
+            "align_heading": False,
+        }
+        self._left_obj_name = left_obj.name
+        self._right_obj_name = right_obj.name
+        self._result = None
+        self._error = None
+        self._thread = threading.Thread(target=self._fetch, daemon=True)
+
+        State.begin_generation()
+        try:
+            self._thread.start()
+        except Exception as exc:
+            State.end_generation()
+            self.report({"ERROR"}, f"Failed to start inbetween generation: {exc}")
+            return {"CANCELLED"}
+
+        self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        _tag_ui_redraw(context)
+        return {"RUNNING_MODAL"}
+
+    def cancel(self, context):
+        if self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+        State.end_generation()
+        _tag_ui_redraw(context)
+
+    def _fetch(self):
+        try:
+            self._result = get_animation_inbetween(**self._request)
+        except Exception as exc:
+            self._error = str(exc)
+            log.exception("Unexpected error in inbetween fetch thread")
+
+    def _apply_result(self, context) -> int:
+        left_obj = bpy.data.objects.get(self._left_obj_name)
+        if left_obj is None:
+            raise ValueError("First Armature was removed while generating")
+
+        gap_document = bvh_smpl.load_bvh_document_from_bytes(self._result)
+        combined_document = bvh_smpl.concatenate_bvh_documents(
+            *(
+                document
+                for document in (
+                    self._left_document,
+                    gap_document,
+                    self._right_document,
+                )
+                if document is not None
+            ),
+            align_root_translation=True,
+        )
+
+        action = bpy.data.actions.new(
+            name=f"Inbetween_{self._left_obj_name}_{self._right_obj_name}"
+        )
+        action.slots.new(left_obj.id_type, name=left_obj.name)
+        animation_data = left_obj.animation_data_create()
+        previous_action = animation_data.action
+        track_mute_states = [track.mute for track in animation_data.nla_tracks]
+        for nla_track in animation_data.nla_tracks:
+            nla_track.mute = True
+
+        try:
+            animation_utils.apply_animation(left_obj, combined_document, action)
+            bvh_smpl.cache_bvh_document(action.name, combined_document)
+            animation_data.action = action
+        except Exception:
+            animation_data.action = previous_action
+            for nla_track, was_muted in zip(animation_data.nla_tracks, track_mute_states):
+                nla_track.mute = was_muted
+            bpy.data.actions.remove(action)
+            raise
+
+        context.scene.frame_set(1)
+        context.scene.frame_end = max(
+            int(context.scene.frame_end), combined_document.frame_count
+        )
+        left_obj.select_set(True)
+        context.view_layer.objects.active = left_obj
+
+        right_obj = bpy.data.objects.get(self._right_obj_name)
+        if right_obj is not None:
+            right_armature = right_obj.data
+            bpy.data.objects.remove(right_obj, do_unlink=True)
+            if right_armature is not None and right_armature.users == 0:
+                bpy.data.armatures.remove(right_armature)
+        return combined_document.frame_count
 
 
 class AVACAPO_OT_convert_smpl_preview_range(bpy.types.Operator):
@@ -1519,6 +1784,7 @@ _classes = [
     AVACAPO_OT_add_clip,
     AVACAPO_OT_new_attempt,
     AVACAPO_OT_fetch,
+    AVACAPO_OT_generate_inbetween,
     AVACAPO_OT_convert_smpl_preview_range,
     AVACAPO_OT_create_avacapo,
     AVACAPO_OT_create_avacapo_v1,
