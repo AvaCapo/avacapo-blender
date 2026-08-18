@@ -7,9 +7,10 @@ import webbrowser
 import uuid
 import textwrap
 
+from bpy.app.handlers import persistent
+
 from .state_controller import State, frame_change_post
 from .server import (
-    get_animation,
     get_animation_constraints,
     get_animation_inbetween,
     get_fps,
@@ -77,8 +78,7 @@ def _constraint_target_frame_set(settings, value: int) -> None:
     max_frame = constraint_utils.output_frame_count(settings) - 1
     if requested > max_frame:
         settings.constraint_target_error = (
-            f"Target Frame {requested} is outside 0..{max_frame}; "
-            f"using {max_frame}"
+            f"Target Frame {requested} is outside 0..{max_frame}; " f"using {max_frame}"
         )
         requested = max_frame
     else:
@@ -89,6 +89,29 @@ def _constraint_target_frame_set(settings, value: int) -> None:
 def _revalidate_constraint_target(settings) -> None:
     current = int(settings.get(_TARGET_FRAME_VALUE_KEY, 0))
     _constraint_target_frame_set(settings, current)
+
+
+class AvacapoConstraint(bpy.types.PropertyGroup):
+    uid: bpy.props.StringProperty()
+    constraint_input: bpy.props.StringProperty(default="POSE")
+    constraint_type: bpy.props.StringProperty(default="fullbody")
+    constraint_joint_name: bpy.props.EnumProperty(
+        items=constraint_utils.END_EFFECTOR_ITEMS,
+        options={"ENUM_FLAG"},
+        default={"LeftFoot"},
+    )
+    source_armature: bpy.props.PointerProperty(
+        type=bpy.types.Object,
+        poll=constraint_utils.armature_poll,
+    )
+    pose_source: bpy.props.StringProperty(default="CURRENT_POSE")
+    source_frame: bpy.props.IntProperty(default=0, min=0)
+    source_frame_count: bpy.props.IntProperty(default=1, min=0)
+    target_frame: bpy.props.IntProperty(default=0, min=0)
+    direction: bpy.props.FloatVectorProperty(
+        default=(0.0, 1.0, 0.0),
+        size=3,
+    )
 
 
 class AvacapoSettings(bpy.types.PropertyGroup):
@@ -187,14 +210,14 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     )
     generation_mode: bpy.props.EnumProperty(
         name="Generation",
-        description="Generate from text only or add a motion constraint",
+        description="Choose motion generation or inbetweening",
         items=(
-            ("STANDARD", "Standard", "Generate motion from the text prompt"),
-            ("CONSTRAINTS", "Constraints", "Generate motion with a pose or direction constraint"),
+            ("STANDARD", "Generation", "Generate motion from a text prompt", 0),
             (
                 "INBETWEEN",
-                "Inbetween",
+                "Inbetweening",
                 "Generate a transition between two armature animations",
+                2,
             ),
         ),
         default="STANDARD",
@@ -212,10 +235,17 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         poll=constraint_utils.armature_poll,
     )
     show_constraint_settings: bpy.props.BoolProperty(
-        name="Constraint Settings",
-        description="Show or hide constraint settings",
+        name="Constraints",
+        description="Show or hide saved constraints",
         default=True,
     )
+    show_constraint_editor: bpy.props.BoolProperty(
+        default=False, options={"HIDDEN", "SKIP_SAVE"}
+    )
+    constraint_edit_index: bpy.props.IntProperty(
+        default=-1, options={"HIDDEN", "SKIP_SAVE"}
+    )
+    constraints: bpy.props.CollectionProperty(type=AvacapoConstraint)
     constraint_input: bpy.props.EnumProperty(
         name="Input",
         description="Type of data used to constrain generation",
@@ -241,8 +271,7 @@ class AvacapoSettings(bpy.types.PropertyGroup):
     constraint_source_armature: bpy.props.PointerProperty(
         name="Armature",
         description=(
-            "Armature whose evaluated pose is converted to NPZ; "
-            "empty uses the active armature"
+            "Armature whose evaluated pose is converted to NPZ; " "empty uses the active armature"
         ),
         type=bpy.types.Object,
         poll=constraint_utils.armature_poll,
@@ -308,13 +337,12 @@ class AvacapoSettings(bpy.types.PropertyGroup):
 # and have several "attempts"(requests/actions)
 # attempt - a single trial
 class AvacapoAttempt(bpy.types.PropertyGroup):
-    
+
     uid: bpy.props.StringProperty()
     name: bpy.props.StringProperty()
     action_name: bpy.props.StringProperty()
     status: bpy.props.StringProperty()  # | Error | Pending | Fetching | Done
 
-    
     temperature: bpy.props.FloatProperty(
         name="temperature",
         description="setting 0.0 - 1.0 for generation temperature",
@@ -332,6 +360,7 @@ class AvacapoAttempt(bpy.types.PropertyGroup):
     )
     prompt: bpy.props.StringProperty()
     duration: bpy.props.FloatProperty()
+    constraints: bpy.props.CollectionProperty(type=AvacapoConstraint)
     use_constraints: bpy.props.BoolProperty(default=False)
     constraint_input: bpy.props.StringProperty(default="POSE")
     constraint_type: bpy.props.StringProperty(default="fullbody")
@@ -462,9 +491,7 @@ def _find_clip_by_name(obj: bpy.types.Object, clip_name: str):
     return next((clip for clip in obj.avacapo_clips.clips if clip.name == clip_name), None)
 
 
-def _get_strip_for_clip(
-    obj: bpy.types.Object, clip
-) -> bpy.types.NlaStrip | None:
+def _get_strip_for_clip(obj: bpy.types.Object, clip) -> bpy.types.NlaStrip | None:
     if obj.animation_data is None:
         return None
 
@@ -475,9 +502,7 @@ def _get_strip_for_clip(
     return nla_track.strips.get(clip.name)
 
 
-def _find_clip_at_exact_range(
-    obj: bpy.types.Object, start_frame: float, end_frame: float
-):
+def _find_clip_at_exact_range(obj: bpy.types.Object, start_frame: float, end_frame: float):
     target_start = int(round(start_frame))
     target_frame_count = _frame_count_from_bounds(start_frame, end_frame)
 
@@ -502,7 +527,6 @@ def _create_attempt_for_clip(
     clip,
     *,
     prompt: str,
-    temperature: float,
     model: str,
     in_place: bool,
     duration: float,
@@ -510,12 +534,11 @@ def _create_attempt_for_clip(
     new_attempt = clip.attempts.add()
     new_attempt.uid = uuid.uuid4().hex[:6]
     new_attempt.prompt = prompt
-    new_attempt.temperature = temperature
     new_attempt.model = model
     new_attempt.in_place = in_place
 
     n = len(clip.attempts)
-    new_attempt.name = f"Take_{n}_{model}_{temperature}"
+    new_attempt.name = f"Take_{n}_{model}"
     new_attempt.action_name = f"{clip.name}_{n}"
     new_attempt.duration = duration
 
@@ -525,69 +548,90 @@ def _create_attempt_for_clip(
     return new_attempt, action, slot
 
 
+def _constraint_record(constraint) -> dict:
+    return {
+        "payload_key": str(constraint.uid),
+        "constraint_input": str(constraint.constraint_input),
+        "constraint_type": str(constraint.constraint_type),
+        "joint_names": constraint_utils.selected_joint_names(constraint.constraint_joint_name),
+        "source_armature": constraint.source_armature,
+        "pose_source": str(constraint.pose_source),
+        "source_frame": int(constraint.source_frame),
+        "source_frame_count": int(constraint.source_frame_count),
+        "target_frame": int(constraint.target_frame),
+        "direction": tuple(float(value) for value in constraint.direction),
+    }
+
+
+def _attempt_constraint_records(attempt) -> list[dict]:
+    records = [_constraint_record(constraint) for constraint in attempt.constraints]
+    if records or not attempt.use_constraints:
+        return records
+
+    # Compatibility with constrained takes saved before multiple constraints.
+    return [
+        {
+            "payload_key": str(attempt.uid),
+            "constraint_input": str(attempt.constraint_input),
+            "constraint_type": str(attempt.constraint_type),
+            "joint_names": constraint_utils.selected_joint_names(attempt.constraint_joint_name),
+            "source_armature": None,
+            "pose_source": "CURRENT_POSE",
+            "source_frame": int(attempt.constraint_source_frame),
+            "source_frame_count": max(1, int(attempt.constraint_source_frame) + 1),
+            "target_frame": int(attempt.constraint_target_frame),
+            "direction": tuple(float(value) for value in attempt.constraint_direction),
+        }
+    ]
+
+
 def _configure_attempt_constraints(
     attempt,
+    records,
     *,
-    use_constraints: bool,
-    constraint_input: str = "POSE",
-    constraint_type: str = "fullbody",
-    joint_name=None,
-    source_frame: int = 0,
-    target_frame: int = 0,
-    num_frames: int = 1,
-    text_weight: float = 2.0,
-    constraint_weight: float = 2.5,
-    first_heading: float = 0.0,
-    direction=(0.0, 1.0, 0.0),
-    pose_payload: bytes | None = None,
+    num_frames: int,
+    text_weight: float,
+    constraint_weight: float,
+    first_heading: float,
 ) -> None:
-    attempt.use_constraints = bool(use_constraints)
-    if not use_constraints:
-        return
-
-    attempt.constraint_input = constraint_input
-    attempt.constraint_type = constraint_type
-    attempt.constraint_joint_name = (
-        set(constraint_utils.selected_joint_names(joint_name))
-        if constraint_type == "end-effector"
-        else set()
-    )
-    attempt.constraint_source_frame = max(0, int(source_frame))
-    attempt.constraint_target_frame = max(0, int(target_frame))
+    attempt.constraints.clear()
+    attempt.use_constraints = bool(records)
     attempt.constraint_num_frames = max(1, int(num_frames))
     attempt.constraint_text_weight = float(text_weight)
     attempt.constraint_weight = float(constraint_weight)
     attempt.constraint_first_heading = float(first_heading)
-    attempt.constraint_direction = direction
 
-    if constraint_input == "POSE":
-        if pose_payload is None:
-            raise ValueError("Pose constraint payload is missing")
-        constraint_utils.cache_constraint_payload(attempt.uid, pose_payload)
+    for record in records:
+        stored = attempt.constraints.add()
+        stored.uid = uuid.uuid4().hex
+        stored.constraint_input = record["constraint_input"]
+        stored.constraint_type = record["constraint_type"]
+        stored.constraint_joint_name = set(record["joint_names"])
+        stored.source_armature = record.get("source_armature")
+        stored.pose_source = record.get("pose_source", "CURRENT_POSE")
+        stored.source_frame = max(0, int(record["source_frame"]))
+        stored.source_frame_count = max(0, int(record["source_frame_count"]))
+        stored.target_frame = max(0, int(record["target_frame"]))
+        stored.direction = record["direction"]
+
+        if stored.constraint_input == "POSE":
+            payload = constraint_utils.get_constraint_payload(record["payload_key"])
+            if payload is None:
+                raise ValueError("Pose constraint payload is missing")
+            constraint_utils.cache_constraint_payload(stored.uid, payload)
 
 
-def _copy_attempt_constraints(source_attempt, target_attempt) -> None:
+def _copy_attempt_constraints(source_attempt, target_attempt, *, num_frames: int) -> None:
     _configure_attempt_constraints(
         target_attempt,
-        use_constraints=source_attempt.use_constraints,
-        constraint_input=source_attempt.constraint_input,
-        constraint_type=source_attempt.constraint_type,
-        joint_name=constraint_utils.selected_joint_names(
-            source_attempt.constraint_joint_name
-        ),
-        source_frame=source_attempt.constraint_source_frame,
-        target_frame=source_attempt.constraint_target_frame,
-        num_frames=source_attempt.constraint_num_frames,
+        _attempt_constraint_records(source_attempt),
+        num_frames=num_frames,
         text_weight=source_attempt.constraint_text_weight,
         constraint_weight=source_attempt.constraint_weight,
         first_heading=source_attempt.constraint_first_heading,
-        direction=tuple(source_attempt.constraint_direction),
-        pose_payload=(
-            constraint_utils.get_constraint_payload(source_attempt.uid)
-            if source_attempt.constraint_input == "POSE"
-            else None
-        ),
     )
+
+
 def _chain_start_frame(
     obj: bpy.types.Object,
     requested_start: int,
@@ -633,11 +677,11 @@ def _strip_handoff_frame(nla_strip: bpy.types.NlaStrip) -> float:
     return float(nla_strip.frame_start_ui + nla_strip.blend_in)
 
 
-def _strip_action_frame_at_timeline(
-    nla_strip: bpy.types.NlaStrip, timeline_frame: float
-) -> float:
+def _strip_action_frame_at_timeline(nla_strip: bpy.types.NlaStrip, timeline_frame: float) -> float:
     local_frame = float(nla_strip.action_frame_start + (timeline_frame - nla_strip.frame_start_ui))
-    return max(float(nla_strip.action_frame_start), min(float(nla_strip.action_frame_end), local_frame))
+    return max(
+        float(nla_strip.action_frame_start), min(float(nla_strip.action_frame_end), local_frame)
+    )
 
 
 def _find_preceding_strip(
@@ -689,9 +733,7 @@ def _inbetween_source_document(obj: bpy.types.Object):
     if not actions:
         return None
     if len(actions) != 1:
-        raise ValueError(
-            f"{obj.name} must have exactly one active source clip for Inbetween"
-        )
+        raise ValueError(f"{obj.name} must have exactly one active source clip for Inbetween")
 
     return bvh_smpl.get_cached_bvh_document(actions[0].name)
 
@@ -704,7 +746,9 @@ def _align_strip_root_motion(obj: bpy.types.Object, nla_strip: bpy.types.NlaStri
     handoff_frame = _strip_handoff_frame(nla_strip)
     target_frame = _strip_action_frame_at_timeline(previous_strip, handoff_frame)
     source_frame = _strip_action_frame_at_timeline(nla_strip, handoff_frame)
-    target_location = animation_utils.evaluate_root_location(obj, previous_strip.action, target_frame)
+    target_location = animation_utils.evaluate_root_location(
+        obj, previous_strip.action, target_frame
+    )
     if target_location is None:
         target_location = animation_utils.Vector((0.0, 0.0, 0.0))
 
@@ -716,9 +760,7 @@ def _align_strip_root_motion(obj: bpy.types.Object, nla_strip: bpy.types.NlaStri
     )
 
 
-def _realign_following_strips(
-    obj: bpy.types.Object, changed_strip: bpy.types.NlaStrip
-) -> None:
+def _realign_following_strips(obj: bpy.types.Object, changed_strip: bpy.types.NlaStrip) -> None:
     seen_changed_strip = False
 
     for nla_strip in _sorted_strips(obj):
@@ -730,8 +772,6 @@ def _realign_following_strips(
             continue
 
         _align_strip_root_motion(obj, nla_strip)
-
-
 
 
 class AVACAPO_OT_login_browser(bpy.types.Operator):
@@ -824,8 +864,6 @@ class AVACAPO_OT_disconnect(bpy.types.Operator):
         return {"FINISHED"}
 
 
-
-
 class AVACAPO_OT_fetch(bpy.types.Operator):
     bl_idname = "avacapo.fetch"
     bl_label = "Get Animation"
@@ -887,41 +925,50 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             self.report({"ERROR"}, "Generation take was not found.")
             return {"CANCELLED"}
 
-        self._request = {
-            "prompt": str(attempt.prompt),
-            "duration": float(attempt.duration),
-            "temperature": float(attempt.temperature),
-            "model": str(attempt.model),
-            "in_place": bool(attempt.in_place),
-            "use_constraints": bool(attempt.use_constraints),
-        }
-        if attempt.use_constraints:
-            pose_payload = None
-            if attempt.constraint_input == "POSE":
-                pose_payload = constraint_utils.get_constraint_payload(attempt.uid)
-                if pose_payload is None:
-                    self.report(
-                        {"ERROR"},
-                        "Pose constraint is no longer in memory; create the take again.",
-                    )
+        num_frames = max(1, int(attempt.constraint_num_frames))
+        if not attempt.use_constraints and not attempt.constraints and num_frames == 1:
+            num_frames = max(1, int(round(attempt.duration * get_fps())))
+
+        pose_constraints = []
+        motion_files = []
+        direction = None
+        for record in _attempt_constraint_records(attempt):
+            if record["constraint_input"] == "DIRECTION":
+                if direction is not None:
+                    self.report({"ERROR"}, "Only one direction constraint is supported.")
                     return {"CANCELLED"}
-            self._request.update(
+                direction = list(record["direction"])
+                continue
+
+            pose_payload = constraint_utils.get_constraint_payload(record["payload_key"])
+            if pose_payload is None:
+                self.report(
+                    {"ERROR"},
+                    "A pose constraint is no longer in memory; create the take again.",
+                )
+                return {"CANCELLED"}
+            pose_constraints.append(
                 {
-                    "constraint_input": str(attempt.constraint_input),
-                    "constraint_type": str(attempt.constraint_type),
-                    "joint_name": constraint_utils.selected_joint_names(
-                        attempt.constraint_joint_name
-                    ),
-                    "source_frame": int(attempt.constraint_source_frame),
-                    "target_frame": int(attempt.constraint_target_frame),
-                    "num_frames": int(attempt.constraint_num_frames),
-                    "text_weight": float(attempt.constraint_text_weight),
-                    "constraint_weight": float(attempt.constraint_weight),
-                    "first_heading": float(attempt.constraint_first_heading),
-                    "direction": tuple(float(value) for value in attempt.constraint_direction),
-                    "constraint_pose": pose_payload,
+                    "constraint_type": record["constraint_type"],
+                    "joint_names": record["joint_names"],
+                    "source_frame": record["source_frame"],
+                    "target_frame": record["target_frame"],
                 }
             )
+            motion_files.append(pose_payload)
+
+        self._request = {
+            "prompt": str(attempt.prompt),
+            "num_frames": num_frames,
+            "model": str(attempt.model),
+            "in_place": bool(attempt.in_place),
+            "pose_constraints": pose_constraints,
+            "motion_files": motion_files,
+            "direction": direction,
+            "text_weight": float(attempt.constraint_text_weight),
+            "constraint_weight": float(attempt.constraint_weight),
+            "first_heading": float(attempt.constraint_first_heading),
+        }
 
         self._time_start = time.time()
         self._result = None
@@ -953,31 +1000,18 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         selected_model = resolve_model_type(request["model"])
         log.debug("Thread started, opening URL...")
         try:
-            if request["use_constraints"]:
-                is_pose_constraint = request["constraint_input"] == "POSE"
-                raw = get_animation_constraints(
-                    prompt=request["prompt"],
-                    num_frames=request["num_frames"],
-                    constraint_type=request["constraint_type"],
-                    source_frame=(request["source_frame"] if is_pose_constraint else 0),
-                    target_frame=(request["target_frame"] if is_pose_constraint else None),
-                    joint_name=request["joint_name"],
-                    text_weight=request["text_weight"],
-                    constraint_weight=request["constraint_weight"],
-                    first_heading=request["first_heading"],
-                    direction=(None if is_pose_constraint else list(request["direction"])),
-                    constraint_pose=(request["constraint_pose"] if is_pose_constraint else None),
-                    model=selected_model,
-                    in_place=request["in_place"],
-                )
-            else:
-                raw = get_animation(
-                    prompt=request["prompt"],
-                    duration=request["duration"],
-                    temperature=request["temperature"],
-                    model=selected_model,
-                    in_place=request["in_place"],
-                )
+            raw = get_animation_constraints(
+                prompt=request["prompt"],
+                num_frames=request["num_frames"],
+                pose_constraints=request["pose_constraints"],
+                motion_files=request["motion_files"],
+                text_weight=request["text_weight"],
+                constraint_weight=request["constraint_weight"],
+                first_heading=request["first_heading"],
+                direction=request["direction"],
+                model=selected_model,
+                in_place=request["in_place"],
+            )
             log.debug("Raw BVH response received: %s bytes", len(raw))
             self._result = raw
         except Exception as e:
@@ -1203,9 +1237,7 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
             raise
 
         context.scene.frame_set(1)
-        context.scene.frame_end = max(
-            int(context.scene.frame_end), combined_document.frame_count
-        )
+        context.scene.frame_end = max(int(context.scene.frame_end), combined_document.frame_count)
         left_obj.select_set(True)
         context.view_layer.objects.active = left_obj
 
@@ -1287,6 +1319,161 @@ class AVACAPO_OT_convert_smpl_preview_range(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_begin_constraint(bpy.types.Operator):
+    bl_idname = "avacapo.begin_constraint"
+    bl_label = "Add Constraint"
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        settings.constraint_edit_index = -1
+        settings.show_constraint_editor = True
+        settings.show_constraint_settings = True
+        _tag_ui_redraw(context)
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_cancel_constraint(bpy.types.Operator):
+    bl_idname = "avacapo.cancel_constraint"
+    bl_label = "Cancel Constraint"
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        settings.constraint_edit_index = -1
+        settings.show_constraint_editor = False
+        _tag_ui_redraw(context)
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_edit_constraint(bpy.types.Operator):
+    bl_idname = "avacapo.edit_constraint"
+    bl_label = "Edit Constraint"
+
+    constraint_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        if not 0 <= self.constraint_index < len(settings.constraints):
+            self.report({"ERROR"}, "Constraint not found")
+            return {"CANCELLED"}
+
+        constraint = settings.constraints[self.constraint_index]
+        settings.constraint_input = constraint.constraint_input
+        settings.constraint_type = constraint.constraint_type
+        settings.constraint_joint_name = set(constraint.constraint_joint_name)
+        settings.constraint_source_armature = constraint.source_armature
+        settings.constraint_pose_source = constraint.pose_source
+        settings.constraint_source_frame = constraint.source_frame
+        settings.constraint_target_frame = constraint.target_frame
+        settings.constraint_direction = constraint.direction
+        settings.constraint_edit_index = self.constraint_index
+        settings.show_constraint_editor = True
+        settings.show_constraint_settings = True
+        _tag_ui_redraw(context)
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_remove_constraint(bpy.types.Operator):
+    bl_idname = "avacapo.remove_constraint"
+    bl_label = "Remove Constraint"
+
+    constraint_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        if not 0 <= self.constraint_index < len(settings.constraints):
+            self.report({"ERROR"}, "Constraint not found")
+            return {"CANCELLED"}
+
+        constraint_utils.remove_constraint_payload(settings.constraints[self.constraint_index].uid)
+        settings.constraints.remove(self.constraint_index)
+        settings.constraint_edit_index = -1
+        settings.show_constraint_editor = False
+        _tag_ui_redraw(context)
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_clear_constraints(bpy.types.Operator):
+    bl_idname = "avacapo.clear_constraints"
+    bl_label = "Clear Constraints"
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        for constraint in settings.constraints:
+            constraint_utils.remove_constraint_payload(constraint.uid)
+        settings.constraints.clear()
+        settings.constraint_edit_index = -1
+        settings.show_constraint_editor = False
+        _tag_ui_redraw(context)
+        return {"FINISHED"}
+
+
+class AVACAPO_OT_save_constraint(bpy.types.Operator):
+    bl_idname = "avacapo.save_constraint"
+    bl_label = "Save Constraint"
+
+    def execute(self, context):
+        settings = context.scene.avacapo_settings
+        validation_error = constraint_utils.validate_constraint_settings(context, settings)
+        if validation_error:
+            self.report({"ERROR"}, validation_error)
+            return {"CANCELLED"}
+
+        edit_index = int(settings.constraint_edit_index)
+        if settings.constraint_input == "DIRECTION":
+            for index, constraint in enumerate(settings.constraints):
+                if index != edit_index and constraint.constraint_input == "DIRECTION":
+                    self.report({"ERROR"}, "Only one direction constraint can be added")
+                    return {"CANCELLED"}
+
+        source = None
+        pose_payload = None
+        source_frame_count = 0
+        source_frame = int(settings.constraint_source_frame)
+        if settings.constraint_input == "POSE":
+            source = constraint_utils.source_armature(context, settings)
+            try:
+                pose_payload, source_frame_count = constraint_utils.create_pose_constraint_npz(
+                    context,
+                    source,
+                    settings.constraint_pose_source,
+                )
+            except Exception as exc:
+                message = f"Pose constraint conversion failed: {exc}"
+                log.exception(message)
+                self.report({"ERROR"}, message)
+                return {"CANCELLED"}
+            if source_frame_count == 1:
+                source_frame = 0
+
+        if 0 <= edit_index < len(settings.constraints):
+            stored = settings.constraints[edit_index]
+        else:
+            stored = settings.constraints.add()
+            stored.uid = uuid.uuid4().hex
+
+        stored.constraint_input = settings.constraint_input
+        stored.constraint_type = settings.constraint_type
+        stored.constraint_joint_name = set(
+            constraint_utils.selected_joint_names(settings.constraint_joint_name)
+        )
+        stored.source_armature = source
+        stored.pose_source = settings.constraint_pose_source
+        stored.source_frame = source_frame
+        stored.source_frame_count = source_frame_count
+        stored.target_frame = int(settings.constraint_target_frame)
+        stored.direction = settings.constraint_direction
+
+        if pose_payload is not None:
+            constraint_utils.cache_constraint_payload(stored.uid, pose_payload)
+        else:
+            constraint_utils.remove_constraint_payload(stored.uid)
+
+        settings.constraint_edit_index = -1
+        settings.show_constraint_editor = False
+        _tag_ui_redraw(context)
+        return {"FINISHED"}
+
+
 class AVACAPO_OT_add_clip(bpy.types.Operator):
     bl_idname = "avacapo.add_clip"
     bl_label = "Add new clip"
@@ -1297,23 +1484,8 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
     transition: bpy.props.IntProperty()
     fadein: bpy.props.IntProperty()
     fadeout: bpy.props.IntProperty()
-    temperature: bpy.props.FloatProperty()
     model: bpy.props.StringProperty()
     in_place: bpy.props.BoolProperty()
-    generation_mode: bpy.props.StringProperty(default="STANDARD")
-    constraint_input: bpy.props.StringProperty(default="POSE")
-    constraint_type: bpy.props.StringProperty(default="fullbody")
-    constraint_joint_name: bpy.props.EnumProperty(
-        items=constraint_utils.END_EFFECTOR_ITEMS,
-        options={"ENUM_FLAG"},
-        default={"LeftFoot"},
-    )
-    constraint_source_frame: bpy.props.IntProperty(default=0, min=0)
-    constraint_target_frame: bpy.props.IntProperty(default=0, min=0)
-    constraint_text_weight: bpy.props.FloatProperty(default=2.0, min=0.0)
-    constraint_weight: bpy.props.FloatProperty(default=2.5, min=0.0)
-    constraint_first_heading: bpy.props.FloatProperty(default=0.0)
-    constraint_direction: bpy.props.FloatVectorProperty(size=3)
 
     def execute(self, context):
         if State.server_busy:
@@ -1323,59 +1495,21 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         obj = context.object
         settings = context.scene.avacapo_settings
         requested_frame_count = _frame_count_from_bounds(self.start, self.end)
-        use_constraints = self.generation_mode == "CONSTRAINTS"
-        pose_payload = None
-        source_frame = int(self.constraint_source_frame)
+        if settings.show_constraint_editor:
+            self.report({"ERROR"}, "Save or cancel the current constraint")
+            return {"CANCELLED"}
+        validation_error = constraint_utils.validate_saved_constraints(settings)
+        if validation_error:
+            self.report({"ERROR"}, validation_error)
+            return {"CANCELLED"}
 
-        if use_constraints:
-            validation_error = constraint_utils.validate_constraint_settings(
-                context, settings
-            )
-            if validation_error:
-                self.report({"ERROR"}, validation_error)
-                return {"CANCELLED"}
-
-            if self.constraint_input == "POSE":
-                source = constraint_utils.source_armature(context, settings)
-                try:
-                    pose_payload, source_frame_count = (
-                        constraint_utils.create_pose_constraint_npz(
-                            context,
-                            source,
-                            settings.constraint_pose_source,
-                        )
-                    )
-                except Exception as exc:
-                    message = f"Pose constraint conversion failed: {exc}"
-                    log.exception(message)
-                    self.report({"ERROR"}, message)
-                    return {"CANCELLED"}
-                if source_frame_count == 1:
-                    source_frame = 0
-
-        constraint_options = {
-            "use_constraints": use_constraints,
-            "constraint_input": self.constraint_input,
-            "constraint_type": self.constraint_type,
-            "joint_name": constraint_utils.selected_joint_names(
-                self.constraint_joint_name
-            ),
-            "source_frame": source_frame,
-            "target_frame": self.constraint_target_frame,
-            "num_frames": requested_frame_count,
-            "text_weight": self.constraint_text_weight,
-            "constraint_weight": self.constraint_weight,
-            "first_heading": self.constraint_first_heading,
-            "direction": tuple(self.constraint_direction),
-            "pose_payload": pose_payload,
-        }
+        constraint_records = [_constraint_record(constraint) for constraint in settings.constraints]
 
         obj.animation_data_create()
 
         existing_clip, existing_strip = _find_clip_at_exact_range(obj, self.start, self.end)
         if existing_clip is not None and existing_strip is not None:
             existing_clip.prompt = self.prompt
-            existing_clip.temperature = self.temperature
             existing_clip.model = self.model
             existing_clip.in_place = self.in_place
 
@@ -1383,12 +1517,18 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
                 obj,
                 existing_clip,
                 prompt=self.prompt,
-                temperature=self.temperature,
                 model=self.model,
                 in_place=self.in_place,
                 duration=requested_frame_count / get_fps(),
             )
-            _configure_attempt_constraints(new_attempt, **constraint_options)
+            _configure_attempt_constraints(
+                new_attempt,
+                constraint_records,
+                num_frames=requested_frame_count,
+                text_weight=settings.constraint_text_weight,
+                constraint_weight=settings.constraint_weight,
+                first_heading=settings.constraint_first_heading,
+            )
             existing_strip.action = action
             existing_strip.action_slot = slot
             _move_generation_cursor(settings, existing_strip.frame_end_ui)
@@ -1405,7 +1545,6 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         new_clip = obj.avacapo_clips.clips.add()
         new_clip.prompt = self.prompt
         new_clip.name = new_clip.create_name()
-        new_clip.temperature = self.temperature
         new_clip.model = self.model
         new_clip.in_place = self.in_place
 
@@ -1421,12 +1560,18 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
             obj,
             new_clip,
             prompt=self.prompt,
-            temperature=self.temperature,
             model=self.model,
             in_place=self.in_place,
             duration=requested_frame_count / get_fps(),
         )
-        _configure_attempt_constraints(new_attempt, **constraint_options)
+        _configure_attempt_constraints(
+            new_attempt,
+            constraint_records,
+            num_frames=requested_frame_count,
+            text_weight=settings.constraint_text_weight,
+            constraint_weight=settings.constraint_weight,
+            first_heading=settings.constraint_first_heading,
+        )
 
         # add the attempt to queue and start fetching it
         # GlobalQueue.add_attempt(new_attempt.uid)
@@ -1485,40 +1630,35 @@ class AVACAPO_OT_new_attempt(bpy.types.Operator):
             return {"CANCELLED"}
 
         source_attempt = next(
-            (
-                attempt
-                for attempt in clip.attempts
-                if attempt.uid == clip.active_attempt
-            ),
+            (attempt for attempt in clip.attempts if attempt.uid == clip.active_attempt),
             None,
         )
         if source_attempt is None:
             self.report({"ERROR"}, "Active take not found.")
             return {"CANCELLED"}
-        if (
-            source_attempt.use_constraints
-            and source_attempt.constraint_input == "POSE"
-            and constraint_utils.get_constraint_payload(source_attempt.uid) is None
+        source_constraint_records = _attempt_constraint_records(source_attempt)
+        if any(
+            record["constraint_input"] == "POSE"
+            and constraint_utils.get_constraint_payload(record["payload_key"]) is None
+            for record in source_constraint_records
         ):
             self.report(
                 {"ERROR"},
-                "Pose constraint is no longer in memory; create a new constrained clip.",
+                "A pose constraint is no longer in memory; create a new constrained clip.",
             )
             return {"CANCELLED"}
+
+        frame_count = _frame_count_from_bounds(nla_strip.frame_start_ui, nla_strip.frame_end_ui)
 
         new_attempt, action, slot = _create_attempt_for_clip(
             obj,
             clip,
             prompt=clip.prompt,
-            temperature=clip.temperature,
             model=clip.model,
             in_place=clip.in_place,
-            duration=_frame_count_from_bounds(
-                nla_strip.frame_start_ui, nla_strip.frame_end_ui
-            )
-            / get_fps(),
+            duration=frame_count / get_fps(),
         )
-        _copy_attempt_constraints(source_attempt, new_attempt)
+        _copy_attempt_constraints(source_attempt, new_attempt, num_frames=frame_count)
 
         nla_strip.action = action
         nla_strip.action_slot = slot
@@ -1772,7 +1912,28 @@ class AVACAPO_OT_OpenTextPopover(bpy.types.Operator):
 # Registration
 # --------------------------------------------------------------------
 
+
+@persistent
+def _migrate_generation_mode(_unused=None) -> None:
+    scenes = getattr(bpy.data, "scenes", None)
+    if scenes is None:
+        return None
+
+    for scene in scenes:
+        settings = getattr(scene, "avacapo_settings", None)
+        if settings is None:
+            continue
+        try:
+            mode = settings.generation_mode
+        except (TypeError, ValueError):
+            mode = ""
+        if mode not in {"STANDARD", "INBETWEEN"}:
+            settings.generation_mode = "STANDARD"
+    return None
+
+
 _classes = [
+    AvacapoConstraint,
     AvacapoSettings,
     AvacapoAttempt,
     AvacapoClip,
@@ -1781,6 +1942,12 @@ _classes = [
     AVACAPO_OT_paste_token,
     AVACAPO_OT_disconnect,
     AVACAPO_OT_reload_addon,
+    AVACAPO_OT_begin_constraint,
+    AVACAPO_OT_cancel_constraint,
+    AVACAPO_OT_edit_constraint,
+    AVACAPO_OT_remove_constraint,
+    AVACAPO_OT_clear_constraints,
+    AVACAPO_OT_save_constraint,
     AVACAPO_OT_add_clip,
     AVACAPO_OT_new_attempt,
     AVACAPO_OT_fetch,
@@ -1804,6 +1971,10 @@ def register() -> None:
     bpy.types.Object.avacapo_clips = bpy.props.PointerProperty(type=AvacapoClips)
     bpy.app.handlers.frame_change_post.append(frame_change_post)
     bpy.app.handlers.depsgraph_update_post.append(rig_utils._init_bone_trees_once)
+    if _migrate_generation_mode not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_migrate_generation_mode)
+    if not bpy.app.timers.is_registered(_migrate_generation_mode):
+        bpy.app.timers.register(_migrate_generation_mode, first_interval=0.0)
     start_update_check(force=True)
 
 
@@ -1817,3 +1988,7 @@ def unregister() -> None:
     bpy.app.handlers.frame_change_post.remove(frame_change_post)
     if rig_utils._init_bone_trees_once in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(rig_utils._init_bone_trees_once)
+    if _migrate_generation_mode in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_migrate_generation_mode)
+    if bpy.app.timers.is_registered(_migrate_generation_mode):
+        bpy.app.timers.unregister(_migrate_generation_mode)
