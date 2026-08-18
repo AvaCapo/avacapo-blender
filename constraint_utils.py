@@ -62,6 +62,10 @@ def get_constraint_payload(key: str) -> bytes | None:
     return _constraint_payloads.get(key)
 
 
+def remove_constraint_payload(key: str) -> None:
+    _constraint_payloads.pop(key, None)
+
+
 def clear_constraint_payloads() -> None:
     _constraint_payloads.clear()
 
@@ -106,9 +110,6 @@ def output_frame_count(settings) -> int:
 
 
 def validate_constraint_settings(context: bpy.types.Context, settings) -> str | None:
-    if settings.generation_mode != "CONSTRAINTS":
-        return None
-
     num_frames = output_frame_count(settings)
     if settings.constraint_type not in CONSTRAINT_TYPES:
         return "Invalid constraint type"
@@ -143,6 +144,49 @@ def validate_constraint_settings(context: bpy.types.Context, settings) -> str | 
     target_frame = int(settings.constraint_target_frame)
     if not 0 <= target_frame < num_frames:
         return f"Target Frame must be between 0 and {num_frames - 1}"
+    return None
+
+
+def validate_saved_constraints(settings) -> str | None:
+    """Validate constraints already captured for the next generation request."""
+
+    num_frames = output_frame_count(settings)
+    direction_count = 0
+
+    for index, constraint in enumerate(settings.constraints, start=1):
+        label = f"Constraint {index}"
+        if constraint.constraint_type not in CONSTRAINT_TYPES:
+            return f"{label}: invalid constraint type"
+        if constraint.constraint_type == "end-effector":
+            joint_names = set(constraint.constraint_joint_name)
+            if not joint_names or not joint_names.issubset(END_EFFECTOR_NAMES):
+                return f"{label}: select at least one end-effector joint"
+
+        if constraint.constraint_input == "DIRECTION":
+            direction_count += 1
+            if direction_count > 1:
+                return "Only one direction constraint can be added"
+            direction = np.asarray(constraint.direction, dtype=np.float64)
+            if direction.shape != (3,) or not np.isfinite(direction).all():
+                return f"{label}: direction must contain three finite values"
+            if float(np.linalg.norm(direction)) <= 1.0e-8:
+                return f"{label}: direction cannot be zero"
+            continue
+
+        if constraint.constraint_input != "POSE":
+            return f"{label}: invalid input type"
+        if constraint.source_frame_count <= 0:
+            return f"{label}: pose source is empty"
+        if not 0 <= constraint.source_frame < constraint.source_frame_count:
+            return (
+                f"{label}: Source Frame must be between 0 and "
+                f"{constraint.source_frame_count - 1}"
+            )
+        if not 0 <= constraint.target_frame < num_frames:
+            return f"{label}: Target Frame must be between 0 and {num_frames - 1}"
+        if get_constraint_payload(constraint.uid) is None:
+            return f"{label}: captured pose is no longer in memory"
+
     return None
 
 
