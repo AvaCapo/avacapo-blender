@@ -1,12 +1,10 @@
 from bpy.utils import escape_identifier
 import bpy
-import tempfile
-import os
 import uuid
 import math
-from io_anim_bvh.import_bvh import read_bvh, sorted_nodes
 from mathutils import Matrix, Euler, Quaternion, Vector
 from bpy_extras import anim_utils
+from broom.bvh.schemas import BVHDocument
 
 from .logger import log
 from .rig_utils import infer_rig_type
@@ -20,12 +18,16 @@ from .retarget_maps import (
 config = Config()
 
 
-def apply_animation(obj: bpy.types.Object, bvh_bytes, action: bpy.types.Action):
+def apply_animation(
+    obj: bpy.types.Object,
+    document: BVHDocument,
+    action: bpy.types.Action,
+) -> None:
     match infer_rig_type(obj):
         case "avacapo_bvh_v1":
-            apply_bvh(obj, bvh_bytes, action)
+            apply_bvh(obj, document, action)
         case "mixamo":
-            apply_bvh_to_mixamo(obj, bvh_bytes, action)
+            apply_bvh_to_mixamo(obj, document, action)
         case _:
             log.error(f"cannot apply animation to {infer_rig_type}")
 
@@ -475,7 +477,9 @@ def _bake_target_action(
 
 
 def apply_bvh_to_mixamo(
-    target_obj: bpy.types.Object, bvh_bytes, target_action: bpy.types.Action
+    target_obj: bpy.types.Object,
+    document: BVHDocument,
+    target_action: bpy.types.Action,
 ) -> None:
     reset_pose_transforms(target_obj)
 
@@ -492,7 +496,7 @@ def apply_bvh_to_mixamo(
     constraints_to_remove: list[tuple[bpy.types.PoseBone, str]] = []
 
     try:
-        apply_bvh(source_obj, bvh_bytes, source_action)
+        apply_bvh(source_obj, document, source_action)
         constraints_to_remove = _retarget_mixamo_constraints(source_obj, target_obj)
         log.info(f"Mixamo retarget constraints created: {len(constraints_to_remove)}")
         if len(constraints_to_remove) < 6:
@@ -609,14 +613,19 @@ def offset_root_location(
     return True
 
 
-def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
+def apply_bvh(
+    skeleton: bpy.types.Object,
+    document: BVHDocument,
+    action: bpy.types.Action,
+) -> None:
+    """Apply an in-memory BVH document to an action without temporary files."""
+
     action_slot = action.slots[f"OB{skeleton.name}"]
-    """which is the final step - just apply animation"""
-    log.debug(f"""
-        applying animation:
-        {skeleton.name}
-        {len(bvh_bytes)}
-    """)
+    log.debug(
+        "Applying %s in-memory BVH frames to %s",
+        document.frame_count,
+        skeleton.name,
+    )
 
     first_bone = next(iter(skeleton.pose.bones), None)
     if first_bone and first_bone.rotation_mode == "QUATERNION":
@@ -633,22 +642,28 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
     else:
         rotate_mode = "NATIVE"
 
-    with tempfile.NamedTemporaryFile(suffix=".bvh", delete=False) as f:
-        f.write(bvh_bytes)
-        tmp = f.name
-    bvh_nodes, bvh_frame_time, _ = read_bvh(bpy.context, tmp)
-    os.unlink(tmp)
-
-    bvh_nodes_list = sorted_nodes(bvh_nodes)
     arm_data = skeleton.data
     pose_bones = skeleton.pose.bones
+    rotation_orders: dict[str, str] = {}
 
-    for bvh_node in bvh_nodes_list:
-        pose_bone = pose_bones.get(bvh_node.name)
+    for joint in document.joints:
+        pose_bone = pose_bones.get(joint.name)
         if pose_bone is None:
             continue
+
+        rotation_order = "".join(
+            channel[0].upper()
+            for channel in joint.channels
+            if channel.endswith("rotation")
+        )
+        if rotation_order and len(rotation_order) != 3:
+            raise ValueError(
+                f"Joint {joint.name!r} must have three BVH rotation channels"
+            )
+        rotation_orders[joint.name] = rotation_order or "XYZ"
+
         if rotate_mode == "NATIVE":
-            pose_bone.rotation_mode = bvh_node.rot_order_str
+            pose_bone.rotation_mode = rotation_orders[joint.name]
         elif rotate_mode == "QUATERNION":
             pose_bone.rotation_mode = "QUATERNION"
         else:
@@ -662,83 +677,127 @@ def apply_bvh(skeleton: bpy.types.Object, bvh_bytes, action):
     skeleton.animation_data.action = action
     skeleton.animation_data.action_slot = action_slot
 
-    # Keep the very first BVH sample so the clip starts from the true source pose.
-    skip_frame = 0
-    num_frame = len(next(iter(bvh_nodes_list)).anim_data) - skip_frame
-    time = [float(1 + i) for i in range(num_frame)]
+    frame_count = document.frame_count
+    keyframe_times = [float(1 + index) for index in range(frame_count)]
 
-    for bvh_node in bvh_nodes_list:
-        pose_bone = pose_bones.get(bvh_node.name)
+    for joint in document.joints:
+        pose_bone = pose_bones.get(joint.name)
         if pose_bone is None:
             continue
 
-        bone_rest_matrix = arm_data.bones[bvh_node.name].matrix_local.to_3x3()
+        bone_rest_matrix = arm_data.bones[joint.name].matrix_local.to_3x3()
         bone_rest_matrix_inv = Matrix(bone_rest_matrix)
         bone_rest_matrix_inv.invert()
         bone_rest_matrix_inv.resize_4x4()
         bone_rest_matrix.resize_4x4()
 
-        if bvh_node.has_loc:
-            data_path = 'pose.bones["%s"].location' % escape_identifier(bvh_node.name)
-            location = [
-                (
-                    bone_rest_matrix_inv
-                    @ Matrix.Translation(
-                        Vector(bvh_node.anim_data[frame_i + skip_frame][:3])
-                        - bvh_node.rest_head_local
+        position_channels = {
+            channel[0].upper(): joint.channel_start + offset
+            for offset, channel in enumerate(joint.channels)
+            if channel.endswith("position")
+        }
+        if position_channels:
+            data_path = 'pose.bones["%s"].location' % escape_identifier(joint.name)
+            locations = []
+            for frame_index in range(frame_count):
+                source_location = Vector(
+                    tuple(
+                        float(
+                            document.motion_values[
+                                frame_index,
+                                position_channels[axis],
+                            ]
+                        )
+                        if axis in position_channels
+                        else 0.0
+                        for axis in "XYZ"
                     )
-                ).to_translation()
-                for frame_i in range(num_frame)
-            ]
-            for axis_i in range(3):
-                curve = channelbag.fcurves.new(
-                    data_path=data_path, index=axis_i, group_name=bvh_node.name
                 )
-                curve.keyframe_points.add(num_frame)
-                for frame_i in range(num_frame):
-                    curve.keyframe_points[frame_i].co = (
-                        time[frame_i],
-                        location[frame_i][axis_i],
-                    )
-                    curve.keyframe_points[frame_i].interpolation = "LINEAR"
+                locations.append(
+                    (
+                        bone_rest_matrix_inv
+                        @ Matrix.Translation(source_location - Vector(joint.offset))
+                    ).to_translation()
+                )
 
-        if bvh_node.has_rot:
+            for axis_index in range(3):
+                curve = channelbag.fcurves.new(
+                    data_path=data_path,
+                    index=axis_index,
+                    group_name=joint.name,
+                )
+                curve.keyframe_points.add(frame_count)
+                for frame_index in range(frame_count):
+                    curve.keyframe_points[frame_index].co = (
+                        keyframe_times[frame_index],
+                        locations[frame_index][axis_index],
+                    )
+                    curve.keyframe_points[frame_index].interpolation = "LINEAR"
+
+        rotation_channels = {
+            channel[0].upper(): joint.channel_start + offset
+            for offset, channel in enumerate(joint.channels)
+            if channel.endswith("rotation")
+        }
+        if not rotation_channels:
+            continue
+
+        if rotate_mode == "QUATERNION":
+            data_path = 'pose.bones["%s"].rotation_quaternion' % escape_identifier(
+                joint.name
+            )
+            channel_count = 4
+        else:
+            data_path = 'pose.bones["%s"].rotation_euler' % escape_identifier(
+                joint.name
+            )
+            channel_count = 3
+
+        rotations = []
+        previous_euler = Euler((0.0, 0.0, 0.0))
+        for frame_index in range(frame_count):
+            source_rotation = tuple(
+                math.radians(
+                    float(
+                        document.motion_values[
+                            frame_index,
+                            rotation_channels[axis],
+                        ]
+                    )
+                )
+                for axis in "XYZ"
+            )
+            bone_rotation_matrix = (
+                bone_rest_matrix_inv
+                @ Euler(
+                    source_rotation,
+                    rotation_orders[joint.name][::-1],
+                ).to_matrix().to_4x4()
+                @ bone_rest_matrix
+            )
             if rotate_mode == "QUATERNION":
-                data_path = 'pose.bones["%s"].rotation_quaternion' % escape_identifier(
-                    bvh_node.name
-                )
-                num_channels = 4
+                rotations.append(bone_rotation_matrix.to_quaternion())
             else:
-                data_path = 'pose.bones["%s"].rotation_euler' % escape_identifier(bvh_node.name)
-                num_channels = 3
-
-            rotate = []
-            prev_euler = Euler((0.0, 0.0, 0.0))
-            for frame_i in range(num_frame):
-                bvh_rot = bvh_node.anim_data[frame_i + skip_frame][3:]
-                bone_rotation_matrix = (
-                    bone_rest_matrix_inv
-                    @ Euler(bvh_rot, bvh_node.rot_order_str[::-1]).to_matrix().to_4x4()
-                    @ bone_rest_matrix
+                rotation = bone_rotation_matrix.to_euler(
+                    pose_bone.rotation_mode,
+                    previous_euler,
                 )
-                if rotate_mode == "QUATERNION":
-                    rotate.append(bone_rotation_matrix.to_quaternion())
-                else:
-                    r = bone_rotation_matrix.to_euler(pose_bone.rotation_mode, prev_euler)
-                    rotate.append(r)
-                    prev_euler = r
+                rotations.append(rotation)
+                previous_euler = rotation
 
-            for axis_i in range(num_channels):
-                curve = channelbag.fcurves.new(
-                    data_path=data_path, index=axis_i, group_name=bvh_node.name
+        for axis_index in range(channel_count):
+            curve = channelbag.fcurves.new(
+                data_path=data_path,
+                index=axis_index,
+                group_name=joint.name,
+            )
+            curve.keyframe_points.add(frame_count)
+            for frame_index in range(frame_count):
+                curve.keyframe_points[frame_index].co = (
+                    keyframe_times[frame_index],
+                    rotations[frame_index][axis_index],
                 )
-                curve.keyframe_points.add(num_frame)
-                for frame_i in range(num_frame):
-                    curve.keyframe_points[frame_i].co = (
-                        time[frame_i],
-                        rotate[frame_i][axis_i],
-                    )
-                    curve.keyframe_points[frame_i].interpolation = "LINEAR"
+                curve.keyframe_points[frame_index].interpolation = "LINEAR"
 
 
 # why obj_name and not obj? because threading and stale data:
