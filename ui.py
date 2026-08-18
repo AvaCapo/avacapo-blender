@@ -20,90 +20,137 @@ def _draw_constraint_settings(
     context: bpy.types.Context,
     settings,
 ) -> str | None:
-    if settings.generation_mode != "CONSTRAINTS":
-        return None
-
     constraint_box = layout.box()
-    disclosure_icon = (
-        "TRIA_DOWN" if settings.show_constraint_settings else "TRIA_RIGHT"
-    )
+    disclosure_icon = "TRIA_DOWN" if settings.show_constraint_settings else "TRIA_RIGHT"
     header = constraint_box.row(align=True)
     header.prop(
         settings,
         "show_constraint_settings",
-        text="Constraint Settings",
+        text=f"Constraints ({len(settings.constraints)})",
         icon=disclosure_icon,
         emboss=False,
     )
 
-    validation_error = constraint_utils.validate_constraint_settings(context, settings)
+    saved_error = constraint_utils.validate_saved_constraints(settings)
+    draft_error = None
     if settings.show_constraint_settings:
-        constraint_box.prop(settings, "constraint_input", expand=True)
-        constraint_box.prop(settings, "constraint_type")
-        if settings.constraint_type == "end-effector":
-            constraint_box.prop(settings, "constraint_joint_name", expand=True)
-
-        if settings.constraint_input == "POSE":
-            constraint_box.prop(settings, "constraint_source_armature")
-            if settings.constraint_source_armature is None:
-                source = constraint_utils.source_armature(context, settings)
-                source_name = source.name if source is not None else "None"
-                constraint_box.label(
-                    text=f"Using active armature: {source_name}",
-                    icon="INFO",
+        for index, constraint in enumerate(settings.constraints):
+            row = constraint_box.row(align=True)
+            if constraint.constraint_input == "POSE":
+                summary = (
+                    f"{index + 1}. Pose | {constraint.constraint_type} | "
+                    f"{constraint.source_frame} -> {constraint.target_frame}"
                 )
+            else:
+                summary = f"{index + 1}. Direction"
+            row.label(text=summary, icon="CONSTRAINT")
+            edit = row.operator("avacapo.edit_constraint", text="", icon="PREFERENCES")
+            edit.constraint_index = index
+            remove = row.operator("avacapo.remove_constraint", text="", icon="X")
+            remove.constraint_index = index
 
-            constraint_box.prop(settings, "constraint_pose_source", expand=True)
-            source_count = constraint_utils.source_frame_count(
-                context.scene, settings.constraint_pose_source
+        actions = constraint_box.row(align=True)
+        actions.enabled = not settings.show_constraint_editor
+        actions.operator("avacapo.begin_constraint", text="Add Constraint", icon="ADD")
+        if settings.constraints:
+            actions.operator("avacapo.clear_constraints", text="Clear All", icon="TRASH")
+
+        if settings.show_constraint_editor:
+            editor = constraint_box.box()
+            editor.label(
+                text=(
+                    "Edit Constraint" if settings.constraint_edit_index >= 0 else "New Constraint"
+                ),
+                icon="CONSTRAINT",
             )
-            if settings.constraint_pose_source == "PREVIEW_RANGE":
-                if context.scene.use_preview_range:
-                    constraint_box.label(
-                        text=(
-                            f"Timeline {context.scene.frame_preview_start}.."
-                            f"{context.scene.frame_preview_end} ({source_count} frames)"
-                        ),
-                        icon="PREVIEW_RANGE",
+            editor.prop(settings, "constraint_input", expand=True)
+            editor.prop(settings, "constraint_type")
+            if settings.constraint_type == "end-effector":
+                editor.prop(settings, "constraint_joint_name", expand=True)
+
+            if settings.constraint_input == "POSE":
+                editor.prop(settings, "constraint_source_armature")
+                if settings.constraint_source_armature is None:
+                    source = constraint_utils.source_armature(context, settings)
+                    source_name = source.name if source is not None else "None"
+                    editor.label(
+                        text=f"Using active armature: {source_name}",
+                        icon="INFO",
                     )
-                else:
-                    warning = constraint_box.row()
-                    warning.alert = True
-                    warning.label(text="Set a Timeline Preview Range (P)", icon="ERROR")
 
-            source_row = constraint_box.row()
-            source_row.enabled = source_count > 1
-            source_row.alert = source_count > 1 and not (
-                0 <= settings.constraint_source_frame < source_count
-            )
-            source_row.prop(settings, "constraint_source_frame")
-
-            target_row = constraint_box.row()
-            num_frames = constraint_utils.output_frame_count(settings)
-            target_row.alert = not (
-                0 <= settings.constraint_target_frame < num_frames
-            )
-            target_row.prop(settings, "constraint_target_frame")
-            if settings.constraint_target_error:
-                target_warning = constraint_box.row()
-                target_warning.alert = True
-                target_warning.label(
-                    text=settings.constraint_target_error,
-                    icon="ERROR",
+                editor.prop(settings, "constraint_pose_source", expand=True)
+                source_count = constraint_utils.source_frame_count(
+                    context.scene, settings.constraint_pose_source
                 )
-        else:
-            constraint_box.prop(settings, "constraint_direction")
+                if settings.constraint_pose_source == "PREVIEW_RANGE":
+                    if context.scene.use_preview_range:
+                        editor.label(
+                            text=(
+                                f"Timeline {context.scene.frame_preview_start}.."
+                                f"{context.scene.frame_preview_end} ({source_count} frames)"
+                            ),
+                            icon="PREVIEW_RANGE",
+                        )
+                    else:
+                        warning = editor.row()
+                        warning.alert = True
+                        warning.label(text="Set a Timeline Preview Range (P)", icon="ERROR")
 
+                source_row = editor.row()
+                source_row.enabled = source_count > 1
+                source_row.alert = source_count > 1 and not (
+                    0 <= settings.constraint_source_frame < source_count
+                )
+                source_row.prop(settings, "constraint_source_frame")
+
+                target_row = editor.row()
+                num_frames = constraint_utils.output_frame_count(settings)
+                target_row.alert = not (0 <= settings.constraint_target_frame < num_frames)
+                target_row.prop(settings, "constraint_target_frame")
+                if settings.constraint_target_error:
+                    target_warning = editor.row()
+                    target_warning.alert = True
+                    target_warning.label(
+                        text=settings.constraint_target_error,
+                        icon="ERROR",
+                    )
+            else:
+                editor.prop(settings, "constraint_direction")
+
+            draft_error = constraint_utils.validate_constraint_settings(context, settings)
+            if draft_error:
+                error_row = editor.row()
+                error_row.alert = True
+                error_row.label(text=draft_error, icon="ERROR")
+
+            editor_actions = editor.row(align=True)
+            editor_actions.enabled = draft_error is None
+            editor_actions.operator(
+                "avacapo.save_constraint",
+                text=(
+                    "Update Constraint"
+                    if settings.constraint_edit_index >= 0
+                    else "Save Constraint"
+                ),
+                icon="CHECKMARK",
+            )
+            cancel = editor.row(align=True)
+            cancel.operator("avacapo.cancel_constraint", text="Cancel", icon="X")
+
+        constraint_box.separator(type="LINE")
+        constraint_box.label(text="Generation Weights", icon="SETTINGS")
         weights = constraint_box.row(align=True)
         weights.prop(settings, "constraint_text_weight")
         weights.prop(settings, "constraint_weight")
         constraint_box.prop(settings, "constraint_first_heading")
 
-    if validation_error:
+    if saved_error:
         error_row = constraint_box.row()
         error_row.alert = True
-        error_row.label(text=validation_error, icon="ERROR")
-    return validation_error
+        error_row.label(text=saved_error, icon="ERROR")
+    if settings.show_constraint_editor:
+        return draft_error or "Save or cancel the current constraint"
+    return saved_error
 
 
 def _draw_update_notice(layout: bpy.types.UILayout) -> None:
@@ -177,7 +224,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 text="",
                 icon="MESH_UVSPHERE",
             )
-            return  
+            return
 
         box_obj = layout.box()
         box_obj.operator(
@@ -257,7 +304,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                     row.separator()
                     row.separator()
                     row.prop(settings, "end", text="", expand=True)
-                
+
                 box_prompt.separator(type="LINE")
                 row_desc = box_prompt.row(align=True)
                 row_desc.label(text="Prompt:", icon="TEXT")
@@ -299,9 +346,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                         error_row.alert = True
                         error_row.label(text=generation_error, icon="ERROR")
                 else:
-                    generation_error = _draw_constraint_settings(
-                        box_prompt, context, settings
-                    )
+                    generation_error = _draw_constraint_settings(box_prompt, context, settings)
                     row = box_prompt.row(align=True)
                     row.prop(settings, "transition", text="Transition")
                 if State.server_busy:
@@ -330,19 +375,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                         add_clip_op.transition = settings.transition
                         add_clip_op.fadein = settings.fadein
                         add_clip_op.fadeout = settings.fadeout
-                        add_clip_op.temperature = settings.temperature
                         add_clip_op.model = settings.model
                         add_clip_op.in_place = settings.in_place
-                        add_clip_op.generation_mode = settings.generation_mode
-                        add_clip_op.constraint_input = settings.constraint_input
-                        add_clip_op.constraint_type = settings.constraint_type
-                        add_clip_op.constraint_joint_name = settings.constraint_joint_name
-                        add_clip_op.constraint_source_frame = settings.constraint_source_frame
-                        add_clip_op.constraint_target_frame = settings.constraint_target_frame
-                        add_clip_op.constraint_text_weight = settings.constraint_text_weight
-                        add_clip_op.constraint_weight = settings.constraint_weight
-                        add_clip_op.constraint_first_heading = settings.constraint_first_heading
-                        add_clip_op.constraint_direction = settings.constraint_direction
 
                 if "Error" in State.server_status:
                     layout.label(text=State.server_status, icon="ERROR")
@@ -427,7 +461,6 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     row.prop(nla_strip, "use_auto_blend", text="auto fade")
     box_attempts = box.box()
     row = box_attempts.row()
-    row.prop(clip, "temperature")
     row.prop(clip, "model")
     row = box_attempts.row()
     row.prop(clip, "in_place", text="In Place")
@@ -441,7 +474,22 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
         None,
     )
     if active_attempt is not None:
-        if active_attempt.use_constraints:
+        if active_attempt.constraints:
+            box_attempts.label(
+                text=f"Constraints: {len(active_attempt.constraints)}",
+                icon="CONSTRAINT",
+            )
+            for constraint in active_attempt.constraints:
+                if constraint.constraint_input == "POSE":
+                    label = (
+                        f"Pose | {constraint.constraint_type} | "
+                        f"{constraint.source_frame} -> {constraint.target_frame}"
+                    )
+                else:
+                    label = "Direction"
+                box_attempts.label(text=label, icon="CONSTRAINT")
+        elif active_attempt.use_constraints:
+            # Compatibility with takes saved before multiple constraints.
             constraint_label = (
                 "Pose constraint"
                 if active_attempt.constraint_input == "POSE"
@@ -465,10 +513,7 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
         if conversion is not None:
             size_kib = len(conversion) / 1024.0
             box_attempts.label(
-                text=(
-                    f"SMPL-X in memory:"
-                    f"{size_kib:.1f} KiB"
-                ),
+                text=(f"SMPL-X in memory:" f"{size_kib:.1f} KiB"),
                 icon="CHECKMARK",
             )
     if State.server_busy:
@@ -484,4 +529,3 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
         op = button_row.operator("avacapo.select_attempt", text=attempt.name, depress=is_active)
         op.attempt_uid = attempt.uid
         op.clip_uid = clip.name
-
