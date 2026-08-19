@@ -63,7 +63,7 @@ def get_animation(
     except requests.RequestException as exc:
         log.error(f"Animation request failed: {exc}")
         raise RuntimeError("Failed to fetch animation from server.") from exc
-        
+
     return response.content
 
 
@@ -71,57 +71,73 @@ def get_animation_constraints(
     name: str | None = None,
     prompt: str = "",
     num_frames: int = 150,
-    constraint_type: str = "fullbody",
-    source_frame: int = 0,
-    target_frame: int | None = None,
-    joint_name: list[str] | None = None,
+    pose_constraints: list[dict] | None = None,
+    motion_files: list[bytes] | None = None,
     seed: int = 42,
     text_weight: float = 2.0,
     constraint_weight: float = 2.5,
     first_heading: float = 0.0,
     direction: list[float] | None = None,
-    constraint_pose: bytes | None = None,
     model: str = "gen2",
     in_place: bool = False,
 ):
-    """send prompt to server with constraints, get animation back"""
+    """Send generation input and zero or more captured pose constraints."""
 
     num_frames = int(num_frames)
-    source_frame = int(source_frame)
     if num_frames <= 0:
         raise ValueError("num_frames must be positive.")
-    if constraint_type not in config.CONSTRAINT_TYPES:
-        raise ValueError(
-            f"Invalid constraint_type: {constraint_type}. "
-            f"Must be one of {sorted(config.CONSTRAINT_TYPES)}."
-        )
-    joint_names = list(joint_name or [])
 
-    if constraint_type == "end-effector":
-        invalid_joint_names = [
-            name for name in joint_names if name not in config.END_EFFECTOR_JOINTS
-        ]
-        if not joint_names or invalid_joint_names:
+    raw_pose_constraints = list(pose_constraints or [])
+    motion_payloads = list(motion_files or [])
+    if len(raw_pose_constraints) != len(motion_payloads):
+        raise ValueError("Each pose constraint must have exactly one motion file.")
+
+    normalized_pose_constraints: list[dict] = []
+    for index, raw_constraint in enumerate(raw_pose_constraints):
+        constraint_type = str(raw_constraint.get("constraint_type", ""))
+        if constraint_type not in config.CONSTRAINT_TYPES:
             raise ValueError(
-                f"Invalid joint_name: {joint_names}. "
-                "Select one or more values from "
-                f"{sorted(config.END_EFFECTOR_JOINTS)}."
+                f"Invalid constraint_type: {constraint_type}. "
+                f"Must be one of {sorted(config.CONSTRAINT_TYPES)}."
             )
-    else:
-        joint_names = []
 
-    if (target_frame is None) and (constraint_pose is not None):
-        raise ValueError("target_frame must be provided when constraint_pose is given.")
-    if (constraint_pose is None) and (target_frame is not None):
-        raise ValueError("constraint_pose must be provided when target_frame is given.")
-    if constraint_pose is not None:
-        target_frame = int(target_frame)
+        source_frame = int(raw_constraint.get("source_frame", 0))
+        target_frame = int(raw_constraint.get("target_frame", 0))
         if source_frame < 0:
             raise ValueError("source_frame must be non-negative.")
         if not 0 <= target_frame < num_frames:
-            raise ValueError(
-                f"target_frame must be between 0 and {num_frames - 1}."
-            )
+            raise ValueError(f"target_frame must be between 0 and {num_frames - 1}.")
+
+        joint_names = list(raw_constraint.get("joint_names") or [])
+        if constraint_type == "end-effector":
+            invalid_joint_names = [
+                joint_name
+                for joint_name in joint_names
+                if joint_name not in config.END_EFFECTOR_JOINTS
+            ]
+            if not joint_names or invalid_joint_names:
+                raise ValueError(
+                    f"Invalid joint_names: {joint_names}. "
+                    "Select one or more values from "
+                    f"{sorted(config.END_EFFECTOR_JOINTS)}."
+                )
+        else:
+            joint_names = []
+
+        payload = motion_payloads[index]
+        if not isinstance(payload, bytes) or not payload:
+            raise ValueError(f"motion_files[{index}] must contain NPZ bytes.")
+
+        normalized_constraint = {
+            "motion_file_index": index,
+            "source_frame": source_frame,
+            "target_frame": target_frame,
+            "constraint_type": constraint_type,
+        }
+        if joint_names:
+            normalized_constraint["joint_names"] = joint_names
+        normalized_pose_constraints.append(normalized_constraint)
+
     if direction is not None:
         direction = [float(value) for value in direction]
         if len(direction) != 3 or not all(math.isfinite(value) for value in direction):
@@ -151,10 +167,7 @@ def get_animation_constraints(
         "model": model,
         "num_frames": num_frames,
         "direction": direction,
-        "constraint_type": constraint_type,
-        "source_frame": source_frame,
-        "target_frame": target_frame,
-        "joint_names": joint_names,
+        "pose_constraints": normalized_pose_constraints,
         "seed": seed,
         "text_weight": text_weight,
         "constraint_weight": constraint_weight,
@@ -170,21 +183,22 @@ def get_animation_constraints(
             ensure_ascii=False,
         ),
     }
-    if constraint_pose is not None:
-        files = {
-            "motion_file": (
-                "pose.npz",
-                constraint_pose,
+    files = [
+        (
+            "motion_files",
+            (
+                f"constraint_{index + 1}.npz",
+                payload,
                 "application/octet-stream",
             ),
-        }
-    else:
-        files = None
+        )
+        for index, payload in enumerate(motion_payloads)
+    ]
     try:
         response = requests.post(
             config.GENERATION_CONSTRAINTS_URL,
             data=data,
-            files=files,
+            files=files or None,
             timeout=config.REQUEST_TIMEOUT,
         )
         response.raise_for_status()
