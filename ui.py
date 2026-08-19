@@ -41,6 +41,20 @@ def _draw_constraint_settings(
                     f"{index + 1}. Pose | {constraint.constraint_type} | "
                     f"{constraint.source_frame} -> {constraint.target_frame}"
                 )
+            elif constraint.constraint_input == "OBJECT_TARGET":
+                joint_names = constraint_utils.selected_joint_names(
+                    constraint.constraint_joint_name
+                )
+                joint_name = joint_names[0] if joint_names else "End Effector"
+                target_name = (
+                    constraint.target_object.name
+                    if constraint.target_object is not None
+                    else "captured target"
+                )
+                summary = (
+                    f"{index + 1}. {joint_name} -> {target_name} | "
+                    f"frame {constraint.target_frame}"
+                )
             else:
                 summary = f"{index + 1}. Direction"
             row.label(text=summary, icon="CONSTRAINT")
@@ -64,11 +78,14 @@ def _draw_constraint_settings(
                 icon="CONSTRAINT",
             )
             editor.prop(settings, "constraint_input", expand=True)
-            editor.prop(settings, "constraint_type")
-            if settings.constraint_type == "end-effector":
-                editor.prop(settings, "constraint_joint_name", expand=True)
+            if settings.constraint_input == "OBJECT_TARGET":
+                editor.prop(settings, "constraint_object_target_joint", expand=True)
+            else:
+                editor.prop(settings, "constraint_type")
+                if settings.constraint_type == "end-effector":
+                    editor.prop(settings, "constraint_joint_name", expand=True)
 
-            if settings.constraint_input == "POSE":
+            if settings.constraint_input in {"POSE", "OBJECT_TARGET"}:
                 editor.prop(settings, "constraint_source_armature")
                 if settings.constraint_source_armature is None:
                     source = constraint_utils.source_armature(context, settings)
@@ -78,6 +95,7 @@ def _draw_constraint_settings(
                         icon="INFO",
                     )
 
+            if settings.constraint_input == "POSE":
                 editor.prop(settings, "constraint_pose_source", expand=True)
                 source_count = constraint_utils.source_frame_count(
                     context.scene, settings.constraint_pose_source
@@ -102,6 +120,25 @@ def _draw_constraint_settings(
                     0 <= settings.constraint_source_frame < source_count
                 )
                 source_row.prop(settings, "constraint_source_frame")
+
+                target_row = editor.row()
+                num_frames = constraint_utils.output_frame_count(settings)
+                target_row.alert = not (0 <= settings.constraint_target_frame < num_frames)
+                target_row.prop(settings, "constraint_target_frame")
+                if settings.constraint_target_error:
+                    target_warning = editor.row()
+                    target_warning.alert = True
+                    target_warning.label(
+                        text=settings.constraint_target_error,
+                        icon="ERROR",
+                    )
+            elif settings.constraint_input == "OBJECT_TARGET":
+                editor.prop(settings, "constraint_target_object")
+                editor.prop(settings, "constraint_target_offset")
+                editor.label(
+                    text="Tip: place an Empty at the exact contact point",
+                    icon="EMPTY_AXIS",
+                )
 
                 target_row = editor.row()
                 num_frames = constraint_utils.output_frame_count(settings)
@@ -484,6 +521,20 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
                     label = (
                         f"Pose | {constraint.constraint_type} | "
                         f"{constraint.source_frame} -> {constraint.target_frame}"
+                    )
+                elif constraint.constraint_input == "OBJECT_TARGET":
+                    joint_names = constraint_utils.selected_joint_names(
+                        constraint.constraint_joint_name
+                    )
+                    joint_name = joint_names[0] if joint_names else "End Effector"
+                    target_name = (
+                        constraint.target_object.name
+                        if constraint.target_object is not None
+                        else "captured target"
+                    )
+                    label = (
+                        f"{joint_name} -> {target_name} | "
+                        f"frame {constraint.target_frame}"
                     )
                 else:
                     label = "Direction"

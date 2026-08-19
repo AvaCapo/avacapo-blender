@@ -105,6 +105,15 @@ class AvacapoConstraint(bpy.types.PropertyGroup):
         type=bpy.types.Object,
         poll=constraint_utils.armature_poll,
     )
+    target_object: bpy.props.PointerProperty(
+        type=bpy.types.Object,
+        poll=constraint_utils.object_target_poll,
+    )
+    target_offset: bpy.props.FloatVectorProperty(
+        default=(0.0, 0.0, 0.0),
+        size=3,
+        subtype="TRANSLATION",
+    )
     pose_source: bpy.props.StringProperty(default="CURRENT_POSE")
     source_frame: bpy.props.IntProperty(default=0, min=0)
     source_frame_count: bpy.props.IntProperty(default=1, min=0)
@@ -252,6 +261,11 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         description="Type of data used to constrain generation",
         items=(
             ("POSE", "Pose", "Use a pose or animation range from an armature"),
+            (
+                "OBJECT_TARGET",
+                "Object Target",
+                "Reach an object or Empty with one hand or foot",
+            ),
             ("DIRECTION", "Direction", "Use a direction vector"),
         ),
         default="POSE",
@@ -269,6 +283,12 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         options={"ENUM_FLAG"},
         default={"LeftFoot"},
     )
+    constraint_object_target_joint: bpy.props.EnumProperty(
+        name="End Effector",
+        description="Single hand or foot that should reach the target",
+        items=constraint_utils.OBJECT_TARGET_ITEMS,
+        default="LeftHand",
+    )
     constraint_source_armature: bpy.props.PointerProperty(
         name="Armature",
         description=(
@@ -276,6 +296,19 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         ),
         type=bpy.types.Object,
         poll=constraint_utils.armature_poll,
+    )
+    constraint_target_object: bpy.props.PointerProperty(
+        name="Target",
+        description="Object origin or Empty used as the end-effector target",
+        type=bpy.types.Object,
+        poll=constraint_utils.object_target_poll,
+    )
+    constraint_target_offset: bpy.props.FloatVectorProperty(
+        name="Target Offset",
+        description="Target-local offset from the selected object's origin",
+        default=(0.0, 0.0, 0.0),
+        size=3,
+        subtype="TRANSLATION",
     )
     constraint_pose_source: bpy.props.EnumProperty(
         name="Pose Source",
@@ -556,6 +589,8 @@ def _constraint_record(constraint) -> dict:
         "constraint_type": str(constraint.constraint_type),
         "joint_names": constraint_utils.selected_joint_names(constraint.constraint_joint_name),
         "source_armature": constraint.source_armature,
+        "target_object": constraint.target_object,
+        "target_offset": tuple(float(value) for value in constraint.target_offset),
         "pose_source": str(constraint.pose_source),
         "source_frame": int(constraint.source_frame),
         "source_frame_count": int(constraint.source_frame_count),
@@ -577,6 +612,8 @@ def _attempt_constraint_records(attempt) -> list[dict]:
             "constraint_type": str(attempt.constraint_type),
             "joint_names": constraint_utils.selected_joint_names(attempt.constraint_joint_name),
             "source_armature": None,
+            "target_object": None,
+            "target_offset": (0.0, 0.0, 0.0),
             "pose_source": "CURRENT_POSE",
             "source_frame": int(attempt.constraint_source_frame),
             "source_frame_count": max(1, int(attempt.constraint_source_frame) + 1),
@@ -609,13 +646,15 @@ def _configure_attempt_constraints(
         stored.constraint_type = record["constraint_type"]
         stored.constraint_joint_name = set(record["joint_names"])
         stored.source_armature = record.get("source_armature")
+        stored.target_object = record.get("target_object")
+        stored.target_offset = record.get("target_offset", (0.0, 0.0, 0.0))
         stored.pose_source = record.get("pose_source", "CURRENT_POSE")
         stored.source_frame = max(0, int(record["source_frame"]))
         stored.source_frame_count = max(0, int(record["source_frame_count"]))
         stored.target_frame = max(0, int(record["target_frame"]))
         stored.direction = record["direction"]
 
-        if stored.constraint_input == "POSE":
+        if stored.constraint_input in {"POSE", "OBJECT_TARGET"}:
             payload = constraint_utils.get_constraint_payload(record["payload_key"])
             if payload is None:
                 raise ValueError("Pose constraint payload is missing")
@@ -1376,7 +1415,18 @@ class AVACAPO_OT_edit_constraint(bpy.types.Operator):
         settings.constraint_input = constraint.constraint_input
         settings.constraint_type = constraint.constraint_type
         settings.constraint_joint_name = set(constraint.constraint_joint_name)
+        object_target_joint_names = constraint_utils.selected_joint_names(
+            constraint.constraint_joint_name
+        )
+        if (
+            object_target_joint_names
+            and object_target_joint_names[0]
+            in constraint_utils.OBJECT_TARGET_CONSTRAINT_TYPES
+        ):
+            settings.constraint_object_target_joint = object_target_joint_names[0]
         settings.constraint_source_armature = constraint.source_armature
+        settings.constraint_target_object = constraint.target_object
+        settings.constraint_target_offset = constraint.target_offset
         settings.constraint_pose_source = constraint.pose_source
         settings.constraint_source_frame = constraint.source_frame
         settings.constraint_target_frame = constraint.target_frame
@@ -1445,6 +1495,8 @@ class AVACAPO_OT_save_constraint(bpy.types.Operator):
         pose_payload = None
         source_frame_count = 0
         source_frame = int(settings.constraint_source_frame)
+        constraint_type = settings.constraint_type
+        joint_names = constraint_utils.selected_joint_names(settings.constraint_joint_name)
         if settings.constraint_input == "POSE":
             source = constraint_utils.source_armature(context, settings)
             try:
@@ -1460,6 +1512,29 @@ class AVACAPO_OT_save_constraint(bpy.types.Operator):
                 return {"CANCELLED"}
             if source_frame_count == 1:
                 source_frame = 0
+        elif settings.constraint_input == "OBJECT_TARGET":
+            source = constraint_utils.source_armature(context, settings)
+            try:
+                joint_name = constraint_utils.object_target_joint_name(
+                    settings.constraint_object_target_joint
+                )
+                joint_names = [joint_name]
+                constraint_type = constraint_utils.object_target_constraint_type(joint_name)
+                pose_payload, source_frame_count = (
+                    constraint_utils.create_object_target_constraint_npz(
+                        context,
+                        source,
+                        settings.constraint_target_object,
+                        joint_name,
+                        settings.constraint_target_offset,
+                    )
+                )
+            except Exception as exc:
+                message = f"Object-target IK conversion failed: {exc}"
+                log.exception(message)
+                self.report({"ERROR"}, message)
+                return {"CANCELLED"}
+            source_frame = 0
 
         if 0 <= edit_index < len(settings.constraints):
             stored = settings.constraints[edit_index]
@@ -1468,12 +1543,24 @@ class AVACAPO_OT_save_constraint(bpy.types.Operator):
             stored.uid = uuid.uuid4().hex
 
         stored.constraint_input = settings.constraint_input
-        stored.constraint_type = settings.constraint_type
-        stored.constraint_joint_name = set(
-            constraint_utils.selected_joint_names(settings.constraint_joint_name)
-        )
+        stored.constraint_type = constraint_type
+        stored.constraint_joint_name = set(joint_names)
         stored.source_armature = source
-        stored.pose_source = settings.constraint_pose_source
+        stored.target_object = (
+            settings.constraint_target_object
+            if settings.constraint_input == "OBJECT_TARGET"
+            else None
+        )
+        stored.target_offset = (
+            settings.constraint_target_offset
+            if settings.constraint_input == "OBJECT_TARGET"
+            else (0.0, 0.0, 0.0)
+        )
+        stored.pose_source = (
+            "CURRENT_POSE"
+            if settings.constraint_input == "OBJECT_TARGET"
+            else settings.constraint_pose_source
+        )
         stored.source_frame = source_frame
         stored.source_frame_count = source_frame_count
         stored.target_frame = int(settings.constraint_target_frame)
@@ -1654,7 +1741,7 @@ class AVACAPO_OT_new_attempt(bpy.types.Operator):
             return {"CANCELLED"}
         source_constraint_records = _attempt_constraint_records(source_attempt)
         if any(
-            record["constraint_input"] == "POSE"
+            record["constraint_input"] in {"POSE", "OBJECT_TARGET"}
             and constraint_utils.get_constraint_payload(record["payload_key"]) is None
             for record in source_constraint_records
         ):
