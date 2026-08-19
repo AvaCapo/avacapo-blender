@@ -11,6 +11,7 @@ from bpy.app.handlers import persistent
 
 from .state_controller import State, frame_change_post
 from .server import (
+    get_animation,
     get_animation_constraints,
     get_animation_inbetween,
     get_fps,
@@ -959,6 +960,8 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
 
         self._request = {
             "prompt": str(attempt.prompt),
+            "duration": float(attempt.duration),
+            "temperature": float(attempt.temperature),
             "num_frames": num_frames,
             "model": str(attempt.model),
             "in_place": bool(attempt.in_place),
@@ -1000,18 +1003,31 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         selected_model = resolve_model_type(request["model"])
         log.debug("Thread started, opening URL...")
         try:
-            raw = get_animation_constraints(
-                prompt=request["prompt"],
-                num_frames=request["num_frames"],
-                pose_constraints=request["pose_constraints"],
-                motion_files=request["motion_files"],
-                text_weight=request["text_weight"],
-                constraint_weight=request["constraint_weight"],
-                first_heading=request["first_heading"],
-                direction=request["direction"],
-                model=selected_model,
-                in_place=request["in_place"],
+            has_constraints = (
+                bool(request["pose_constraints"])
+                or request["direction"] is not None
             )
+            if has_constraints:
+                raw = get_animation_constraints(
+                    prompt=request["prompt"],
+                    num_frames=request["num_frames"],
+                    pose_constraints=request["pose_constraints"],
+                    motion_files=request["motion_files"],
+                    text_weight=request["text_weight"],
+                    constraint_weight=request["constraint_weight"],
+                    first_heading=request["first_heading"],
+                    direction=request["direction"],
+                    model=selected_model,
+                    in_place=request["in_place"],
+                )
+            else:
+                raw = get_animation(
+                    prompt=request["prompt"],
+                    duration=request["duration"],
+                    temperature=request["temperature"],
+                    model=selected_model,
+                    in_place=request["in_place"],
+                )
             log.debug("Raw BVH response received: %s bytes", len(raw))
             self._result = raw
         except Exception as e:
