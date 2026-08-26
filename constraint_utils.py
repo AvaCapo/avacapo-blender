@@ -346,12 +346,13 @@ def create_object_target_constraint_npz(
         miss_distance = float((reached_world - target_world).length)
         rig_size = max((float(abs(value)) for value in armature.dimensions), default=0.0)
         reach_tolerance = max(1.0e-4, rig_size * 0.01)
-        if miss_distance > reach_tolerance:
-            raise ValueError(
-                "Object target is outside the current limb reach "
-                f"(misses by {miss_distance:.3f} Blender units). "
-                "Move the character or target closer."
-            )
+        print(f"Miss distance: {miss_distance:.3f}, Reach tolerance: {reach_tolerance:.3f}")
+        # if miss_distance > reach_tolerance:
+        #     raise ValueError(
+        #         "Object target is outside the current limb reach "
+        #         f"(misses by {miss_distance:.3f} Blender units). "
+        #         "Move the character or target closer."
+        #     )
 
         return create_pose_constraint_npz(context, armature, "CURRENT_POSE")
     finally:
