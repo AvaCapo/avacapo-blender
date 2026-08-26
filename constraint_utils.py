@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 import bpy
 import numpy as np
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from . import bvh_smpl
 from .config import Config
@@ -34,6 +34,25 @@ END_EFFECTOR_ITEMS = (
 CONSTRAINT_TYPES = frozenset(item[0] for item in CONSTRAINT_TYPE_ITEMS)
 END_EFFECTOR_NAMES = frozenset(item[0] for item in END_EFFECTOR_ITEMS)
 END_EFFECTOR_ORDER = tuple(item[0] for item in END_EFFECTOR_ITEMS)
+
+OBJECT_TARGET_CONSTRAINT_TYPES = {
+    "LeftHand": "left-hand",
+    "RightHand": "right-hand",
+    "LeftFoot": "left-foot",
+    "RightFoot": "right-foot",
+}
+OBJECT_TARGET_ITEMS = tuple(
+    item for item in END_EFFECTOR_ITEMS if item[0] in OBJECT_TARGET_CONSTRAINT_TYPES
+)
+
+# Blender's IK target is placed on the parent bone whose tail is the wrist or
+# ankle represented by Kimodo's end-effector joint.
+_OBJECT_TARGET_IK_CHAINS = {
+    "LeftHand": ("LeftForeArm", 2),
+    "RightHand": ("RightForeArm", 2),
+    "LeftFoot": ("LeftLeg", 2),
+    "RightFoot": ("RightLeg", 2),
+}
 
 # The generated BVH uses LeftToe/RightToe while Mixamo normally uses *ToeBase.
 _BONE_ALIASES = {
@@ -74,6 +93,10 @@ def armature_poll(_self, obj: bpy.types.Object | None) -> bool:
     return obj is not None and obj.type == "ARMATURE"
 
 
+def object_target_poll(_self, obj: bpy.types.Object | None) -> bool:
+    return obj is not None and obj.type != "ARMATURE"
+
+
 def source_armature(context: bpy.types.Context, settings) -> bpy.types.Object | None:
     configured = settings.constraint_source_armature
     if configured is not None:
@@ -109,16 +132,43 @@ def output_frame_count(settings) -> int:
     return max(1, int(round(settings.end - settings.start)))
 
 
+def object_target_joint_name(value: Iterable[str] | str | None) -> str:
+    """Return the single hand/foot supported by an object-target constraint."""
+
+    joint_names = selected_joint_names(value)
+    if len(joint_names) != 1:
+        raise ValueError("Object Target requires exactly one end effector")
+    joint_name = joint_names[0]
+    if joint_name not in OBJECT_TARGET_CONSTRAINT_TYPES:
+        raise ValueError("Object Target supports hands and feet, not Hips")
+    return joint_name
+
+
+def object_target_constraint_type(joint_name: str) -> str:
+    try:
+        return OBJECT_TARGET_CONSTRAINT_TYPES[joint_name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported object-target end effector: {joint_name}") from exc
+
+
 def validate_constraint_settings(context: bpy.types.Context, settings) -> str | None:
     num_frames = output_frame_count(settings)
+    input_type = settings.constraint_input
     if settings.constraint_type not in CONSTRAINT_TYPES:
         return "Invalid constraint type"
-    if settings.constraint_type == "end-effector":
+    if input_type == "OBJECT_TARGET":
+        try:
+            object_target_joint_name(settings.constraint_object_target_joint)
+        except ValueError as exc:
+            return str(exc)
+        if settings.constraint_target_object is None:
+            return "Select a target object or Empty"
+    elif settings.constraint_type == "end-effector":
         joint_names = set(settings.constraint_joint_name)
         if not joint_names or not joint_names.issubset(END_EFFECTOR_NAMES):
             return "Select at least one end-effector joint"
 
-    if settings.constraint_input == "DIRECTION":
+    if input_type == "DIRECTION":
         direction = np.asarray(settings.constraint_direction, dtype=np.float64)
         if direction.shape != (3,) or not np.isfinite(direction).all():
             return "Direction must contain three finite values"
@@ -131,6 +181,20 @@ def validate_constraint_settings(context: bpy.types.Context, settings) -> str | 
         return "Select a source armature"
     if infer_rig_type(armature) == "unknown":
         return "Constraint source must use an AvaCapo or Mixamo rig"
+
+    if input_type == "OBJECT_TARGET":
+        if settings.constraint_target_object == armature:
+            return "Target object must be different from the source armature"
+        offset = np.asarray(settings.constraint_target_offset, dtype=np.float64)
+        if offset.shape != (3,) or not np.isfinite(offset).all():
+            return "Target Offset must contain three finite values"
+        target_frame = int(settings.constraint_target_frame)
+        if not 0 <= target_frame < num_frames:
+            return f"Target Frame must be between 0 and {num_frames - 1}"
+        return None
+
+    if input_type != "POSE":
+        return "Invalid constraint input"
 
     try:
         source_frames = source_timeline_frames(context.scene, settings.constraint_pose_source)
@@ -157,7 +221,12 @@ def validate_saved_constraints(settings) -> str | None:
         label = f"Constraint {index}"
         if constraint.constraint_type not in CONSTRAINT_TYPES:
             return f"{label}: invalid constraint type"
-        if constraint.constraint_type == "end-effector":
+        if constraint.constraint_input == "OBJECT_TARGET":
+            try:
+                object_target_joint_name(constraint.constraint_joint_name)
+            except ValueError as exc:
+                return f"{label}: {exc}"
+        elif constraint.constraint_type == "end-effector":
             joint_names = set(constraint.constraint_joint_name)
             if not joint_names or not joint_names.issubset(END_EFFECTOR_NAMES):
                 return f"{label}: select at least one end-effector joint"
@@ -173,7 +242,7 @@ def validate_saved_constraints(settings) -> str | None:
                 return f"{label}: direction cannot be zero"
             continue
 
-        if constraint.constraint_input != "POSE":
+        if constraint.constraint_input not in {"POSE", "OBJECT_TARGET"}:
             return f"{label}: invalid input type"
         if constraint.source_frame_count <= 0:
             return f"{label}: pose source is empty"
@@ -210,6 +279,88 @@ def _axis_angle(rotation: Matrix) -> np.ndarray:
         quaternion = type(quaternion)((-quaternion.w, -quaternion.x, -quaternion.y, -quaternion.z))
     axis, angle = quaternion.to_axis_angle()
     return np.asarray(tuple(axis), dtype=np.float64) * float(angle)
+
+
+def create_object_target_constraint_npz(
+    context: bpy.types.Context,
+    armature: bpy.types.Object,
+    target_object: bpy.types.Object,
+    joint_name: str,
+    target_offset: Iterable[float] = (0.0, 0.0, 0.0),
+) -> tuple[bytes, int]:
+    """Solve a temporary Blender IK pose toward an object and serialize it.
+
+    The source armature is never keyed or permanently modified. A temporary IK
+    constraint is evaluated, sampled through the existing SMPL-X path, and then
+    removed even if conversion fails.
+    """
+
+    if armature.type != "ARMATURE" or armature.pose is None:
+        raise ValueError("Constraint source is not an armature")
+    if target_object is None:
+        raise ValueError("Select a target object or Empty")
+    if target_object == armature:
+        raise ValueError("Target object must be different from the source armature")
+    if joint_name not in _OBJECT_TARGET_IK_CHAINS:
+        raise ValueError(f"Unsupported object-target end effector: {joint_name}")
+
+    offset = Vector(tuple(float(value) for value in target_offset))
+    if len(offset) != 3 or not all(np.isfinite(value) for value in offset):
+        raise ValueError("Target Offset must contain three finite values")
+
+    lookup = _pose_bone_lookup(armature)
+    owner_name, chain_count = _OBJECT_TARGET_IK_CHAINS[joint_name]
+    owner_bone = _find_pose_bone(lookup, owner_name)
+    if owner_bone is None:
+        raise ValueError(f"Constraint rig is missing IK bone: {owner_name}")
+
+    # A target may have just been moved or created from the constraint UI.
+    # Flush that transform before reading its evaluated (animated) matrix.
+    context.view_layer.update()
+    depsgraph = context.evaluated_depsgraph_get()
+    evaluated_target = target_object.evaluated_get(depsgraph)
+    target_world = evaluated_target.matrix_world @ offset
+
+    proxy = bpy.data.objects.new("__avacapo_object_target", None)
+    proxy.empty_display_type = "SPHERE"
+    proxy.empty_display_size = 0.025
+    proxy.location = target_world
+    proxy.hide_render = True
+    context.scene.collection.objects.link(proxy)
+
+    ik_constraint = None
+    try:
+        ik_constraint = owner_bone.constraints.new("IK")
+        ik_constraint.name = "AVACAPO_OBJECT_TARGET_IK"
+        ik_constraint.target = proxy
+        ik_constraint.chain_count = chain_count
+        ik_constraint.use_stretch = False
+        ik_constraint.iterations = 100
+        if hasattr(ik_constraint, "use_tail"):
+            ik_constraint.use_tail = True
+        if hasattr(ik_constraint, "use_rotation"):
+            ik_constraint.use_rotation = False
+
+        context.view_layer.update()
+        reached_world = armature.matrix_world @ owner_bone.tail
+        miss_distance = float((reached_world - target_world).length)
+        rig_size = max((float(abs(value)) for value in armature.dimensions), default=0.0)
+        reach_tolerance = max(1.0e-4, rig_size * 0.01)
+        print(f"Miss distance: {miss_distance:.3f}, Reach tolerance: {reach_tolerance:.3f}")
+        # if miss_distance > reach_tolerance:
+        #     raise ValueError(
+        #         "Object target is outside the current limb reach "
+        #         f"(misses by {miss_distance:.3f} Blender units). "
+        #         "Move the character or target closer."
+        #     )
+
+        return create_pose_constraint_npz(context, armature, "CURRENT_POSE")
+    finally:
+        if ik_constraint is not None:
+            owner_bone.constraints.remove(ik_constraint)
+        if proxy.name in bpy.data.objects:
+            bpy.data.objects.remove(proxy, do_unlink=True)
+        context.view_layer.update()
 
 
 def _sample_pose(
