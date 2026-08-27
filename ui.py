@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from .config import Config
 from .storage import Storage
+from . import animation_utils
 from . import bvh_smpl
 from . import constraint_utils
 from . import rig_utils
@@ -317,11 +318,14 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                         icon="ARMATURE_DATA",
                     )
                 box_prompt = layout.box()
-                if settings.generation_mode == "INBETWEEN":
+                if (
+                    settings.generation_mode == "INBETWEEN"
+                    and settings.inbetween_source_mode == "ARMATURES"
+                ):
                     row_top = box_prompt.row(align=True)
                     row_top.label(text="Inbetween Duration", icon="TIME")
                     row_top.prop(settings, "duration", text="Seconds")
-                else:
+                elif settings.generation_mode != "INBETWEEN":
                     row_top = box_prompt.row(align=True)
                     col = row_top.row(align=True)
                     col.label(text="Start", icon="KEYFRAME")
@@ -357,26 +361,72 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 if settings.generation_mode == "INBETWEEN":
                     inbetween_box = box_prompt.box()
                     inbetween_box.label(text="Inbetween Sources", icon="ARMATURE_DATA")
-                    inbetween_box.prop(settings, "inbetween_left_armature")
-                    inbetween_box.prop(settings, "inbetween_right_armature")
-                    gap_frames = int(round(settings.duration * get_fps()))
-                    inbetween_box.label(
-                        text=f"Generated gap: {gap_frames} frames",
-                        icon="TIME",
-                    )
+                    inbetween_box.prop(settings, "inbetween_source_mode", expand=True)
 
-                    left_obj = settings.inbetween_left_armature
-                    right_obj = settings.inbetween_right_armature
-                    if left_obj is None or right_obj is None:
-                        generation_error = "Select both source armatures"
-                    elif left_obj == right_obj:
-                        generation_error = "Source armatures must be different"
-                    elif rig_utils.infer_rig_type(left_obj) == "unknown":
-                        generation_error = "First Armature is not supported"
-                    elif rig_utils.infer_rig_type(right_obj) == "unknown":
-                        generation_error = "Second Armature is not supported"
-                    elif gap_frames <= 0:
-                        generation_error = "Duration must be positive"
+                    if settings.inbetween_source_mode == "TIMELINE":
+                        action, selected_frames = (
+                            animation_utils.selected_action_keyframe_frames(armature)
+                        )
+                        if action is None:
+                            generation_error = "Active armature has no active Action"
+                        elif action.library is not None:
+                            generation_error = "Active Action is linked and read-only"
+                        elif len(selected_frames) != 2:
+                            generation_error = "Select keys on exactly two frames"
+                        elif any(
+                            abs(frame - round(frame)) > 1e-6
+                            for frame in selected_frames
+                        ):
+                            generation_error = "Selected keys must be on whole frames"
+                        else:
+                            left_frame, right_frame = (
+                                int(round(frame)) for frame in selected_frames
+                            )
+                            gap_frames = right_frame - left_frame - 1
+                            if gap_frames <= 0:
+                                generation_error = "Leave an empty frame between the keys"
+                            elif not animation_utils.bracketed_pose_curve_count(
+                                armature,
+                                action,
+                                left_frame,
+                                right_frame,
+                            ):
+                                generation_error = (
+                                    "Anchor frames must key the same pose channel"
+                                )
+                            else:
+                                inbetween_box.label(
+                                    text=(
+                                        f"{action.name}: {left_frame} -> {right_frame} "
+                                        f"({gap_frames} generated frames)"
+                                    ),
+                                    icon="KEYFRAME_HLT",
+                                )
+                        inbetween_box.label(
+                            text="Select both anchor keys in Timeline, Dope Sheet, or Graph Editor",
+                            icon="INFO",
+                        )
+                    else:
+                        inbetween_box.prop(settings, "inbetween_left_armature")
+                        inbetween_box.prop(settings, "inbetween_right_armature")
+                        gap_frames = int(round(settings.duration * get_fps()))
+                        inbetween_box.label(
+                            text=f"Generated gap: {gap_frames} frames",
+                            icon="TIME",
+                        )
+
+                        left_obj = settings.inbetween_left_armature
+                        right_obj = settings.inbetween_right_armature
+                        if left_obj is None or right_obj is None:
+                            generation_error = "Select both source armatures"
+                        elif left_obj == right_obj:
+                            generation_error = "Source armatures must be different"
+                        elif rig_utils.infer_rig_type(left_obj) == "unknown":
+                            generation_error = "First Armature is not supported"
+                        elif rig_utils.infer_rig_type(right_obj) == "unknown":
+                            generation_error = "Second Armature is not supported"
+                        elif gap_frames <= 0:
+                            generation_error = "Duration must be positive"
 
                     if generation_error:
                         error_row = inbetween_box.row()

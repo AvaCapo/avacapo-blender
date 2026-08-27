@@ -306,6 +306,14 @@ def get_cached_bvh_document(action_name: str) -> BVHDocument | None:
     return sanitized
 
 
+def invalidate_cached_action(action_name: str) -> None:
+    """Discard cached source data after an action is edited in Blender."""
+
+    with _cache_lock:
+        _source_documents.pop(action_name, None)
+        _converted_payloads.pop(action_name, None)
+
+
 def convert_cached_action_range(
     action_name: str,
     *,
