@@ -406,13 +406,9 @@ def _sample_pose(
     return body_pose, np.asarray(tuple(root_translation), dtype=np.float32)
 
 
-def create_pose_constraint_npz(
-    context: bpy.types.Context,
+def _resolved_smpl_pose_bones(
     armature: bpy.types.Object,
-    source_mode: str,
-) -> tuple[bytes, int]:
-    """Sample an evaluated Blender pose/range and return an in-memory SMPL-X NPZ."""
-
+) -> list[bpy.types.PoseBone]:
     if armature.type != "ARMATURE" or armature.pose is None:
         raise ValueError("Constraint source is not an armature")
     if infer_rig_type(armature) == "unknown":
@@ -430,14 +426,26 @@ def create_pose_constraint_npz(
     ]
     if missing:
         raise ValueError("Constraint rig is missing bones: " + ", ".join(missing))
-    resolved_pose_bones = [pose_bone for pose_bone in pose_bones if pose_bone is not None]
+    return [pose_bone for pose_bone in pose_bones if pose_bone is not None]
 
-    frames = source_timeline_frames(context.scene, source_mode)
+
+def _serialize_pose_samples(
+    context: bpy.types.Context,
+    armature: bpy.types.Object,
+    resolved_pose_bones: Iterable[bpy.types.PoseBone],
+    frames: Iterable[int],
+    *,
+    use_current_evaluation: bool = False,
+) -> tuple[bytes, int]:
+    sample_frames = [int(frame) for frame in frames]
+    if not sample_frames:
+        raise ValueError("At least one timeline frame is required")
+
     previous_frame = int(context.scene.frame_current)
     poses: list[np.ndarray] = []
     translations: list[np.ndarray] = []
 
-    if source_mode == "CURRENT_POSE":
+    if use_current_evaluation:
         # Do not call ``frame_set`` here: re-evaluating the same frame can
         # discard an artist's unkeyed pose edits.
         context.view_layer.update()
@@ -446,7 +454,7 @@ def create_pose_constraint_npz(
         translations.append(translation)
     else:
         try:
-            for frame in frames:
+            for frame in sample_frames:
                 context.scene.frame_set(frame)
                 context.view_layer.update()
                 pose, translation = _sample_pose(armature, resolved_pose_bones)
@@ -456,7 +464,7 @@ def create_pose_constraint_npz(
             context.scene.frame_set(previous_frame)
             context.view_layer.update()
 
-    frame_count = len(frames)
+    frame_count = len(sample_frames)
     body_poses = np.stack(poses, axis=0)
     result = {
         "poses": np.concatenate(
@@ -468,3 +476,37 @@ def create_pose_constraint_npz(
         "betas": np.zeros(16, dtype=np.float32),
     }
     return bvh_smpl.create_smpl_npz_bytes(result), frame_count
+
+
+def create_pose_constraint_npz_at_frames(
+    context: bpy.types.Context,
+    armature: bpy.types.Object,
+    frames: Iterable[int],
+) -> tuple[bytes, int]:
+    """Sample explicit evaluated timeline frames into an in-memory SMPL-X NPZ."""
+
+    resolved_pose_bones = _resolved_smpl_pose_bones(armature)
+    return _serialize_pose_samples(
+        context,
+        armature,
+        resolved_pose_bones,
+        frames,
+    )
+
+
+def create_pose_constraint_npz(
+    context: bpy.types.Context,
+    armature: bpy.types.Object,
+    source_mode: str,
+) -> tuple[bytes, int]:
+    """Sample an evaluated Blender pose/range and return an in-memory SMPL-X NPZ."""
+
+    resolved_pose_bones = _resolved_smpl_pose_bones(armature)
+    frames = source_timeline_frames(context.scene, source_mode)
+    return _serialize_pose_samples(
+        context,
+        armature,
+        resolved_pose_bones,
+        frames,
+        use_current_evaluation=source_mode == "CURRENT_POSE",
+    )

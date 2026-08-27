@@ -244,6 +244,25 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         type=bpy.types.Object,
         poll=constraint_utils.armature_poll,
     )
+    inbetween_source_mode: bpy.props.EnumProperty(
+        name="Inbetween Source",
+        description="Choose two armatures or two selected keyframes in the active action",
+        items=(
+            (
+                "ARMATURES",
+                "Two Armatures",
+                "Generate between animations on two different armatures",
+                0,
+            ),
+            (
+                "TIMELINE",
+                "Selected Keyframes",
+                "Insert generated motion between two selected keyframes of the active armature",
+                1,
+            ),
+        ),
+        default="ARMATURES",
+    )
     show_constraint_settings: bpy.props.BoolProperty(
         name="Constraints",
         description="Show or hide saved constraints",
@@ -708,8 +727,14 @@ def _tag_ui_redraw(context: bpy.types.Context | None = None) -> None:
     if screen is None:
         return
 
+    animation_editor_types = {
+        "VIEW_3D",
+        "DOPESHEET_EDITOR",
+        "GRAPH_EDITOR",
+        "NLA_EDITOR",
+    }
     for area in screen.areas:
-        if area.type == "VIEW_3D":
+        if area.type in animation_editor_types:
             area.tag_redraw()
 
 
@@ -1105,6 +1130,10 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
     _request = None
     _left_document = None
     _right_document = None
+    _source_mode = "ARMATURES"
+    _timeline_action_name = None
+    _timeline_left_frame = None
+    _timeline_right_frame = None
 
     def modal(self, context, event):
         if event.type != "TIMER":
@@ -1143,25 +1172,74 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
             return {"CANCELLED"}
 
         settings = context.scene.avacapo_settings
+        self._source_mode = str(settings.inbetween_source_mode)
+        self._left_document = None
+        self._right_document = None
+        self._timeline_action_name = None
+        self._timeline_left_frame = None
+        self._timeline_right_frame = None
+
+        if self._source_mode == "TIMELINE":
+            prepared = self._prepare_timeline_request(context, settings)
+        else:
+            prepared = self._prepare_armature_request(context, settings)
+        if prepared is None:
+            return {"CANCELLED"}
+
+        left_payload, right_payload, gap_frames, request_name = prepared
+        self._request = {
+            "left_context_pose": left_payload,
+            "right_context_pose": right_payload,
+            "name": request_name,
+            "prompt": str(settings.prompt),
+            "left_frame": 0,
+            "right_frame": 0,
+            "left_context_frames": 1,
+            "right_context_frames": 1,
+            "inbetween_frames": gap_frames,
+            "model": resolve_model_type(settings.model),
+            "in_place": bool(settings.in_place),
+            # Existing animation keeps its heading on the right side. Rotating
+            # only the generated gap would introduce a visible discontinuity.
+            "align_heading": False,
+        }
+        self._result = None
+        self._error = None
+        self._thread = threading.Thread(target=self._fetch, daemon=True)
+
+        State.begin_generation()
+        try:
+            self._thread.start()
+        except Exception as exc:
+            State.end_generation()
+            self.report({"ERROR"}, f"Failed to start inbetween generation: {exc}")
+            return {"CANCELLED"}
+
+        self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        _tag_ui_redraw(context)
+        return {"RUNNING_MODAL"}
+
+    def _prepare_armature_request(self, context, settings):
         left_obj = settings.inbetween_left_armature
         right_obj = settings.inbetween_right_armature
         if left_obj is None or right_obj is None:
             self.report({"ERROR"}, "Select both source armatures")
-            return {"CANCELLED"}
+            return None
         if left_obj == right_obj:
             self.report({"ERROR"}, "First and Second Armature must be different")
-            return {"CANCELLED"}
+            return None
         if rig_utils.infer_rig_type(left_obj) == "unknown":
             self.report({"ERROR"}, "First Armature must use an AvaCapo or Mixamo rig")
-            return {"CANCELLED"}
+            return None
         if rig_utils.infer_rig_type(right_obj) == "unknown":
             self.report({"ERROR"}, "Second Armature must use an AvaCapo or Mixamo rig")
-            return {"CANCELLED"}
+            return None
 
         gap_frames = int(round(float(settings.duration) * get_fps()))
         if gap_frames <= 0:
             self.report({"ERROR"}, "Inbetween duration must be positive")
-            return {"CANCELLED"}
+            return None
 
         try:
             self._left_document = _inbetween_source_document(left_obj)
@@ -1200,42 +1278,82 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
             message = f"Preparing Inbetween input failed: {exc}"
             log.exception(message)
             self.report({"ERROR"}, message)
-            return {"CANCELLED"}
+            return None
 
-        self._request = {
-            "left_context_pose": left_payload,
-            "right_context_pose": right_payload,
-            "name": f"inbetween_{left_obj.name}_{right_obj.name}",
-            "prompt": str(settings.prompt),
-            "left_frame": 0,
-            "right_frame": 0,
-            "left_context_frames": 1,
-            "right_context_frames": 1,
-            "inbetween_frames": gap_frames,
-            "model": resolve_model_type(settings.model),
-            "in_place": bool(settings.in_place),
-            # The final right animation keeps its original heading. Asking the
-            # server to rotate only the gap would create a discontinuity.
-            "align_heading": False,
-        }
         self._left_obj_name = left_obj.name
         self._right_obj_name = right_obj.name
-        self._result = None
-        self._error = None
-        self._thread = threading.Thread(target=self._fetch, daemon=True)
+        return (
+            left_payload,
+            right_payload,
+            gap_frames,
+            f"inbetween_{left_obj.name}_{right_obj.name}",
+        )
 
-        State.begin_generation()
+    def _prepare_timeline_request(self, context, settings):
+        obj = context.object
+        if obj is None or obj.type != "ARMATURE":
+            self.report({"ERROR"}, "Select the armature with the keyframes")
+            return None
+        if rig_utils.infer_rig_type(obj) == "unknown":
+            self.report({"ERROR"}, "Active Armature must use an AvaCapo or Mixamo rig")
+            return None
+
+        action, selected_frames = animation_utils.selected_action_keyframe_frames(obj)
+        if action is None:
+            self.report({"ERROR"}, "The active armature has no active Action")
+            return None
+        if action.library is not None:
+            self.report({"ERROR"}, "The active Action is linked and cannot be edited")
+            return None
+        if len(selected_frames) != 2:
+            self.report({"ERROR"}, "Select keyframes on exactly two timeline frames")
+            return None
+        if any(abs(frame - round(frame)) > 1e-6 for frame in selected_frames):
+            self.report({"ERROR"}, "Selected keyframes must be on whole timeline frames")
+            return None
+
+        left_frame, right_frame = (int(round(frame)) for frame in selected_frames)
+        gap_frames = right_frame - left_frame - 1
+        if gap_frames <= 0:
+            self.report({"ERROR"}, "Leave at least one empty frame between the two keys")
+            return None
+        if not animation_utils.bracketed_pose_curve_count(
+            obj,
+            action,
+            left_frame,
+            right_frame,
+        ):
+            self.report({"ERROR"}, "The anchor frames must key the same pose channel")
+            return None
+
         try:
-            self._thread.start()
+            left_payload, _frame_count = constraint_utils.create_pose_constraint_npz_at_frames(
+                context,
+                obj,
+                [left_frame],
+            )
+            right_payload, _frame_count = constraint_utils.create_pose_constraint_npz_at_frames(
+                context,
+                obj,
+                [right_frame],
+            )
         except Exception as exc:
-            State.end_generation()
-            self.report({"ERROR"}, f"Failed to start inbetween generation: {exc}")
-            return {"CANCELLED"}
+            message = f"Preparing timeline Inbetween input failed: {exc}"
+            log.exception(message)
+            self.report({"ERROR"}, message)
+            return None
 
-        self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
-        context.window_manager.modal_handler_add(self)
-        _tag_ui_redraw(context)
-        return {"RUNNING_MODAL"}
+        self._left_obj_name = obj.name
+        self._right_obj_name = None
+        self._timeline_action_name = action.name
+        self._timeline_left_frame = left_frame
+        self._timeline_right_frame = right_frame
+        return (
+            left_payload,
+            right_payload,
+            gap_frames,
+            f"inbetween_{obj.name}_{left_frame}_{right_frame}",
+        )
 
     def cancel(self, context):
         if self._timer is not None:
@@ -1252,6 +1370,9 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
             log.exception("Unexpected error in inbetween fetch thread")
 
     def _apply_result(self, context) -> int:
+        if self._source_mode == "TIMELINE":
+            return self._apply_timeline_result(context)
+
         left_obj = bpy.data.objects.get(self._left_obj_name)
         if left_obj is None:
             raise ValueError("First Armature was removed while generating")
@@ -1303,6 +1424,71 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
             if right_armature is not None and right_armature.users == 0:
                 bpy.data.armatures.remove(right_armature)
         return combined_document.frame_count
+
+    def _apply_timeline_result(self, context) -> int:
+        obj = bpy.data.objects.get(self._left_obj_name)
+        if obj is None:
+            raise ValueError("Timeline armature was removed while generating")
+        action = bpy.data.actions.get(self._timeline_action_name)
+        if action is None:
+            raise ValueError("Timeline Action was removed while generating")
+
+        gap_document = bvh_smpl.load_bvh_document_from_bytes(self._result)
+        if gap_document.frame_count <= 0:
+            raise ValueError("The generated Inbetween contains no frames")
+
+        temporary_action = bpy.data.actions.new(
+            name=f"__avacapo_timeline_inbetween_{uuid.uuid4().hex[:8]}"
+        )
+        temporary_action.slots.new(obj.id_type, name=obj.name)
+        animation_data = obj.animation_data_create()
+        previous_action = animation_data.action
+        track_mute_states = [track.mute for track in animation_data.nla_tracks]
+        previous_frame = int(context.scene.frame_current)
+
+        try:
+            try:
+                for nla_track in animation_data.nla_tracks:
+                    nla_track.mute = True
+                animation_utils.apply_animation(obj, gap_document, temporary_action)
+            finally:
+                animation_data.action = previous_action
+                for nla_track, was_muted in zip(
+                    animation_data.nla_tracks, track_mute_states
+                ):
+                    nla_track.mute = was_muted
+                context.scene.frame_set(previous_frame)
+                context.view_layer.update()
+
+            inserted_frames = animation_utils.insert_action_range(
+                obj,
+                action,
+                temporary_action,
+                target_frame_start=self._timeline_left_frame + 1,
+                target_frame_end=self._timeline_right_frame - 1,
+                source_frame_count=gap_document.frame_count,
+            )
+            bvh_smpl.invalidate_cached_action(action.name)
+        finally:
+            bpy.data.actions.remove(temporary_action)
+
+        # Make the edited Action visible even if Blender detached or switched
+        # it while the asynchronous server request was running.
+        animation_data.action = action
+        action_slot = animation_utils._action_slot_for_object(action, obj)
+        if animation_data.action_slot != action_slot:
+            animation_data.action_slot = action_slot
+        action.update_tag()
+
+        context.scene.frame_end = max(
+            int(context.scene.frame_end),
+            int(self._timeline_right_frame),
+        )
+        context.scene.frame_set(int(self._timeline_left_frame))
+        context.view_layer.update()
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        return inserted_frames
 
 
 class AVACAPO_OT_convert_smpl_preview_range(bpy.types.Operator):

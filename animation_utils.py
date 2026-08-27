@@ -62,7 +62,8 @@ def freeze_action_pose(
 
     try:
         animation_data.action = action
-        animation_data.action_slot = action_slots[0]
+        if animation_data.action_slot != action_slots[0]:
+            animation_data.action_slot = action_slots[0]
         bpy.context.scene.frame_set(max(1, int(frame)))
         bpy.context.view_layer.update()
 
@@ -438,7 +439,9 @@ def _bake_target_action(
 
     target_obj.animation_data_create()
     target_obj.animation_data.action = action
-    target_obj.animation_data.action_slot = action.slots[f"OB{target_obj.name}"]
+    action_slot = action.slots[f"OB{target_obj.name}"]
+    if target_obj.animation_data.action_slot != action_slot:
+        target_obj.animation_data.action_slot = action_slot
 
     view_layer = bpy.context.view_layer
     selected_objects = list(bpy.context.selected_objects)
@@ -524,14 +527,169 @@ def apply_bvh_to_mixamo(
             _remove_temporary_object(source_obj)
 
 
-def _iter_action_fcurves(action: bpy.types.Action):
-    if hasattr(action, "fcurves"):
+def _iter_action_fcurves(
+    action: bpy.types.Action,
+    action_slot: bpy.types.ActionSlot | None = None,
+):
+    if action_slot is None and hasattr(action, "fcurves"):
         yield from action.fcurves
 
     for layer in getattr(action, "layers", ()):
         for strip in getattr(layer, "strips", ()):
             for channelbag in getattr(strip, "channelbags", ()):
+                if (
+                    action_slot is not None
+                    and channelbag.slot_handle != action_slot.handle
+                ):
+                    continue
                 yield from channelbag.fcurves
+
+
+def selected_action_keyframe_frames(
+    obj: bpy.types.Object,
+) -> tuple[bpy.types.Action | None, list[float]]:
+    """Return the active action and its distinct selected keyframe times."""
+
+    animation_data = obj.animation_data
+    action = animation_data.action if animation_data is not None else None
+    if action is None:
+        return None, []
+    action_slot = getattr(animation_data, "action_slot", None)
+
+    frames = {
+        round(float(keyframe.co.x), 6)
+        for fcurve in _iter_action_fcurves(action, action_slot)
+        for keyframe in fcurve.keyframe_points
+        if keyframe.select_control_point
+    }
+    return action, sorted(frames)
+
+
+def bracketed_pose_curve_count(
+    obj: bpy.types.Object,
+    action: bpy.types.Action,
+    left_frame: float,
+    right_frame: float,
+) -> int:
+    """Count pose FCurves that have keys on both anchor frames."""
+
+    animation_data = obj.animation_data
+    action_slot = None
+    if animation_data is not None and animation_data.action == action:
+        action_slot = getattr(animation_data, "action_slot", None)
+
+    count = 0
+    for fcurve in _iter_action_fcurves(action, action_slot):
+        if not fcurve.data_path.startswith('pose.bones["'):
+            continue
+        keyed_frames = [float(keyframe.co.x) for keyframe in fcurve.keyframe_points]
+        if not any(abs(frame - left_frame) <= 1e-6 for frame in keyed_frames):
+            continue
+        if not any(abs(frame - right_frame) <= 1e-6 for frame in keyed_frames):
+            continue
+        count += 1
+    return count
+
+
+def _action_slot_for_object(
+    action: bpy.types.Action,
+    obj: bpy.types.Object,
+) -> bpy.types.ActionSlot:
+    animation_data = obj.animation_data
+    current_slot = None
+    if animation_data is not None and animation_data.action == action:
+        current_slot = getattr(animation_data, "action_slot", None)
+    if current_slot is not None and any(current_slot == slot for slot in action.slots):
+        return current_slot
+
+    expected_identifier = f"OB{obj.name}"
+    try:
+        return action.slots[expected_identifier]
+    except (KeyError, TypeError):
+        pass
+
+    slots = list(action.slots)
+    if len(slots) == 1:
+        return slots[0]
+    return action.slots.new(obj.id_type, name=obj.name)
+
+
+def insert_action_range(
+    obj: bpy.types.Object,
+    target_action: bpy.types.Action,
+    source_action: bpy.types.Action,
+    *,
+    target_frame_start: int,
+    target_frame_end: int,
+    source_frame_count: int,
+) -> int:
+    """Replace a bracketed action range with uniformly sampled source curves."""
+
+    target_frame_start = int(target_frame_start)
+    target_frame_end = int(target_frame_end)
+    source_frame_count = int(source_frame_count)
+    if target_frame_end < target_frame_start:
+        raise ValueError("Target action range must not be empty")
+    if source_frame_count <= 0:
+        raise ValueError("Source action must contain at least one frame")
+
+    target_slot = _action_slot_for_object(target_action, obj)
+    target_channelbag = anim_utils.action_ensure_channelbag_for_slot(
+        target_action, target_slot
+    )
+    target_curves = {
+        (fcurve.data_path, fcurve.array_index): fcurve
+        for fcurve in target_channelbag.fcurves
+    }
+    left_anchor = float(target_frame_start - 1)
+    right_anchor = float(target_frame_end + 1)
+
+    timeline_frames = list(range(target_frame_start, target_frame_end + 1))
+    target_count = len(timeline_frames)
+    if target_count == 1:
+        source_times = [(source_frame_count + 1.0) * 0.5]
+    else:
+        source_times = [
+            1.0 + (source_frame_count - 1.0) * index / (target_count - 1)
+            for index in range(target_count)
+        ]
+
+    source_slots = list(source_action.slots)
+    source_slot = source_slots[0] if source_slots else None
+    modified_curve_count = 0
+    for source_curve in _iter_action_fcurves(source_action, source_slot):
+        curve_key = (source_curve.data_path, source_curve.array_index)
+        target_curve = target_curves.get(curve_key)
+        if target_curve is None:
+            continue
+
+        keyed_frames = [float(keyframe.co.x) for keyframe in target_curve.keyframe_points]
+        if not any(abs(frame - left_anchor) <= 1e-6 for frame in keyed_frames):
+            continue
+        if not any(abs(frame - right_anchor) <= 1e-6 for frame in keyed_frames):
+            continue
+
+        for keyframe in list(target_curve.keyframe_points):
+            if target_frame_start <= float(keyframe.co.x) <= target_frame_end:
+                target_curve.keyframe_points.remove(keyframe)
+
+        for timeline_frame, source_time in zip(timeline_frames, source_times):
+            keyframe = target_curve.keyframe_points.insert(
+                float(timeline_frame),
+                float(source_curve.evaluate(source_time)),
+                options={"FAST"},
+            )
+            keyframe.interpolation = "LINEAR"
+            keyframe.select_control_point = False
+            keyframe.select_left_handle = False
+            keyframe.select_right_handle = False
+        target_curve.update()
+        modified_curve_count += 1
+
+    if modified_curve_count == 0:
+        raise ValueError("No animation curves have keys on both selected anchor frames")
+
+    return target_count
 
 
 def _root_location_data_path(
@@ -675,7 +833,8 @@ def apply_bvh(
 
     skeleton.animation_data_create()
     skeleton.animation_data.action = action
-    skeleton.animation_data.action_slot = action_slot
+    if skeleton.animation_data.action_slot != action_slot:
+        skeleton.animation_data.action_slot = action_slot
 
     frame_count = document.frame_count
     keyframe_times = [float(1 + index) for index in range(frame_count)]
