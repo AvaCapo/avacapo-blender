@@ -218,6 +218,11 @@ class AvacapoSettings(bpy.types.PropertyGroup):
         description="Generate animation without root motion translation",
         default=False,
     )
+    cycled: bpy.props.BoolProperty(
+        name="Cycled Animation",
+        description="Generate a looping animation",
+        default=False,
+    )
     generation_mode: bpy.props.EnumProperty(
         name="Generation",
         description="Choose motion generation or inbetweening",
@@ -411,6 +416,11 @@ class AvacapoAttempt(bpy.types.PropertyGroup):
         description="Generate animation without root motion translation",
         default=False,
     )
+    cycled: bpy.props.BoolProperty(
+        name="Cycled Animation",
+        description="Generate a looping animation",
+        default=False,
+    )
     prompt: bpy.props.StringProperty()
     duration: bpy.props.FloatProperty()
     constraints: bpy.props.CollectionProperty(type=AvacapoConstraint)
@@ -462,6 +472,11 @@ class AvacapoClip(bpy.types.PropertyGroup):
     in_place: bpy.props.BoolProperty(
         name="In Place",
         description="Generate animation without root motion translation",
+        default=False,
+    )
+    cycled: bpy.props.BoolProperty(
+        name="Cycled Animation",
+        description="Generate a looping animation",
         default=False,
     )
 
@@ -582,6 +597,7 @@ def _create_attempt_for_clip(
     prompt: str,
     model: str,
     in_place: bool,
+    cycled: bool,
     duration: float,
 ):
     new_attempt = clip.attempts.add()
@@ -589,6 +605,7 @@ def _create_attempt_for_clip(
     new_attempt.prompt = prompt
     new_attempt.model = model
     new_attempt.in_place = in_place
+    new_attempt.cycled = cycled
 
     n = len(clip.attempts)
     new_attempt.name = f"Take_{n}_{model}"
@@ -1029,6 +1046,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
             "num_frames": num_frames,
             "model": str(attempt.model),
             "in_place": bool(attempt.in_place),
+            "cycled": bool(attempt.cycled),
             "pose_constraints": pose_constraints,
             "motion_files": motion_files,
             "direction": direction,
@@ -1083,6 +1101,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                     direction=request["direction"],
                     model=selected_model,
                     in_place=request["in_place"],
+                    cycled=request["cycled"],
                 )
             else:
                 raw = get_animation(
@@ -1091,6 +1110,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
                     temperature=request["temperature"],
                     model=selected_model,
                     in_place=request["in_place"],
+                    cycled=request["cycled"],
                 )
             log.debug("Raw BVH response received: %s bytes", len(raw))
             self._result = raw
@@ -1775,6 +1795,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
     fadeout: bpy.props.IntProperty()
     model: bpy.props.StringProperty()
     in_place: bpy.props.BoolProperty()
+    cycled: bpy.props.BoolProperty(default=False)
 
     def execute(self, context):
         if State.server_busy:
@@ -1801,6 +1822,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
             existing_clip.prompt = self.prompt
             existing_clip.model = self.model
             existing_clip.in_place = self.in_place
+            existing_clip.cycled = self.cycled
 
             new_attempt, action, slot = _create_attempt_for_clip(
                 obj,
@@ -1808,6 +1830,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
                 prompt=self.prompt,
                 model=self.model,
                 in_place=self.in_place,
+                cycled=self.cycled,
                 duration=requested_frame_count / get_fps(),
             )
             _configure_attempt_constraints(
@@ -1836,6 +1859,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
         new_clip.name = new_clip.create_name()
         new_clip.model = self.model
         new_clip.in_place = self.in_place
+        new_clip.cycled = self.cycled
 
         # generate new attempt
         clip_start, clip_transition = _chain_start_frame(
@@ -1851,6 +1875,7 @@ class AVACAPO_OT_add_clip(bpy.types.Operator):
             prompt=self.prompt,
             model=self.model,
             in_place=self.in_place,
+            cycled=self.cycled,
             duration=requested_frame_count / get_fps(),
         )
         _configure_attempt_constraints(
@@ -1945,6 +1970,7 @@ class AVACAPO_OT_new_attempt(bpy.types.Operator):
             prompt=clip.prompt,
             model=clip.model,
             in_place=clip.in_place,
+            cycled=clip.cycled,
             duration=frame_count / get_fps(),
         )
         _copy_attempt_constraints(source_attempt, new_attempt, num_frames=frame_count)

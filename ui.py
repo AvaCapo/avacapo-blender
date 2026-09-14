@@ -433,6 +433,8 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                         error_row.alert = True
                         error_row.label(text=generation_error, icon="ERROR")
                 else:
+                    row = box_prompt.row(align=True)
+                    row.prop(settings, "cycled")
                     generation_error = _draw_constraint_settings(box_prompt, context, settings)
                     row = box_prompt.row(align=True)
                     row.prop(settings, "transition", text="Transition")
@@ -464,6 +466,7 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                         add_clip_op.fadeout = settings.fadeout
                         add_clip_op.model = settings.model
                         add_clip_op.in_place = settings.in_place
+                        add_clip_op.cycled = settings.cycled
 
                 if "Error" in State.server_status:
                     layout.label(text=State.server_status, icon="ERROR")
@@ -551,6 +554,8 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
     row.prop(clip, "model")
     row = box_attempts.row()
     row.prop(clip, "in_place", text="In Place")
+    row = box_attempts.row()
+    row.prop(clip, "cycled")
     action_row = box_attempts.row(align=True)
     action_row.enabled = not State.server_busy
     op = action_row.operator("avacapo.new_attempt", text="new take", icon="OUTLINER_OB_CAMERA")

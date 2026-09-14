@@ -32,6 +32,7 @@ def get_animation(
     temperature: float = 1.0,
     model: str = "",
     in_place: bool = False,
+    cycled: bool = False,
 ):
     """send prompt to server, get animation back"""
     model_names = get_models_names()
@@ -53,6 +54,7 @@ def get_animation(
         "extension": "bvh",
         "include_skin": False,
         "in_place": in_place,
+        "cycled": cycled,
     }
     safe_payload = {**payload, "api_token": "***" if payload["api_token"] else ""}
     log.info("Sending request with payload: %s", safe_payload)
@@ -80,6 +82,7 @@ def get_animation_constraints(
     direction: list[float] | None = None,
     model: str = "gen2",
     in_place: bool = False,
+    cycled: bool = False,
 ):
     """Send generation input and zero or more captured pose constraints."""
 
@@ -172,6 +175,7 @@ def get_animation_constraints(
         "text_weight": text_weight,
         "constraint_weight": constraint_weight,
         "first_heading": first_heading,
+        "cycled": cycled,
     }
     data = {
         "api_token": Storage.api_token,
