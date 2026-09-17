@@ -8,6 +8,7 @@ import uuid
 import textwrap
 
 from bpy.app.handlers import persistent
+from broom.bvh import load_bvh_document_from_bytes
 
 from .state_controller import State, frame_change_post
 from .server import (
@@ -17,9 +18,11 @@ from .server import (
     get_fps,
 )
 from . import animation_utils
+from . import bvh_cache
 from . import bvh_smpl
 from . import constraint_utils
 from . import rig_utils
+from . import rig_mapping
 from .storage import Storage
 from .logger import log
 from .config import Config
@@ -800,7 +803,7 @@ def _inbetween_source_document(obj: bpy.types.Object):
         return None
 
     if animation_data.action is not None:
-        return bvh_smpl.get_cached_bvh_document(animation_data.action.name)
+        return bvh_cache.get_cached_bvh_document(animation_data.action.name)
 
     actions = []
     for nla_track in animation_data.nla_tracks:
@@ -817,7 +820,7 @@ def _inbetween_source_document(obj: bpy.types.Object):
     if len(actions) != 1:
         raise ValueError(f"{obj.name} must have exactly one active source clip for Inbetween")
 
-    return bvh_smpl.get_cached_bvh_document(actions[0].name)
+    return bvh_cache.get_cached_bvh_document(actions[0].name)
 
 
 def _align_strip_root_motion(obj: bpy.types.Object, nla_strip: bpy.types.NlaStrip) -> None:
@@ -1127,7 +1130,7 @@ class AVACAPO_OT_fetch(bpy.types.Operator):
         if not action:
             log.debug("no action found")
         else:
-            document = bvh_smpl.cache_bvh_document(action.name, fetch_result)
+            document = bvh_cache.cache_bvh_document(action.name, fetch_result)
             animation_utils.apply_animation(obj, document, action)
             nla_strip = obj.animation_data.nla_tracks[clip_name].strips[clip_name]
             _sync_strip_to_action(nla_strip, action)
@@ -1249,10 +1252,10 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
         if left_obj == right_obj:
             self.report({"ERROR"}, "First and Second Armature must be different")
             return None
-        if rig_utils.infer_rig_type(left_obj) == "unknown":
+        if not rig_utils.supports_smpl_input(left_obj):
             self.report({"ERROR"}, "First Armature must use an AvaCapo or Mixamo rig")
             return None
-        if rig_utils.infer_rig_type(right_obj) == "unknown":
+        if not rig_utils.supports_smpl_input(right_obj):
             self.report({"ERROR"}, "Second Armature must use an AvaCapo or Mixamo rig")
             return None
 
@@ -1314,7 +1317,7 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
         if obj is None or obj.type != "ARMATURE":
             self.report({"ERROR"}, "Select the armature with the keyframes")
             return None
-        if rig_utils.infer_rig_type(obj) == "unknown":
+        if not rig_utils.supports_smpl_input(obj):
             self.report({"ERROR"}, "Active Armature must use an AvaCapo or Mixamo rig")
             return None
 
@@ -1397,7 +1400,7 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
         if left_obj is None:
             raise ValueError("First Armature was removed while generating")
 
-        gap_document = bvh_smpl.load_bvh_document_from_bytes(self._result)
+        gap_document = load_bvh_document_from_bytes(self._result)
         combined_document = bvh_smpl.concatenate_bvh_documents(
             *(
                 document
@@ -1423,7 +1426,7 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
 
         try:
             animation_utils.apply_animation(left_obj, combined_document, action)
-            bvh_smpl.cache_bvh_document(action.name, combined_document)
+            bvh_cache.cache_bvh_document(action.name, combined_document)
             animation_data.action = action
         except Exception:
             animation_data.action = previous_action
@@ -1453,7 +1456,7 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
         if action is None:
             raise ValueError("Timeline Action was removed while generating")
 
-        gap_document = bvh_smpl.load_bvh_document_from_bytes(self._result)
+        gap_document = load_bvh_document_from_bytes(self._result)
         if gap_document.frame_count <= 0:
             raise ValueError("The generated Inbetween contains no frames")
 
@@ -1488,7 +1491,7 @@ class AVACAPO_OT_generate_inbetween(bpy.types.Operator):
                 target_frame_end=self._timeline_right_frame - 1,
                 source_frame_count=gap_document.frame_count,
             )
-            bvh_smpl.invalidate_cached_action(action.name)
+            bvh_cache.invalidate_cached_action(action.name)
         finally:
             bpy.data.actions.remove(temporary_action)
 
@@ -1560,7 +1563,7 @@ class AVACAPO_OT_convert_smpl_preview_range(bpy.types.Operator):
         source_end = int(round(action_end))
 
         try:
-            conversion = bvh_smpl.convert_cached_action_range(
+            conversion = bvh_cache.convert_cached_action_range(
                 action.name,
                 start_frame=source_start,
                 end_frame=source_end,
@@ -2021,6 +2024,67 @@ class AVACAPO_OT_SelectAttempt(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_reapply_mapping(bpy.types.Operator):
+    """Rebake the active take from its cached source BVH without a server call."""
+
+    bl_idname = "avacapo.reapply_mapping"
+    bl_label = "Reapply Mapping"
+    bl_description = "Replace this take's baked Action using the current custom-rig mapping"
+    bl_options = {"REGISTER", "UNDO"}
+
+    clip_name: bpy.props.StringProperty()
+    attempt_uid: bpy.props.StringProperty()
+
+    def execute(self, context):
+        obj = context.object
+        if obj is None or obj.type != "ARMATURE":
+            self.report({"ERROR"}, "Select the armature containing this take.")
+            return {"CANCELLED"}
+        if not rig_mapping.is_valid_mapping(obj):
+            self.report({"ERROR"}, "Save a valid custom rig mapping before reapplying.")
+            return {"CANCELLED"}
+
+        clip = _find_clip_by_name(obj, self.clip_name)
+        attempt = animation_utils.find_attempt(obj.name, self.attempt_uid)
+        if clip is None or attempt is None:
+            self.report({"ERROR"}, "Clip take not found.")
+            return {"CANCELLED"}
+        action = bpy.data.actions.get(attempt.action_name)
+        if action is None:
+            self.report({"ERROR"}, "Take Action not found.")
+            return {"CANCELLED"}
+        source_document = bvh_cache.get_cached_bvh_document(action.name)
+        if source_document is None:
+            self.report(
+                {"ERROR"},
+                "Source BVH is no longer in memory; generate this take again.",
+            )
+            return {"CANCELLED"}
+
+        nla_strip = _get_strip_for_clip(obj, clip)
+        if nla_strip is None:
+            self.report({"ERROR"}, "Clip strip not found.")
+            return {"CANCELLED"}
+
+        try:
+            # The existing Action is deliberately rebaked in place: no new
+            # take or server request is created when the mapping changes.
+            animation_utils.apply_bvh_to_custom_rig(obj, source_document, action)
+            nla_strip.action = action
+            nla_strip.action_slot = action.slots[f"OB{obj.name}"]
+            _sync_strip_to_action(nla_strip, action)
+            _align_strip_root_motion(obj, nla_strip)
+            _realign_following_strips(obj, nla_strip)
+            obj.animation_data.action = None
+        except Exception as exc:
+            log.exception("Reapplying custom rig mapping failed")
+            self.report({"ERROR"}, f"Reapplying mapping failed: {exc}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, "Mapping reapplied to the existing take.")
+        return {"FINISHED"}
+
+
 class AVACAPO_OT_select_by_name(bpy.types.Operator):
     """select object by name"""
 
@@ -2083,11 +2147,20 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
         layout.prop(self, "armature_preset", expand=True)
 
     def _select_created_object(self, context, obj: bpy.types.Object, success_message: str):
-        bpy.ops.object.select_all(action="DESELECT")
+        # This operator can execute from a popup, where bpy.ops.object.select_all
+        # has no valid 3D-view context. Direct view-layer selection is context-safe.
+        for candidate in context.view_layer.objects:
+            candidate.select_set(False)
         obj.select_set(True)
         context.view_layer.objects.active = obj
         self.report({"INFO"}, success_message)
         return {"FINISHED"}
+
+    @staticmethod
+    def _initialize_new_armature_clip_state(obj: bpy.types.Object) -> None:
+        """Start a new armature with its own empty AvaCapo clip list."""
+        if hasattr(obj, "avacapo_clips"):
+            obj.avacapo_clips.clips.clear()
 
     def _append_avacapo_rig(self, context):
         inner_path = "Object"
@@ -2106,6 +2179,7 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
             if obj.name not in existing_object_names and obj.type == "ARMATURE"
         ]
         if created_armatures:
+            self._initialize_new_armature_clip_state(created_armatures[-1])
             return self._select_created_object(
                 context,
                 created_armatures[-1],
@@ -2139,6 +2213,7 @@ class AVACAPO_OT_create_avacapo_v1(bpy.types.Operator):
             return {"CANCELLED"}
 
         obj = created_armatures[-1]
+        self._initialize_new_armature_clip_state(obj)
         obj.name = "mixamo"
         if obj.data is not None:
             obj.data.name = f"{obj.name}_data"
@@ -2275,6 +2350,8 @@ _classes = [
     AVACAPO_OT_toggle_start_record_lock,
     AVACAPO_OT_OpenTextPopover,
     AVACAPO_OT_SelectAttempt,
+    AVACAPO_OT_reapply_mapping,
+    *rig_mapping.MAPPING_CLASSES,
     AVACAPO_PT_main_panel,
 ]
 
@@ -2284,8 +2361,13 @@ def register() -> None:
         bpy.utils.register_class(cls)
     bpy.types.Scene.avacapo_settings = bpy.props.PointerProperty(type=AvacapoSettings)
     bpy.types.Object.avacapo_clips = bpy.props.PointerProperty(type=AvacapoClips)
-    bpy.app.handlers.frame_change_post.append(frame_change_post)
-    bpy.app.handlers.depsgraph_update_post.append(rig_utils._init_bone_trees_once)
+    bpy.types.Object.avacapo_rig_mapping = bpy.props.PointerProperty(
+        type=rig_mapping.AvacapoRigMapping
+    )
+    if frame_change_post not in bpy.app.handlers.frame_change_post:
+        bpy.app.handlers.frame_change_post.append(frame_change_post)
+    if rig_utils._init_bone_trees_once not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(rig_utils._init_bone_trees_once)
     if _migrate_generation_mode not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_migrate_generation_mode)
     if not bpy.app.timers.is_registered(_migrate_generation_mode):
@@ -2294,13 +2376,15 @@ def register() -> None:
 
 
 def unregister() -> None:
-    bvh_smpl.clear_memory_cache()
+    bvh_cache.clear_memory_cache()
     constraint_utils.clear_constraint_payloads()
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.Object.avacapo_clips
+    del bpy.types.Object.avacapo_rig_mapping
     del bpy.types.Scene.avacapo_settings
-    bpy.app.handlers.frame_change_post.remove(frame_change_post)
+    if frame_change_post in bpy.app.handlers.frame_change_post:
+        bpy.app.handlers.frame_change_post.remove(frame_change_post)
     if rig_utils._init_bone_trees_once in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(rig_utils._init_bone_trees_once)
     if _migrate_generation_mode in bpy.app.handlers.load_post:

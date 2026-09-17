@@ -11,7 +11,7 @@ from mathutils import Matrix, Vector
 from . import bvh_smpl
 from .config import Config
 from .retarget_maps import SMPLX_TO_SMPL_BVH, canonical_bone_name
-from .rig_utils import infer_rig_type
+from .rig_utils import supports_smpl_input
 
 
 CONSTRAINT_TYPE_ITEMS = (
@@ -179,7 +179,7 @@ def validate_constraint_settings(context: bpy.types.Context, settings) -> str | 
     armature = source_armature(context, settings)
     if armature is None:
         return "Select a source armature"
-    if infer_rig_type(armature) == "unknown":
+    if not supports_smpl_input(armature):
         return "Constraint source must use an AvaCapo or Mixamo rig"
 
     if input_type == "OBJECT_TARGET":
@@ -411,7 +411,7 @@ def _resolved_smpl_pose_bones(
 ) -> list[bpy.types.PoseBone]:
     if armature.type != "ARMATURE" or armature.pose is None:
         raise ValueError("Constraint source is not an armature")
-    if infer_rig_type(armature) == "unknown":
+    if not supports_smpl_input(armature):
         raise ValueError("Constraint source must use an AvaCapo or Mixamo rig")
 
     lookup = _pose_bone_lookup(armature)

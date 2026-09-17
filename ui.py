@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from .config import Config
 from .storage import Storage
 from . import animation_utils
-from . import bvh_smpl
+from . import bvh_cache
 from . import constraint_utils
 from . import rig_utils
+from . import rig_mapping
 from .server import get_fps
 from .state_controller import State, Queue, STATUS_META
 from .version import version_to_string
@@ -296,12 +297,16 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
 
         else:
             armature = context.object
+            if armature.avacapo_rig_mapping.editing:
+                mapping_box = layout.box()
+                rig_mapping.draw_mapping_editor(mapping_box, armature)
+                return
             rig_type = rig_utils.infer_rig_type(armature)
             box_obj.label(text=f"{context.object.name}", icon="OUTLINER_OB_ARMATURE")
             if rig_type == "unknown":
                 box_obj.label(text="Unknown rig", icon="ERROR")
                 box_obj.operator(
-                    "avacapo.create_avacapo",
+                    "avacapo.edit_rig_mapping",
                     text="Try to Convert",
                     icon="SHADERFX",
                 )
@@ -309,8 +314,15 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                 rig_label = {
                     "avacapo_bvh_v1": "AvaCapo rig v1",
                     "mixamo": "Mixamo rig",
+                    "custom_mapped": "Custom rig mapping",
                 }.get(rig_type, rig_type)
                 box_obj.label(text=rig_label, icon="CHECKBOX_HLT")
+                if rig_type == "custom_mapped":
+                    box_obj.operator(
+                        "avacapo.edit_rig_mapping",
+                        text="Edit Bone Mapping",
+                        icon="PREFERENCES",
+                    )
                 if rig_type == "mixamo":
                     box_obj.operator(
                         "avacapo.reset_import_pose",
@@ -421,9 +433,9 @@ class AVACAPO_PT_main_panel(bpy.types.Panel):
                             generation_error = "Select both source armatures"
                         elif left_obj == right_obj:
                             generation_error = "Source armatures must be different"
-                        elif rig_utils.infer_rig_type(left_obj) == "unknown":
+                        elif not rig_utils.supports_smpl_input(left_obj):
                             generation_error = "First Armature is not supported"
-                        elif rig_utils.infer_rig_type(right_obj) == "unknown":
+                        elif not rig_utils.supports_smpl_input(right_obj):
                             generation_error = "Second Armature is not supported"
                         elif gap_frames <= 0:
                             generation_error = "Duration must be positive"
@@ -517,21 +529,31 @@ CLIP_ICON = "RENDER_ANIMATION"
 
 
 def draw_clips(layout: bpy.types.UILayout, obj: bpy.types.Object | None) -> None:
+    """Draw only clips whose metadata and timeline strip belong to this armature."""
     if obj is None:
         return
     if not hasattr(obj, "avacapo_clips"):
         # property not initialized
         return
-    clips = obj.avacapo_clips.clips
-    if not clips:
-        layout.label(text="No clips.", icon=CLIP_ICON)
+    if obj.animation_data is None:
+        layout.label(text="No clips for this armature.", icon=CLIP_ICON)
         return
-    for clip in clips:
-        draw_clip(layout, obj, clip)
+
+    owned_clips = []
+    for clip in obj.avacapo_clips.clips:
+        track = obj.animation_data.nla_tracks.get(clip.name)
+        strip = track.strips.get(clip.name) if track is not None else None
+        if strip is not None:
+            owned_clips.append((clip, strip))
+
+    if not owned_clips:
+        layout.label(text="No clips for this armature.", icon=CLIP_ICON)
+        return
+    for clip, nla_strip in owned_clips:
+        draw_clip(layout, obj, clip, nla_strip)
 
 
-def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
-    nla_strip = obj.animation_data.nla_tracks[clip.name].strips[clip.name]
+def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip, nla_strip) -> None:
     box = layout.box()
     row = box.row(align=True)
     row.label(text=clip.name, icon=CLIP_ICON)
@@ -566,6 +588,32 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
         None,
     )
     if active_attempt is not None:
+        mapping_is_valid = rig_mapping.is_valid_mapping(obj)
+        source_document = bvh_cache.get_cached_bvh_document(active_attempt.action_name)
+        reapply_row = box_attempts.row(align=True)
+        reapply_row.enabled = (
+            not State.server_busy
+            and mapping_is_valid
+            and source_document is not None
+        )
+        reapply_op = reapply_row.operator(
+            "avacapo.reapply_mapping",
+            text="Reapply Mapping",
+            icon="FILE_REFRESH",
+        )
+        reapply_op.clip_name = clip.name
+        reapply_op.attempt_uid = active_attempt.uid
+        if not mapping_is_valid:
+            box_attempts.label(
+                text="Save a valid custom mapping to reapply this take.",
+                icon="INFO",
+            )
+        elif source_document is None:
+            box_attempts.label(
+                text="Source BVH is available only until Blender closes.",
+                icon="INFO",
+            )
+
         if active_attempt.constraints:
             box_attempts.label(
                 text=f"Constraints: {len(active_attempt.constraints)}",
@@ -615,7 +663,7 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
         convert_op.clip_name = clip.name
         convert_op.attempt_uid = active_attempt.uid
 
-        conversion = bvh_smpl.get_cached_conversion(active_attempt.action_name)
+        conversion = bvh_cache.get_cached_conversion(active_attempt.action_name)
         if conversion is not None:
             size_kib = len(conversion) / 1024.0
             box_attempts.label(

@@ -11,7 +11,7 @@ version = "0.1.0"
 tags = ["3D View", "Animation"]
 platforms = ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64"]
 wheels = [
-    "./wheels/broom-0.1-py3-none-any.whl",
+    "./wheels/broom-0.2.dev0-py3-none-any.whl",
 ]
 
 [build]

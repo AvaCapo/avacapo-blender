@@ -8,6 +8,12 @@ from broom.bvh.schemas import BVHDocument
 
 from .logger import log
 from .rig_utils import infer_rig_type
+from . import custom_retarget
+from .rig_mapping import (
+    canonical_from_armature_basis,
+    is_valid_mapping,
+    stored_basis_by_bone,
+)
 from .config import Config
 from .retarget_maps import (
     MIXAMO_RETARGET_BONES,
@@ -17,19 +23,51 @@ from .retarget_maps import (
 
 config = Config()
 
-
 def apply_animation(
     obj: bpy.types.Object,
     document: BVHDocument,
     action: bpy.types.Action,
 ) -> None:
+    # A saved manual mapping is an explicit user choice. It takes precedence
+    # over name-based auto detection so Generate and Reapply use the same
+    # custom-retarget path for the same armature.
+    # TODO(retarget architecture): unify native AvaCapo, Mixamo and custom
+    # application behind one BVH-to-Action contract. Auto-detect whether the
+    # target rest pose/topology is safe for direct baking; construct semantic
+    # mapping only when retargeting is actually required.
+    if is_valid_mapping(obj):
+        log.info("Applying animation through the saved custom-rig mapping.")
+        apply_bvh_to_custom_rig(obj, document, action)
+        return
+
     match infer_rig_type(obj):
         case "avacapo_bvh_v1":
             apply_bvh(obj, document, action)
         case "mixamo":
             apply_bvh_to_mixamo(obj, document, action)
         case _:
-            log.error(f"cannot apply animation to {infer_rig_type}")
+            log.error(f"cannot apply animation to {infer_rig_type(obj)}")
+
+
+def apply_bvh_to_custom_rig(
+    target_obj: bpy.types.Object,
+    document: BVHDocument,
+    target_action: bpy.types.Action,
+) -> None:
+    """Run Broom's semantic space-time retarget before baking the target action."""
+    log.info(f"Applying BVH to custom rig {target_obj.name} using semantic retargeting...")
+    reset_pose_transforms(target_obj)
+    retargeted = custom_retarget.retarget_to_custom_armature(document, target_obj)
+    apply_canonical_bvh_to_custom_armature(
+        target_obj,
+        retargeted,
+        target_action,
+        basis_by_bone=stored_basis_by_bone(target_obj.avacapo_rig_mapping),
+        canonical_from_armature=canonical_from_armature_basis(
+            target_obj,
+            target_obj.avacapo_rig_mapping
+        ),
+    )
 
 
 def reset_pose_transforms(obj: bpy.types.Object) -> None:
@@ -775,8 +813,66 @@ def apply_bvh(
     skeleton: bpy.types.Object,
     document: BVHDocument,
     action: bpy.types.Action,
+    *,
+    basis_by_bone: dict[str, Matrix] | None = None,
+    canonical_from_armature: Matrix | None = None,
 ) -> None:
-    """Apply an in-memory BVH document to an action without temporary files."""
+    """Apply a legacy BVH whose position channels include its joint offsets.
+
+    Native AvaCapo and Mixamo paths retain their existing contract.  Custom
+    Broom retargeting uses :func:`apply_canonical_bvh_to_custom_armature`.
+    """
+    _apply_bvh(
+        skeleton,
+        document,
+        action,
+        basis_by_bone=basis_by_bone,
+        canonical_from_armature=canonical_from_armature,
+        position_channels_are_deltas=False,
+    )
+
+
+def apply_canonical_bvh_to_custom_armature(
+    skeleton: bpy.types.Object,
+    document: BVHDocument,
+    action: bpy.types.Action,
+    *,
+    basis_by_bone: dict[str, Matrix],
+    canonical_from_armature: Matrix,
+) -> None:
+    """Bake Broom's canonical target motion into a saved Blender T-pose.
+
+    In Broom/BVH forward kinematics, a position channel is an additive local
+    delta ``t``: the rest offset is already stored independently in the joint.
+    It therefore must be converted for every animated joint without subtracting
+    ``joint.offset`` before writing Blender's pose-bone location.
+    """
+    _apply_bvh(
+        skeleton,
+        document,
+        action,
+        basis_by_bone=basis_by_bone,
+        canonical_from_armature=canonical_from_armature,
+        position_channels_are_deltas=True,
+    )
+
+
+def _apply_bvh(
+    skeleton: bpy.types.Object,
+    document: BVHDocument,
+    action: bpy.types.Action,
+    *,
+    basis_by_bone: dict[str, Matrix] | None = None,
+    canonical_from_armature: Matrix | None = None,
+    position_channels_are_deltas: bool,
+) -> None:
+    """Apply an in-memory BVH document to an action without temporary files.
+
+    ``canonical_from_armature`` is G: Armature-data coordinates to canonical
+    BVH coordinates. It is inverted for every animated translation and
+    rotation channel, including root channels.  ``position_channels_are_deltas``
+    selects the custom Broom contract instead of the legacy importer contract.
+    """
 
     action_slot = action.slots[f"OB{skeleton.name}"]
     log.debug(
@@ -803,7 +899,11 @@ def apply_bvh(
     arm_data = skeleton.data
     pose_bones = skeleton.pose.bones
     rotation_orders: dict[str, str] = {}
-
+    armature_from_canonical = None
+    if canonical_from_armature is not None:
+        armature_from_canonical = Matrix(canonical_from_armature)
+        armature_from_canonical.invert()
+        armature_from_canonical.resize_4x4()
     for joint in document.joints:
         pose_bone = pose_bones.get(joint.name)
         if pose_bone is None:
@@ -844,12 +944,19 @@ def apply_bvh(
         if pose_bone is None:
             continue
 
-        bone_rest_matrix = arm_data.bones[joint.name].matrix_local.to_3x3()
+        if basis_by_bone is None:
+            bone_rest_matrix = arm_data.bones[joint.name].matrix_local.to_3x3()
+        else:
+            bone_rest_matrix = basis_by_bone.get(joint.name)
+            if bone_rest_matrix is None:
+                raise ValueError(
+                    f"Saved T-pose basis is missing for target bone {joint.name!r}."
+                )
+            bone_rest_matrix = Matrix(bone_rest_matrix)
         bone_rest_matrix_inv = Matrix(bone_rest_matrix)
         bone_rest_matrix_inv.invert()
         bone_rest_matrix_inv.resize_4x4()
         bone_rest_matrix.resize_4x4()
-
         position_channels = {
             channel[0].upper(): joint.channel_start + offset
             for offset, channel in enumerate(joint.channels)
@@ -872,11 +979,20 @@ def apply_bvh(
                         for axis in "XYZ"
                     )
                 )
-                locations.append(
-                    (
-                        bone_rest_matrix_inv
-                        @ Matrix.Translation(source_location - Vector(joint.offset))
+                # Broom emits additive BVH position channels.  The legacy
+                # importer historically expects absolute joint coordinates;
+                # preserve that behavior outside the custom-retarget path.
+                translation = (
+                    source_location
+                    if position_channels_are_deltas
+                    else source_location - Vector(joint.offset)
+                )
+                if armature_from_canonical is not None:
+                    translation = (
+                        armature_from_canonical @ Matrix.Translation(translation)
                     ).to_translation()
+                locations.append(
+                    (bone_rest_matrix_inv @ Matrix.Translation(translation)).to_translation()
                 )
 
             for axis_index in range(3):
@@ -926,12 +1042,24 @@ def apply_bvh(
                 )
                 for axis in "XYZ"
             )
-            bone_rotation_matrix = (
-                bone_rest_matrix_inv
-                @ Euler(
+            canonical_rotation_matrix = (
+                Euler(
                     source_rotation,
                     rotation_orders[joint.name][::-1],
                 ).to_matrix().to_4x4()
+            )
+            if armature_from_canonical is not None:
+                canonical_rotation_matrix = (
+                    armature_from_canonical
+                    @ canonical_rotation_matrix
+                    @ canonical_from_armature.to_4x4()
+                )
+            # Both legacy and custom paths bake rotations in the bone's
+            # absolute rest basis. For custom retarget this is
+            # B^-1 @ G^-1 @ R_canonical @ G @ B.
+            bone_rotation_matrix = (
+                bone_rest_matrix_inv
+                @ canonical_rotation_matrix
                 @ bone_rest_matrix
             )
             if rotate_mode == "QUATERNION":

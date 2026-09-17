@@ -5,10 +5,11 @@ from typing import Literal, TypeAlias
 from .config import Config
 from .logger import log
 from .retarget_maps import MIXAMO_REQUIRED_BONES, canonical_bone_name
+from .rig_mapping import is_valid_mapping
 
 config = Config()
 
-RigType = Literal["avacapo_bvh_v1", "mixamo", "unknown"]
+RigType = Literal["avacapo_bvh_v1", "mixamo", "custom_mapped", "unknown"]
 
 
 BoneTree: TypeAlias = dict[str, "BoneTree"]
@@ -130,4 +131,11 @@ def infer_rig_type(obj: bpy.types.Object) -> RigType:
     canonical_bones = {canonical_bone_name(bone.name) for bone in obj.data.bones}
     if MIXAMO_REQUIRED_BONES.issubset(canonical_bones):
         return "mixamo"
+    if is_valid_mapping(obj):
+        return "custom_mapped"
     return "unknown"
+
+
+def supports_smpl_input(obj: bpy.types.Object) -> bool:
+    """Custom mappings currently support output retargeting, not SMPL input conversion."""
+    return infer_rig_type(obj) in {"avacapo_bvh_v1", "mixamo"}
