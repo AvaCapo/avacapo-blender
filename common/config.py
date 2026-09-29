@@ -9,9 +9,13 @@ class Config:
     PLATFORM_URL = "https://service.avacapo.com/"
     FRONTEND_URL = "https://app.avacapo.com/"
     ADDON_DOWNLOAD_URL = "https://github.com/AvaCapo/avacapo-blender"
-    GENERATION_URL = f"{PLATFORM_URL}api/v1/api-avacapo-prompt/"
-    GENERATION_CONSTRAINTS_URL = f"{PLATFORM_URL}/api/v1/api-avacapo-prompt-with-constraints/"
-    INBETWEENING_URL = f"{PLATFORM_URL}/api/v1/api-avacapo-prompt-inbetween/"
+    SERVER_URL = os.getenv("AVACAPO_BASE_URL", PLATFORM_URL).rstrip("/")
+    PUBLIC_BASE_URL = f"{SERVER_URL}/api/v1/public"
+    GENERATION_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt/"
+    GENERATION_CONSTRAINTS_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt-with-constraints/"
+    INBETWEENING_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt-inbetween/"
+    STATUS_URL = f"{PUBLIC_BASE_URL}/api-avacapo-status/"
+    DOWNLOAD_URL = f"{PUBLIC_BASE_URL}/api-avacapo-download/"
     GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
     GET_MODELS_NAMES_URL = GET_MODELS_URL
     GET_ADDON_VERSION_URL = f"{PLATFORM_URL}api/v1/get-addon-version/"
@@ -44,6 +48,12 @@ class Config:
         },
     }
     REQUEST_TIMEOUT = 120
+    POLL_INTERVAL = 3
+    GENERATION_WAIT_TIMEOUT = 30 * 60
+    DOWNLOAD_WAIT_TIMEOUT = 5 * 60
+    CONNECT_TIMEOUT = 10
+    STATUS_REQUEST_TIMEOUT = 30
+    DOWNLOAD_REQUEST_TIMEOUT = 240
     DEFAULT_TEMPERATURE = 1.0
     DEFAULT_DURATION = 5
     DEFAULT_FPS = 24
