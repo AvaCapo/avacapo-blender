@@ -4,9 +4,9 @@ import math
 import bpy
 import requests
 
-from .storage import Storage
-from .logger import log
-from .config import Config
+from ..common.config import Config
+from ..common.logger import log
+from ..core.storage import Storage
 from .models import get_default_model_type, get_models_names
 
 config = Config()

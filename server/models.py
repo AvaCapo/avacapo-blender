@@ -1,8 +1,8 @@
 import requests
 
-from .config import Config
-from .logger import log
-from .storage import Storage
+from ..common.config import Config
+from ..common.logger import log
+from ..core.storage import Storage
 
 _model_catalog_cache: list[dict[str, str]] | None = None
 _model_enum_items_cache: list[tuple[str, str, str]] | None = None

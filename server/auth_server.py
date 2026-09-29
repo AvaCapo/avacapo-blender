@@ -5,7 +5,7 @@ import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-from .logger import log
+from ..common.logger import log
 
 SUCCESS_HTML = """<!DOCTYPE html>
 <html>
