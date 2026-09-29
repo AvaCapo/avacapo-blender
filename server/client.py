@@ -2,11 +2,11 @@ import json
 import math
 
 import bpy
-import requests
 
 from ..common.config import Config
 from ..common.logger import log
 from ..core.storage import Storage
+from .jobs import generate_animation
 from .models import get_default_model_type, get_models_names
 
 config = Config()
@@ -51,22 +51,17 @@ def get_animation(
         "name": name or _build_animation_name(prompt),
         "api_token": Storage.api_token,
         "model": model,
-        "extension": "bvh",
-        "include_skin": False,
-        "in_place": in_place,
         "cycled": cycled,
     }
     safe_payload = {**payload, "api_token": "***" if payload["api_token"] else ""}
     log.info("Sending request with payload: %s", safe_payload)
 
-    try:
-        response = requests.post(config.GENERATION_URL, json=payload, timeout=config.REQUEST_TIMEOUT)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        log.error(f"Animation request failed: {exc}")
-        raise RuntimeError("Failed to fetch animation from server.") from exc
-
-    return response.content
+    return generate_animation(
+        config.GENERATION_URL,
+        api_token=payload["api_token"],
+        in_place=in_place,
+        json=payload,
+    )
 
 
 def get_animation_constraints(
@@ -179,9 +174,6 @@ def get_animation_constraints(
     }
     data = {
         "api_token": Storage.api_token,
-        "extension": "bvh",
-        "include_skin": False,
-        "in_place": bool(in_place),
         "metadata": json.dumps(
             metadata,
             ensure_ascii=False,
@@ -198,18 +190,13 @@ def get_animation_constraints(
         )
         for index, payload in enumerate(motion_payloads)
     ]
-    try:
-        response = requests.post(
-            config.GENERATION_CONSTRAINTS_URL,
-            data=data,
-            files=files or None,
-            timeout=config.REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        log.error(f"Animation request with constraints failed: {exc}")
-        raise RuntimeError("Failed to fetch animation with constraints from server.") from exc
-    return response.content
+    return generate_animation(
+        config.GENERATION_CONSTRAINTS_URL,
+        api_token=data["api_token"],
+        in_place=in_place,
+        data=data,
+        files=files or None,
+    )
 
 
 def get_animation_inbetween(
@@ -279,9 +266,6 @@ def get_animation_inbetween(
 
     data = {
         "api_token": Storage.api_token,
-        "extension": "bvh",
-        "include_skin": False,
-        "in_place": bool(in_place),
         "metadata": json.dumps(
             metadata,
             ensure_ascii=False,
@@ -301,16 +285,10 @@ def get_animation_inbetween(
         ),
     }
 
-    try:
-        response = requests.post(
-            config.INBETWEENING_URL,
-            data=data,
-            files=files,
-            timeout=config.REQUEST_TIMEOUT,
-        )
-
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        log.error(f"Inbetween animation request failed: {exc}")
-        raise RuntimeError("Failed to fetch inbetween animation from server.") from exc
-    return response.content
+    return generate_animation(
+        config.INBETWEENING_URL,
+        api_token=data["api_token"],
+        in_place=in_place,
+        data=data,
+        files=files,
+    )
