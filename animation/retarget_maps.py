@@ -65,7 +65,7 @@ MIXAMO_SCALE_REFERENCE_BONES = [
     "RightHand",
 ]
 
-SMPLX_TO_SMPL_BVH = (
+NPZ_BVH_MAP = (
     ("pelvis", "Hips", -1),
     ("left_hip", "LeftUpLeg", 0),
     ("right_hip", "RightUpLeg", 0),
