@@ -10,7 +10,7 @@ from mathutils import Matrix, Vector
 
 from . import bvh_smpl
 from .config import Config
-from .retarget_maps import SMPLX_TO_SMPL_BVH, canonical_bone_name
+from .retarget_maps import NPZ_BVH_MAP, canonical_bone_name
 from .rig_utils import infer_rig_type
 
 
