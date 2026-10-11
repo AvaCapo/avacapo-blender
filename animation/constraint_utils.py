@@ -8,10 +8,10 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
-from . import bvh_smpl
-from .config import Config
+from ..common.config import Config
+from . import bvh_npz
 from .retarget_maps import NPZ_BVH_MAP, canonical_bone_name
-from .rig_utils import infer_rig_type
+from . import rig_utils
 
 
 CONSTRAINT_TYPE_ITEMS = (
@@ -179,7 +179,7 @@ def validate_constraint_settings(context: bpy.types.Context, settings) -> str | 
     armature = source_armature(context, settings)
     if armature is None:
         return "Select a source armature"
-    if infer_rig_type(armature) == "unknown":
+    if rig_utils.infer_rig_type(armature) == "unknown":
         return "Constraint source must use an AvaCapo or Mixamo rig"
 
     if input_type == "OBJECT_TARGET":
@@ -396,7 +396,7 @@ def _sample_pose(
         raise ValueError("The constraint rig has no root bone")
 
     if not Config.KEEP_Y_UP:
-        coordinate_transform = Matrix(tuple(map(tuple, bvh_smpl.Y_UP_TO_AMASS_Z_UP)))
+        coordinate_transform = Matrix(tuple(map(tuple, bvh_npz.Y_UP_TO_AMASS_Z_UP)))
         local_rotations[0] = coordinate_transform @ local_rotations[0]
         root_translation = coordinate_transform @ root_translation
 
@@ -411,17 +411,17 @@ def _resolved_smpl_pose_bones(
 ) -> list[bpy.types.PoseBone]:
     if armature.type != "ARMATURE" or armature.pose is None:
         raise ValueError("Constraint source is not an armature")
-    if infer_rig_type(armature) == "unknown":
+    if rig_utils.infer_rig_type(armature) == "unknown":
         raise ValueError("Constraint source must use an AvaCapo or Mixamo rig")
 
     lookup = _pose_bone_lookup(armature)
     pose_bones = [
         _find_pose_bone(lookup, source_name)
-        for _target_name, source_name, _parent in SMPLX_TO_SMPL_BVH
+        for _target_name, source_name, _parent in NPZ_BVH_MAP
     ]
     missing = [
         source_name
-        for pose_bone, (_target_name, source_name, _parent) in zip(pose_bones, SMPLX_TO_SMPL_BVH)
+        for pose_bone, (_target_name, source_name, _parent) in zip(pose_bones, NPZ_BVH_MAP)
         if pose_bone is None
     ]
     if missing:
@@ -475,7 +475,7 @@ def _serialize_pose_samples(
         "mocap_framerate": np.asarray(float(context.scene.render.fps), dtype=np.float64),
         "betas": np.zeros(16, dtype=np.float32),
     }
-    return bvh_smpl.create_smpl_npz_bytes(result), frame_count
+    return bvh_npz.create_npz_bytes(result), frame_count
 
 
 def create_pose_constraint_npz_at_frames(
