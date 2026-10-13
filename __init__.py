@@ -1,3 +1,13 @@
-import bpy
-from .ui.ui_tracks import launch as ui_tracks_launch
-ui_tracks_launch()
+"""AvaCapo Blender add-on entry points. Importing the package has no UI side effects."""
+
+
+def register():
+    from . import ui
+
+    ui.register()
+
+
+def unregister():
+    from . import ui
+
+    ui.unregister()
