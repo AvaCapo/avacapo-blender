@@ -73,3 +73,11 @@ class Config:
     END_EFFECTOR_JOINTS = frozenset(
         {"LeftFoot", "RightFoot", "LeftHand", "RightHand", "Hips"}
     )
+
+
+class TimelineConfig:
+    """Frame rules and defaults for timeline clips, independent of the backend."""
+
+    MIN_CLIP_LENGTH = 1
+    MIN_TAKE_LENGTH = 1
+    DEFAULT_CLIP_LENGTH = 60
