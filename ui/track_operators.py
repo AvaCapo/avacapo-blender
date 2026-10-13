@@ -53,31 +53,33 @@ class CLIPS_OT_mouse(Operator):
         return in_timeline(context)
 
     def invoke(self, context, event):
+        select_button = select_mouse_button(context)
         data = getattr(context.scene, "clip_data", None)
-        if data is None:
-            return {'PASS_THROUGH'}
         view, metrics = ClipDrawing.metrics(context.region)
         hit = ClipDrawing.hit_test(
-            data.clips, view, metrics, event.mouse_region_x, event.mouse_region_y,
+            data.clips, view, metrics,
+            event.mouse_region_x, event.mouse_region_y,
         )
+        menu_button = 'W' if select_button == 'RIGHTMOUSE' else 'RIGHTMOUSE'
+        menu_event = (
+            event.type == menu_button
+            and event.value == 'PRESS'
+        )
+        select_event = (
+            event.type == select_button
+            and event.value in {'PRESS', 'DOUBLE_CLICK'}
+        )
+        if not (menu_event or select_event):
+            return {'PASS_THROUGH'}
+        if data is None:
+            return {'PASS_THROUGH'}
         if hit.kind == 'NONE':
             return {'PASS_THROUGH'}
-        select_button = select_mouse_button(context)
-        if event.type == 'W':
-            return self._open_menu(hit) if select_button == 'RIGHTMOUSE' else {'PASS_THROUGH'}
-        if event.type != select_button:
-            if event.type == 'RIGHTMOUSE' and event.value == 'PRESS':
-                return self._open_menu(hit)
-            return {'PASS_THROUGH'}
-        if hit.kind == 'EMPTY':
-            if event.value == 'DOUBLE_CLICK':
-                return self._create_with_prompt(context, hit)
-            if data.active_uid:
-                data.active_uid = 0
-                tag_redraw()
-                return {'FINISHED'}
-            return {'CANCELLED'}
+        if menu_event:
+            return self._open_menu(hit)
         if event.value == 'DOUBLE_CLICK':
+            if hit.kind == 'EMPTY':
+                return self._create_with_prompt(context, hit)
             if hit.kind == 'BODY':
                 data.active_uid = hit.clip.uid
                 bpy.ops.clips.edit_prompt(
@@ -85,6 +87,12 @@ class CLIPS_OT_mouse(Operator):
                 )
                 return {'FINISHED'}
             return {'PASS_THROUGH'}
+        if hit.kind == 'EMPTY':
+            if not data.active_uid:
+                return {'CANCELLED'}
+            data.active_uid = 0
+            tag_redraw()
+            return {'FINISHED'}
         return self._begin_drag(context, event, data, hit, view)
 
     def _open_menu(self, hit):
