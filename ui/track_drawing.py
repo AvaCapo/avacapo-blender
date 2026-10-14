@@ -33,7 +33,7 @@ class TimelineView:
 class ClipMetrics:
     def __init__(self, region, scale):
         self.scale = scale
-        self.top = region.height - (STYLE.scrub_height + STYLE.top_margin) * scale
+        self.top = (STYLE.clip_height + STYLE.y_margin) * scale
         self.bottom = self.top - STYLE.clip_height * scale
         self.handle_width = STYLE.handle_width * scale
         self.radius = STYLE.corner_radius * scale

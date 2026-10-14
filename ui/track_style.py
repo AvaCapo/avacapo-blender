@@ -15,8 +15,7 @@ class Palette:
 @dataclass
 class Style:
     clip_height: float = 36.0
-    scrub_height: float = 23.0    # Blender's frame ruler at the top of the Timeline
-    top_margin: float = 14.0      # gap between the ruler and the clips
+    y_margin: float = 14.0      # gap between the ruler and the clips
     handle_width: float = 15.0
     take_inset: float = 3.0       # take rect inset from the clip top/bottom
     corner_radius: float = 5.0
