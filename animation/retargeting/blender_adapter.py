@@ -1,24 +1,18 @@
 """Blender-only boundary for compiling an armature to a Broom hierarchy.
 
 The common ``mapping`` and ``workflow`` modules deliberately do not import
-this module.  A Maya adapter can provide the same output by calling
-``compile_rest_records`` with its own rest-bone records.
+this module. The portable ``rest_hierarchy`` compiler accepts the records
+collected here and can equally be called from a Maya adapter.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-
 import numpy as np
-import scipy.spatial.transform as scipy_transform
+
+from . import rest_hierarchy
 
 
 _ROTATION_SINGULAR_VALUE_EPSILON = 1.0e-8
-_ROOT_CHANNELS = (
-    "Xposition", "Yposition", "Zposition",
-    "Xrotation", "Yrotation", "Zrotation",
-)
-_ROTATION_CHANNELS = ("Xrotation", "Yrotation", "Zrotation")
 # Source semantic directions expressed in Broom's right-handed coordinate
 # system. The ordered semantic triple (right, up, front) is intentionally
 # left-handed: the generated source places character-right on -X.
@@ -41,6 +35,113 @@ _BASIS_EPSILON = 1.0e-8
 _BASIS_AXIS_AMBIGUITY_MARGIN = 0.15
 
 
+def direct_armature_compatibility_errors(
+    source_armature,
+    target_armature,
+    source_names,
+    source_from_armature,
+    target_from_armature,
+    *,
+    rest_position_tolerance: float = 1.0e-5,
+    rest_rotation_tolerance_degrees: float = 0.01,
+) -> list[str]:
+    """Return direct-path rest-skeleton mismatches for two Blender armatures.
+
+    Unlike a server BVH ``Hierarchy``, an imported Blender source armature
+    retains the actual bone rest axes needed for this comparison. Both supplied
+    coordinate rotations map each armature-data space into the same canonical
+    source space. Target-only helper bones are allowed.
+    """
+    _require_armature(source_armature)
+    _require_armature(target_armature)
+    source_G = _proper_coordinate_rotation(source_from_armature, "source_from_armature")
+    target_G = _proper_coordinate_rotation(target_from_armature, "target_from_armature")
+    position_tolerance = _nonnegative_finite(
+        rest_position_tolerance,
+        "rest_position_tolerance",
+    )
+    rotation_tolerance = _nonnegative_finite(
+        rest_rotation_tolerance_degrees,
+        "rest_rotation_tolerance_degrees",
+    )
+    names = tuple(source_names)
+    if not names:
+        raise ValueError("Direct compatibility requires at least one source bone.")
+    source_bones = source_armature.data.bones
+    target_bones = target_armature.data.bones
+    missing_source = [name for name in names if source_bones.get(name) is None]
+    if missing_source:
+        raise ValueError("Source armature is missing source bones: " + ", ".join(missing_source))
+    missing_target = [name for name in names if target_bones.get(name) is None]
+    if missing_target:
+        return ["Target is missing source bones: " + ", ".join(missing_target)]
+
+    source_root_names = tuple(
+        name for name in names if source_bones[name].parent is None
+    )
+    if len(source_root_names) != 1:
+        return [
+            "Direct compatibility requires exactly one source root among motion bones; "
+            f"found {len(source_root_names)}."
+        ]
+    root_name = source_root_names[0]
+    source_root_head = source_G @ _vector(
+        source_bones[root_name].head_local,
+        f"head[{root_name}]",
+    )
+    target_root_head = target_G @ _vector(
+        target_bones[root_name].head_local,
+        f"head[{root_name}]",
+    )
+    errors = []
+    for name in names:
+        source_bone = source_bones[name]
+        target_bone = target_bones[name]
+        source_parent = source_bone.parent.name if source_bone.parent else None
+        target_parent = target_bone.parent.name if target_bone.parent else None
+        if source_parent != target_parent:
+            errors.append(
+                f"Bone {name!r} has parent {target_parent!r} on target; "
+                f"expected {source_parent!r}."
+            )
+            continue
+
+        # A rigid translation of every bone in Blender Edit Mode changes the
+        # armature's root rest offset but not its skeleton geometry. Compare
+        # joint locations relative to the source/target motion root instead.
+        # The writer will handle the root rest offset explicitly.
+        source_head = (
+            source_G @ _vector(source_bone.head_local, f"head[{name}]")
+            - source_root_head
+        )
+        target_head = (
+            target_G @ _vector(target_bone.head_local, f"head[{name}]")
+            - target_root_head
+        )
+        position_error = float(np.linalg.norm(source_head - target_head))
+        if position_error > position_tolerance:
+            errors.append(
+                f"Rest joint position differs for {name!r}: {position_error:.6g} "
+                f"(tolerance {position_tolerance:.6g})."
+            )
+
+        source_basis = source_G @ _proper_coordinate_rotation(
+            _matrix3(source_bone.matrix_local),
+            f"matrix[{name}]",
+        )
+        target_basis = target_G @ _proper_coordinate_rotation(
+            _matrix3(target_bone.matrix_local),
+            f"matrix[{name}]",
+        )
+        rotation_error = _rotation_angle_degrees(source_basis, target_basis)
+        if rotation_error > rotation_tolerance:
+            errors.append(
+                f"Rest orientation differs for {name!r}: {rotation_error:.6g} degrees "
+                f"(tolerance {rotation_tolerance:.6g})."
+            )
+    return errors
+
+
 def armature_to_hierarchy(armature, skeleton_from_armature):
     """Compile all Blender rest bones into a Broom 0.2 ``Hierarchy``.
 
@@ -49,7 +150,10 @@ def armature_to_hierarchy(armature, skeleton_from_armature):
     """
     if armature is None or armature.type != "ARMATURE":
         raise ValueError("Retarget target must be an armature.")
-    return compile_rest_records(_rest_records_from_armature(armature), skeleton_from_armature)
+    return rest_hierarchy.compile_rest_records(
+        _rest_records_from_armature(armature),
+        skeleton_from_armature,
+    )
 
 
 def canonical_from_armature_mapping(armature, joint_map) -> np.ndarray:
@@ -81,104 +185,21 @@ def canonical_from_armature_mapping(armature, joint_map) -> np.ndarray:
     )
 
 
-def capture_rest_bases(armature, basis_entries) -> None:
-    """Persist the full rest skeleton used by a confirmed mapping."""
-    _require_armature(armature)
-    basis_entries.clear()
-    for bone in sorted(armature.data.bones, key=lambda item: item.name):
-        entry = basis_entries.add()
-        entry.bone_name = bone.name
-        entry.parent_name = bone.parent.name if bone.parent else ""
-        entry.head = tuple(float(value) for value in bone.head_local)
-        entry.matrix = tuple(
-            float(bone.matrix_local[row][column])
-            for row in range(3)
-            for column in range(3)
-        )
-
-
-def rest_basis_errors(armature, basis_entries) -> list[str]:
-    """Return legacy rest-skeleton mismatch errors for a confirmed mapping."""
-    _require_armature(armature)
-    stored_names = {entry.bone_name for entry in basis_entries if entry.bone_name}
-    current_names = {bone.name for bone in armature.data.bones}
-    if current_names != stored_names:
-        return ["Armature bones changed since the mapping was confirmed."]
-    entries_by_name = {entry.bone_name: entry for entry in basis_entries}
-    for bone in armature.data.bones:
-        entry = entries_by_name[bone.name]
-        parent_name = bone.parent.name if bone.parent else ""
-        if entry.parent_name != parent_name:
-            return ["Armature hierarchy changed since the mapping was confirmed."]
-        if any(abs(float(bone.head_local[axis]) - entry.head[axis]) > 1.0e-5 for axis in range(3)):
-            return ["Armature rest joint positions changed since the mapping was confirmed."]
-        saved = np.asarray(entry.matrix, dtype=np.float64).reshape((3, 3))
-        current = np.asarray(
-            [[bone.matrix_local[row][column] for column in range(3)] for row in range(3)],
-            dtype=np.float64,
-        )
-        if np.max(np.abs(current - saved)) > 1.0e-5:
-            return ["Armature T-pose changed since the mapping was confirmed."]
-    return []
-
-
-def compile_rest_records(records: Sequence[Mapping[str, object]], skeleton_from_armature):
-    """Compile portable rest-bone records into a Broom hierarchy.
-
-    Records contain ``name``, ``parent`` (or ``None``), ``head`` and a 3x3
-    Blender rest matrix. Offsets are represented in parent rest-local axes and
-    every joint receives its actual static local orientation.
-    """
-    import broom
-    ordered = _parent_first(records)
-    G = _proper_coordinate_rotation(skeleton_from_armature, "skeleton_from_armature")
-    index_by_name = {record["name"]: index for index, record in enumerate(ordered)}
-    heads = {
-        record["name"]: _vector(record["head"], f"head[{record['name']}]")
-        for record in ordered
-    }
-    rest_bases = {
-        record["name"]: _proper_coordinate_rotation(
-            record["matrix"],
-            f"matrix[{record['name']}]",
-        )
-        for record in ordered
-    }
-    joints = []
-    for record in ordered:
-        name = record["name"]
-        parent_name = record["parent"]
-        if parent_name is None:
-            parent, offset, channels = -1, G @ heads[name], _ROOT_CHANNELS
-            orientation = G @ rest_bases[name]
-        else:
-            parent = index_by_name[parent_name]
-            parent_basis = rest_bases[parent_name]
-            offset = parent_basis.T @ (heads[name] - heads[parent_name])
-            channels = _ROTATION_CHANNELS
-            orientation = parent_basis.T @ rest_bases[name]
-        joints.append(broom.Joint(
-            name=name,
-            parent=parent,
-            offset=tuple(float(value) for value in offset),
-            channels=channels,
-            local_orientation=_matrix_to_wxyz(orientation, f"orientation[{name}]"),
-        ))
-    return broom.Hierarchy(tuple(joints))
-
-
 def _rest_records_from_armature(armature) -> list[dict[str, object]]:
     return [
         {
             "name": bone.name,
             "parent": bone.parent.name if bone.parent else None,
             "head": tuple(float(value) for value in bone.head_local),
+            "tail": tuple(float(value) for value in bone.tail_local),
             "matrix": tuple(
                 tuple(float(bone.matrix_local[row][column]) for column in range(3))
                 for row in range(3)
             ),
+            "use_connect": bool(bone.use_connect),
+            "rotation_order": _bvh_rotation_order(armature.pose.bones[bone.name]),
         }
-        for bone in _parent_first_bones(armature.data.bones)
+        for bone in _depth_first_bones(armature.data.bones)
     ]
 
 
@@ -239,51 +260,34 @@ def _select_signed_armature_axis(direction, *, label: str, allowed_axes) -> np.n
     return result
 
 
-def _parent_first_bones(bones):
-    pending = list(bones)
-    ordered, known = [], set()
-    while pending:
-        ready = [bone for bone in pending if bone.parent is None or bone.parent.name in known]
-        if not ready:
-            raise ValueError("Armature hierarchy contains an unresolved parent.")
-        for bone in ready:
-            ordered.append(bone)
-            known.add(bone.name)
-            pending.remove(bone)
+def _depth_first_bones(bones):
+    """Match Blender BVH export order: source bone order within each sibling set."""
+    bones = list(bones)
+    children = {bone.name: [] for bone in bones}
+    roots = []
+    for bone in bones:
+        if bone.parent is None:
+            roots.append(bone)
+        else:
+            children[bone.parent.name].append(bone)
+
+    ordered = []
+
+    def visit(bone):
+        ordered.append(bone)
+        for child in children[bone.name]:
+            visit(child)
+
+    for root in roots:
+        visit(root)
+    if len(ordered) != len(bones):
+        raise ValueError("Armature hierarchy contains an unresolved parent.")
     return ordered
 
 
-def _parent_first(records):
-    pending = list(records)
-    if not pending:
-        raise ValueError("Armature has no bones.")
-    names = set()
-    roots = 0
-    for record in pending:
-        name = record.get("name")
-        parent = record.get("parent")
-        if not isinstance(name, str) or not name or name in names:
-            raise ValueError("Rest bones need unique non-empty names.")
-        if parent is not None and (not isinstance(parent, str) or not parent):
-            raise ValueError(f"Invalid parent for rest bone {name!r}.")
-        names.add(name)
-        roots += parent is None
-    if roots != 1:
-        raise ValueError(f"Armature must have exactly one root bone (found {roots}).")
-
-    ordered, known = [], set()
-    while pending:
-        ready = [record for record in pending if record["parent"] is None or record["parent"] in known]
-        if not ready:
-            missing = sorted({record["parent"] for record in pending} - names)
-            if missing:
-                raise ValueError("Rest bones reference missing parents: " + ", ".join(missing))
-            raise ValueError("Rest-bone hierarchy contains a cycle.")
-        for record in ready:
-            ordered.append(record)
-            known.add(record["name"])
-            pending.remove(record)
-    return ordered
+def _bvh_rotation_order(pose_bone):
+    rotation_mode = pose_bone.rotation_mode
+    return rotation_mode if set(rotation_mode) == {"X", "Y", "Z"} else "XYZ"
 
 
 def _proper_coordinate_rotation(value, label: str) -> np.ndarray:
@@ -313,10 +317,24 @@ def _proper_coordinate_rotation(value, label: str) -> np.ndarray:
     return rotation
 
 
-def _matrix_to_wxyz(matrix, label: str) -> tuple[float, float, float, float]:
-    rotation = _proper_coordinate_rotation(matrix, label)
-    xyzw = scipy_transform.Rotation.from_matrix(rotation).as_quat()
-    return tuple(float(value) for value in (xyzw[3], xyzw[0], xyzw[1], xyzw[2]))
+def _matrix3(value) -> np.ndarray:
+    return np.asarray(
+        [[value[row][column] for column in range(3)] for row in range(3)],
+        dtype=np.float64,
+    )
+
+
+def _rotation_angle_degrees(first, second) -> float:
+    relative = np.asarray(second) @ np.asarray(first).T
+    cosine = float(np.clip((np.trace(relative) - 1.0) * 0.5, -1.0, 1.0))
+    return float(np.degrees(np.arccos(cosine)))
+
+
+def _nonnegative_finite(value, label: str) -> float:
+    value = float(value)
+    if not np.isfinite(value) or value < 0.0:
+        raise ValueError(f"{label} must be a finite non-negative number.")
+    return value
 
 
 def _vector(value, label: str) -> np.ndarray:

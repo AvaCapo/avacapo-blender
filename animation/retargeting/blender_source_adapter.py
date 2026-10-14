@@ -1,10 +1,9 @@
 """Blender adapter for AvaCapo source Actions.
 
-This is the inverse boundary of ``animation_utils.apply_bvh`` for the source
-animations produced by AvaCapo.  It is intentionally *not* a generic Blender
-Action exporter: the accepted source is an armature imported from the AvaCapo
-canonical BVH layout.  A generic Action has no portable declaration of the BVH
-rest frame or channel contract needed to recover a Broom ``Motion`` safely.
+This is the inverse boundary for source Actions imported from AvaCapo's
+canonical BVH contract. It is intentionally *not* a generic Blender Action
+exporter: a generic Action has no portable declaration of the source rest
+frame or channel contract needed to recover a Broom ``Motion`` safely.
 """
 
 from __future__ import annotations
@@ -14,12 +13,7 @@ import math
 import numpy as np
 from mathutils import Euler, Matrix
 
-from . import blender_adapter, mapping
-
-
-# AvaCapo-generated BVH clips currently use this sampling rate.  A future
-# server import should write ``avacapo_source_fps`` on its Action instead.
-_DEFAULT_AVACAPO_SOURCE_FPS = 30.0
+from . import blender_adapter, canonical_source
 
 
 def motion_from_avacapo_action(source_armature, action, scene):
@@ -81,9 +75,9 @@ def _canonical_hierarchy_from_armature(source_armature, source_from_armature):
     source_from_armature_matrix = Matrix(source_from_armature.tolist())
     bones = source_armature.data.bones
     joints = []
-    for source_name, parent_index in mapping._SERVER_TEMPLATE:
+    for source_name, parent_index in canonical_source.CANONICAL_SOURCE_TOPOLOGY:
         bone = bones[source_name]
-        parent_name = None if parent_index == -1 else mapping._SERVER_TEMPLATE[parent_index][0]
+        parent_name = canonical_source.parent_name(parent_index)
         if parent_name is None:
             offset = source_from_armature_matrix @ bone.head_local
             channels = (
@@ -153,21 +147,28 @@ def _sample_action_frames(
 
 def _canonical_source_to_bone_map(source_armature) -> dict[str, str]:
     _require_canonical_source_armature(source_armature)
-    return {source_name: source_name for source_name, _parent in mapping._SERVER_TEMPLATE}
+    return {
+        source_name: source_name
+        for source_name, _parent in canonical_source.CANONICAL_SOURCE_TOPOLOGY
+    }
 
 
 def _require_canonical_source_armature(armature) -> None:
     if armature is None or armature.type != "ARMATURE" or armature.pose is None:
         raise ValueError("Choose an imported AvaCapo source armature.")
     bones = armature.data.bones
-    missing = [name for name, _parent in mapping._SERVER_TEMPLATE if bones.get(name) is None]
+    missing = [
+        name
+        for name, _parent in canonical_source.CANONICAL_SOURCE_TOPOLOGY
+        if bones.get(name) is None
+    ]
     if missing:
         raise ValueError(
             "Source armature is not the AvaCapo canonical skeleton; missing bones: "
             + ", ".join(missing)
         )
-    for name, parent_index in mapping._SERVER_TEMPLATE:
-        expected_parent = None if parent_index == -1 else mapping._SERVER_TEMPLATE[parent_index][0]
+    for name, parent_index in canonical_source.CANONICAL_SOURCE_TOPOLOGY:
+        expected_parent = canonical_source.parent_name(parent_index)
         actual_parent = bones[name].parent.name if bones[name].parent else None
         if actual_parent != expected_parent:
             raise ValueError(
@@ -186,9 +187,15 @@ def _integer_action_range(action) -> tuple[int, int]:
 
 
 def _action_frame_time(action) -> float:
-    fps = float(action.get("avacapo_source_fps", _DEFAULT_AVACAPO_SOURCE_FPS))
+    fps = float(action.get(
+        canonical_source.SOURCE_ACTION_FPS_PROPERTY,
+        canonical_source.DEFAULT_SOURCE_ACTION_FPS,
+    ))
     if not math.isfinite(fps) or fps <= 0.0:
-        raise ValueError("Action property 'avacapo_source_fps' must be a positive number.")
+        raise ValueError(
+            f"Action property {canonical_source.SOURCE_ACTION_FPS_PROPERTY!r} "
+            "must be a positive number."
+        )
     return 1.0 / fps
 
 

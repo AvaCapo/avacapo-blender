@@ -7,7 +7,7 @@ import numpy as np
 from broom import Hierarchy, Joint, Motion
 from broom.kinematics import compute_global_transforms_from_local
 
-from animation.retargeting import blender_adapter, mapping, workflow
+from animation.retargeting import mapping, rest_hierarchy, workflow
 
 
 def _source_hierarchy():
@@ -78,7 +78,7 @@ class ExplicitMappingTests(unittest.TestCase):
             {"name": "root", "parent": None, "head": (1.0, 2.0, 3.0), "matrix": np.eye(3)},
             {"name": "child", "parent": "root", "head": (2.0, 2.0, 3.0), "matrix": rotation},
         )
-        hierarchy = blender_adapter.compile_rest_records(records, rotation)
+        hierarchy = rest_hierarchy.compile_rest_records(records, rotation)
         positions, rotations = compute_global_transforms_from_local(hierarchy)
         np.testing.assert_allclose(positions[0, 0], rotation @ records[0]["head"], atol=1e-8)
         np.testing.assert_allclose(positions[0, 1], rotation @ records[1]["head"], atol=1e-8)
@@ -89,16 +89,17 @@ class ExplicitMappingTests(unittest.TestCase):
         records = (
             {"name": "root", "parent": None, "head": (0.0, 0.0, 0.0), "matrix": ((1.000003, 0.0, 0.0), (0.0, 0.999998, 0.0), (0.0, 0.0, 1.0))},
         )
-        hierarchy = blender_adapter.compile_rest_records(records, np.eye(3))
+        hierarchy = rest_hierarchy.compile_rest_records(records, np.eye(3))
         _positions, rotations = compute_global_transforms_from_local(hierarchy)
         np.testing.assert_allclose(rotations[0, 0], np.eye(3), atol=1e-8)
 
-    def test_rest_adapter_rejects_meaningful_scale(self):
+    def test_rest_adapter_projects_meaningful_scale(self):
         records = (
             {"name": "root", "parent": None, "head": (0.0, 0.0, 0.0), "matrix": ((1.1, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))},
         )
-        with self.assertRaisesRegex(ValueError, "proper rotation"):
-            blender_adapter.compile_rest_records(records, np.eye(3))
+        hierarchy = rest_hierarchy.compile_rest_records(records, np.eye(3))
+        _positions, rotations = compute_global_transforms_from_local(hierarchy)
+        np.testing.assert_allclose(rotations[0, 0], np.eye(3), atol=1e-8)
 
 
 if __name__ == "__main__":

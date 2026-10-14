@@ -5,21 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 
-
-# Server canonical skeleton topology.  Offsets are intentionally synthetic:
-# Broom's name matcher needs names/topology, while actual retargeting always
-# validates against the received server Motion before use.
-_SERVER_TEMPLATE = (
-    ("Hips", -1),
-    ("LeftUpLeg", 0), ("RightUpLeg", 0), ("Spine", 0),
-    ("LeftLeg", 1), ("RightLeg", 2), ("Spine1", 3),
-    ("LeftFoot", 4), ("RightFoot", 5), ("Spine2", 6),
-    ("LeftToe", 7), ("RightToe", 8), ("Neck", 9),
-    ("LeftShoulder", 9), ("RightShoulder", 9), ("Head", 12),
-    ("LeftArm", 13), ("RightArm", 14),
-    ("LeftForeArm", 16), ("RightForeArm", 17),
-    ("LeftHand", 18), ("RightHand", 19),
-)
+from . import canonical_source
 
 # Required semantic anchors for the first humanoid retargeting pass. The
 # remaining server joints are optional: their absence must not block a user
@@ -33,21 +19,7 @@ REQUIRED_SOURCE_JOINTS = frozenset({
 
 def canonical_source_hierarchy():
     """Return the named server skeleton used for pre-generation suggestions."""
-    import broom
-
-    joints = []
-    for name, parent in _SERVER_TEMPLATE:
-        channels = (
-            ("Xposition", "Yposition", "Zposition", "Xrotation", "Yrotation", "Zrotation")
-            if parent == -1 else ("Xrotation", "Yrotation", "Zrotation")
-        )
-        joints.append(broom.Joint(
-            name=name,
-            parent=parent,
-            offset=(0.0, 1.0 if parent != -1 else 0.0, 0.0),
-            channels=channels,
-        ))
-    return broom.Hierarchy(tuple(joints))
+    return canonical_source.canonical_source_hierarchy()
 
 
 def suggest_mapping(source_hierarchy, target_hierarchy, *, min_score: float = 0.65):

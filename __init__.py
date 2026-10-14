@@ -10,13 +10,20 @@ import bpy
 from .ui import ui_tracks
 from .animation import animation_utils
 from .animation.retargeting import (
+    action_provenance,
     blender_adapter,
     blender_artifacts,
-    blender_debug,
     blender_debug_compare,
+    blender_motion_writer,
+    blender_retarget_service,
+    blender_retarget_watcher,
+    blender_root_height_debug,
     blender_source_adapter,
     blender_ui,
+    canonical_source,
+    known_rig_mapping,
     mapping,
+    rest_hierarchy,
     workflow,
 )
 
@@ -37,25 +44,37 @@ def _launch_timeline_tracks_after_registration():
 
 def reload_retarget_ui() -> None:
     """Reload only the isolated Retarget panel and its modules in dependency order."""
-    global animation_utils, blender_adapter, blender_artifacts, blender_debug, blender_debug_compare, blender_source_adapter, blender_ui, mapping, workflow
+    global action_provenance, animation_utils, blender_adapter, blender_artifacts, blender_debug_compare, blender_motion_writer, blender_retarget_service, blender_retarget_watcher, blender_root_height_debug, blender_source_adapter, blender_ui, canonical_source, known_rig_mapping, mapping, rest_hierarchy, workflow
 
+    blender_retarget_watcher.unregister()
     blender_ui.unregister()
+    canonical_source = importlib.reload(canonical_source)
     mapping = importlib.reload(mapping)
     workflow = importlib.reload(workflow)
+    rest_hierarchy = importlib.reload(rest_hierarchy)
     blender_adapter = importlib.reload(blender_adapter)
     blender_source_adapter = importlib.reload(blender_source_adapter)
-    blender_debug = importlib.reload(blender_debug)
+    action_provenance = importlib.reload(action_provenance)
+    known_rig_mapping = importlib.reload(known_rig_mapping)
     blender_debug_compare = importlib.reload(blender_debug_compare)
+    blender_root_height_debug = importlib.reload(blender_root_height_debug)
     animation_utils = importlib.reload(animation_utils)
+    blender_motion_writer = importlib.reload(blender_motion_writer)
     blender_artifacts = importlib.reload(blender_artifacts)
+    blender_retarget_service = importlib.reload(blender_retarget_service)
+    blender_retarget_watcher = importlib.reload(blender_retarget_watcher)
     blender_ui = importlib.reload(blender_ui)
     blender_ui.register()
+    blender_retarget_watcher.register()
+    blender_retarget_watcher.schedule_target_initialization()
 
 
 def register():
     # The Retarget panel does not access context during registration. Register
     # it synchronously so a failure in the unrelated timeline UI cannot hide it.
     blender_ui.register()
+    blender_retarget_watcher.register()
+    blender_retarget_watcher.schedule_target_initialization()
     previous = bpy.app.driver_namespace.get(_TRACKS_TIMER_KEY)
     if previous is not None and bpy.app.timers.is_registered(previous):
         bpy.app.timers.unregister(previous)
@@ -67,5 +86,6 @@ def unregister():
     pending = bpy.app.driver_namespace.pop(_TRACKS_TIMER_KEY, None)
     if pending is not None and bpy.app.timers.is_registered(pending):
         bpy.app.timers.unregister(pending)
+    blender_retarget_watcher.unregister()
     blender_ui.unregister()
     ui_tracks.stop()

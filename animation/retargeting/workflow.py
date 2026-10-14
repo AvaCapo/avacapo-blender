@@ -28,8 +28,13 @@ def retarget_mapped_motion(
 ):
     """Retarget a server Motion to a validated target hierarchy.
 
-    The first vertical slice uses Broom's rest-height ratio when ``scale`` is
-    omitted and deliberately performs no floor alignment or contact solving.
+    The source is AvaCapo's canonical hierarchy, whose root offset is zero.
+    Its standing height is therefore measured from its actual rest geometry,
+    including End Sites, before Broom transfers root translation. Target
+    standing height deliberately uses Broom's default: the global rest height
+    of the target joint explicitly mapped from the source root.
+
+    No floor alignment or contact solving is enabled here.
     """
     import broom.ops.skeleton_geometry
     import broom.retargeting.retarget
@@ -48,6 +53,13 @@ def retarget_mapped_motion(
         if scale is None
         else float(scale)
     )
+    source_root_height = broom.ops.skeleton_geometry.estimate_joint_height(
+        source_motion.hierarchy,
+        source_motion.hierarchy.joint_index(source_motion.hierarchy.root_name),
+        up_axis="Y",
+        floor_height=None,
+        include_end_sites=True,
+    )
     return broom.retargeting.retarget.retarget_mapped_motion(
         source_motion,
         target_hierarchy,
@@ -58,4 +70,9 @@ def retarget_mapped_motion(
         # Joint.local_orientation rest frames, restore rest-pose correction.
         rotation_correction="local_orientation",
         floor_height=None,
+        up_axis="Y",
+        source_root_height=source_root_height,
+        # Intentionally leave target_mapped_root_height at Broom's default.
+        # It is the mapped target joint's global rest height, not a plugin
+        # heuristic or a separately selected floor joint.
     )
