@@ -36,20 +36,21 @@ def ui_scale():
     return getattr(system, "ui_scale", system.dpi * system.pixel_size / 72.0)
 
 
-def is_timeline(space):
-    return (
-        getattr(space, "ui_mode", None) == 'TIMELINE'
-        or getattr(space, "mode", None) == 'TIMELINE'
-    )
-
-
 def in_timeline(context):
-    space, region = context.space_data, context.region
-    return (
-        space is not None and space.type == 'DOPESHEET_EDITOR'
-        and is_timeline(space)
-        and region is not None and region.type == 'WINDOW'
-    )
+    space = context.space_data
+    region = context.region
+    if space is None:
+        return False
+    if space.type != 'DOPESHEET_EDITOR':
+        return False
+    mode = getattr(space, "mode", None)
+    if mode != 'TIMELINE':
+        return False
+    if region is None:
+        return False
+    if region.type != 'WINDOW':
+        return False
+    return True
 
 
 def select_mouse_button(context):

@@ -10,7 +10,7 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 
 from ..core import takes, tracks
-from .track_runtime import is_timeline, runtime, ui_scale
+from .track_runtime import in_timeline, runtime, ui_scale
 from .track_style import STYLE
 
 
@@ -239,22 +239,14 @@ class ClipDrawing:
     def _draw_labels(cls, labels, center_y, scale):
         font_id = 0
         blf.size(font_id, STYLE.font_size * scale)
-        bold_flag = getattr(blf, "BOLD", None)
-        use_bold = STYLE.bold and bold_flag is not None
-        if use_bold:
-            blf.enable(font_id, bold_flag)
-        try:
-            text_y = center_y - blf.dimensions(font_id, "H")[1] / 2.0
-            padding = STYLE.text_padding * scale
-            for label, left_x, right_x, color in labels:
-                fitted = cls._fit_text(label, (right_x - left_x) - 2 * padding)
-                if fitted:
-                    blf.color(font_id, *color)
-                    blf.position(font_id, left_x + padding, text_y, 0)
-                    blf.draw(font_id, fitted)
-        finally:
-            if use_bold:
-                blf.disable(font_id, bold_flag)
+        text_y = center_y - blf.dimensions(font_id, "H")[1] / 2.0
+        padding = STYLE.text_padding * scale
+        for label, left_x, right_x, color in labels:
+            fitted = cls._fit_text(label, (right_x - left_x) - 2 * padding)
+            if fitted:
+                blf.color(font_id, *color)
+                blf.position(font_id, left_x + padding, text_y, 0)
+                blf.draw(font_id, fitted)
 
     @staticmethod
     def _fit_text(text, max_width):
@@ -276,7 +268,7 @@ class ClipDrawing:
     def draw(cls, clips, active_uid, hover):
         context = bpy.context
         space, region = context.space_data, context.region
-        if space is None or region is None or not is_timeline(space):
+        if not in_timeline(context):
             return
 
         view, metrics = cls.metrics(region)

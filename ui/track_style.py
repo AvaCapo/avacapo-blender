@@ -15,18 +15,17 @@ class Palette:
 @dataclass
 class Style:
     clip_height: float = 36.0
-    y_margin: float = 14.0      # gap between the ruler and the clips
+    y_margin: float = 14.0
     handle_width: float = 15.0
-    take_inset: float = 3.0       # take rect inset from the clip top/bottom
-    corner_radius: float = 5.0
-    clip_gap: float = 0.8         # visual gap on each side of a border
+    take_inset: float = 3.0
+    corner_radius: float = 10.0
+    clip_gap: float = 0.8
     chevron_size: float = 5.0
     chevron_width: float = 2.0
     dot_radius: float = 5.0
     sync_max_gap: int = 0         # frames between clips that still get a sync dot
 
     font_size: float = 14.0
-    bold: bool = True
     text_padding: float = 10.0
 
     prompt_dialog_width: int = 440
