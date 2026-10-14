@@ -44,7 +44,7 @@ def _state():
     elif _registration_state is None:
         _registration_state = {
             "handle": None, "keymaps": [], "classes": [], "timers": TIMER_CALLBACKS,
-            "clear_fonts": ClipDrawing.clear_fonts, "reset_runtime": runtime.reset,
+            "reset_runtime": runtime.reset,
         }
     # driver_namespace is reset when a .blend is loaded; keep the resource registry alive.
     namespace[_STATE_KEY] = _registration_state
@@ -84,8 +84,6 @@ def unregister():
             except (RuntimeError, ReferenceError):
                 pass
         state.get("keymaps", []).clear()
-        if state.get("clear_fonts"):
-            state["clear_fonts"]()
         if state.get("reset_runtime"):
             state["reset_runtime"]()
 
@@ -108,7 +106,7 @@ def register():
     unregister()
     state = _state()
     state.update(
-        timers=TIMER_CALLBACKS, clear_fonts=ClipDrawing.clear_fonts, reset_runtime=runtime.reset,
+        timers=TIMER_CALLBACKS,  reset_runtime=runtime.reset,
     )
     try:
         for cls in CLASSES:

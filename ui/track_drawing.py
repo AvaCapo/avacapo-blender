@@ -131,8 +131,6 @@ class MeshBatch:
 
 
 class ClipDrawing:
-    _font_cache = {}
-
     @staticmethod
     def metrics(region):
         scale = ui_scale()
@@ -239,7 +237,7 @@ class ClipDrawing:
 
     @classmethod
     def _draw_labels(cls, labels, center_y, scale):
-        font_id = cls._font_id()
+        font_id = 0
         blf.size(font_id, STYLE.font_size * scale)
         bold_flag = getattr(blf, "BOLD", None)
         use_bold = STYLE.bold and bold_flag is not None
@@ -249,7 +247,7 @@ class ClipDrawing:
             text_y = center_y - blf.dimensions(font_id, "H")[1] / 2.0
             padding = STYLE.text_padding * scale
             for label, left_x, right_x, color in labels:
-                fitted = cls._fit_text(font_id, label, (right_x - left_x) - 2 * padding)
+                fitted = cls._fit_text(label, (right_x - left_x) - 2 * padding)
                 if fitted:
                     blf.color(font_id, *color)
                     blf.position(font_id, left_x + padding, text_y, 0)
@@ -258,24 +256,9 @@ class ClipDrawing:
             if use_bold:
                 blf.disable(font_id, bold_flag)
 
-    @classmethod
-    def _font_id(cls):
-        if not STYLE.font_path:
-            return 0
-        if STYLE.font_path not in cls._font_cache:
-            font_id = blf.load(STYLE.font_path) if os.path.exists(STYLE.font_path) else -1
-            cls._font_cache[STYLE.font_path] = font_id if font_id != -1 else 0
-        return cls._font_cache[STYLE.font_path]
-
-    @classmethod
-    def clear_fonts(cls):
-        for font_path, font_id in cls._font_cache.items():
-            if font_id != 0:
-                blf.unload(font_path)
-        cls._font_cache.clear()
-
     @staticmethod
-    def _fit_text(font_id, text, max_width):
+    def _fit_text(text, max_width):
+        font_id = 0
         if max_width <= 0:
             return ""
         if blf.dimensions(font_id, text)[0] <= max_width:

@@ -25,7 +25,6 @@ class Style:
     dot_radius: float = 5.0
     sync_max_gap: int = 0         # frames between clips that still get a sync dot
 
-    font_path: str = ""           # "" = Blender's UI font (e.g. point at IBM Plex Sans)
     font_size: float = 14.0
     bold: bool = True
     text_padding: float = 10.0
