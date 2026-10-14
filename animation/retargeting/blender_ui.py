@@ -10,7 +10,8 @@ import bpy
 import bpy.props
 import bpy.types
 
-from . import action_provenance, blender_artifacts, blender_debug_compare, blender_retarget_service, blender_root_height_debug, blender_source_adapter, canonical_source, mapping, workflow
+from . import action_provenance, blender_retarget_service, blender_source_adapter, canonical_source, mapping, workflow
+from .debug import artifacts, root_height_capture, source_comparison
 
 
 _STATE_KEY = "avacapo_retarget_mapping_ui_classes"
@@ -146,23 +147,6 @@ class AVACAPO_OT_clear_retarget_mapping(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class AVACAPO_OT_export_retarget_bone_names(bpy.types.Operator):
-    bl_idname = "avacapo.export_retarget_bone_names"
-    bl_label = "Save Bone Names"
-    bl_description = "Save exact target-armature bone names for mapping diagnostics"
-
-    def execute(self, context):
-        try:
-            output_path = blender_artifacts.export_armature_bone_names(
-                context.scene.avacapo_retarget_target
-            )
-        except ValueError as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"Saved bone names: {output_path}")
-        return {"FINISHED"}
-
-
 class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
     """DEBUG ONLY: add the bundled AvaCapo reference fixture to this scene."""
 
@@ -172,7 +156,7 @@ class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            armature = blender_artifacts.append_avacapo_reference_armature(context.scene)
+            armature = artifacts.append_avacapo_reference_armature(context.scene)
         except ValueError as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -384,7 +368,7 @@ class AVACAPO_OT_export_debug_source_motion_comparison(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            output_path = blender_debug_compare.export_source_motion_comparison(
+            output_path = source_comparison.export_source_motion_comparison(
                 context.scene.avacapo_retarget_source_armature,
                 context.scene.avacapo_retarget_source_action,
                 context.scene,
@@ -410,7 +394,7 @@ class AVACAPO_OT_export_direct_compatibility_report(bpy.types.Operator):
             self.report({"WARNING"}, "Retarget UI is reloading; try again in a moment.")
             return {"CANCELLED"}
         try:
-            output_path = blender_artifacts.export_direct_compatibility_report(
+            output_path = artifacts.export_direct_compatibility_report(
                 getattr(scene, "avacapo_retarget_source_armature", None),
                 getattr(scene, "avacapo_retarget_source_action", None),
                 scene.avacapo_retarget_target,
@@ -458,7 +442,7 @@ class AVACAPO_OT_export_root_height_capture(bpy.types.Operator):
                 # depend on a currently valid coordinate transform.
                 coordinate_transform = None
                 target_hierarchy = None
-            output_path = blender_root_height_debug.export_root_height_capture(
+            output_path = root_height_capture.export_root_height_capture(
                 armature,
                 action,
                 context.scene,
@@ -526,7 +510,6 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
         mapping_split.operator("avacapo.suggest_retarget_mapping", icon="VIEWZOOM")
         mapping_split.operator("avacapo.clear_retarget_mapping", icon="TRASH")
         reload_button.operator("avacapo.reload_retarget_ui", text="", icon="FILE_REFRESH")
-        layout.operator("avacapo.export_retarget_bone_names", icon="FILE_TEXT")
         if state.entries:
             _draw_mapping_entries(
                 layout,
@@ -700,7 +683,6 @@ _CLASSES = (
     AVACAPO_RetargetMappingState,
     AVACAPO_OT_suggest_retarget_mapping,
     AVACAPO_OT_clear_retarget_mapping,
-    AVACAPO_OT_export_retarget_bone_names,
     AVACAPO_OT_append_avacapo_reference_armature,
     AVACAPO_OT_reload_retarget_ui,
     AVACAPO_OT_confirm_retarget_mapping,

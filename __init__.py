@@ -12,12 +12,9 @@ from .animation import animation_utils
 from .animation.retargeting import (
     action_provenance,
     blender_adapter,
-    blender_artifacts,
-    blender_debug_compare,
     blender_motion_writer,
     blender_retarget_service,
     blender_retarget_watcher,
-    blender_root_height_debug,
     blender_source_adapter,
     blender_ui,
     canonical_source,
@@ -25,6 +22,12 @@ from .animation.retargeting import (
     mapping,
     rest_hierarchy,
     workflow,
+)
+# DEBUG ONLY:
+from .animation.retargeting.debug import (
+    artifacts as retarget_debug_artifacts,
+    root_height_capture as retarget_debug_root_height_capture,
+    source_comparison as retarget_debug_source_comparison,
 )
 
 
@@ -44,7 +47,7 @@ def _launch_timeline_tracks_after_registration():
 
 def reload_retarget_ui() -> None:
     """Reload only the isolated Retarget panel and its modules in dependency order."""
-    global action_provenance, animation_utils, blender_adapter, blender_artifacts, blender_debug_compare, blender_motion_writer, blender_retarget_service, blender_retarget_watcher, blender_root_height_debug, blender_source_adapter, blender_ui, canonical_source, known_rig_mapping, mapping, rest_hierarchy, workflow
+    global action_provenance, animation_utils, blender_adapter, blender_motion_writer, blender_retarget_service, blender_retarget_watcher, blender_source_adapter, blender_ui, canonical_source, known_rig_mapping, mapping, rest_hierarchy, retarget_debug_artifacts, retarget_debug_root_height_capture, retarget_debug_source_comparison, workflow
 
     blender_retarget_watcher.unregister()
     blender_ui.unregister()
@@ -56,11 +59,11 @@ def reload_retarget_ui() -> None:
     blender_source_adapter = importlib.reload(blender_source_adapter)
     action_provenance = importlib.reload(action_provenance)
     known_rig_mapping = importlib.reload(known_rig_mapping)
-    blender_debug_compare = importlib.reload(blender_debug_compare)
-    blender_root_height_debug = importlib.reload(blender_root_height_debug)
+    retarget_debug_source_comparison = importlib.reload(retarget_debug_source_comparison)
+    retarget_debug_root_height_capture = importlib.reload(retarget_debug_root_height_capture)
     animation_utils = importlib.reload(animation_utils)
     blender_motion_writer = importlib.reload(blender_motion_writer)
-    blender_artifacts = importlib.reload(blender_artifacts)
+    retarget_debug_artifacts = importlib.reload(retarget_debug_artifacts)
     blender_retarget_service = importlib.reload(blender_retarget_service)
     blender_retarget_watcher = importlib.reload(blender_retarget_watcher)
     blender_ui = importlib.reload(blender_ui)
