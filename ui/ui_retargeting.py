@@ -17,7 +17,7 @@ from ..animation.retargeting import (
     mapping,
     workflow,
 )
-from ..animation.retargeting.debug import artifacts, root_height_capture, source_comparison
+from ..animation.retargeting.debug import reference_rig
 
 
 _STATE_KEY = "avacapo_retarget_mapping_ui_classes"
@@ -120,7 +120,7 @@ class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            armature = artifacts.append_avacapo_reference_armature(context.scene)
+            armature = reference_rig.append_avacapo_reference_armature(context.scene)
         except ValueError as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -299,107 +299,6 @@ class AVACAPO_OT_refresh_retarget_status(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class AVACAPO_OT_export_debug_source_motion_comparison(bpy.types.Operator):
-    """DEBUG ONLY: save direct-BVH versus imported-Action FK evidence."""
-
-    bl_idname = "avacapo.export_debug_source_motion_comparison"
-    bl_label = "Save Source Motion Comparison"
-    bl_description = "DEBUG ONLY: compare bundled Backflip BVH with the selected imported source Action"
-
-    def execute(self, context):
-        try:
-            output_path = source_comparison.export_source_motion_comparison(
-                context.scene.avacapo_retarget_source_armature,
-                context.scene.avacapo_retarget_source_action,
-                context.scene,
-                _TEST_BVH_PATH,
-            )
-        except (OSError, ValueError) as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"Saved source comparison: {output_path}")
-        return {"FINISHED"}
-
-
-class AVACAPO_OT_export_direct_compatibility_report(bpy.types.Operator):
-    """DEBUG ONLY: save direct-path fixture evidence without transferring motion."""
-
-    bl_idname = "avacapo.export_direct_compatibility_report"
-    bl_label = "Save Direct Compatibility Report"
-    bl_description = "DEBUG ONLY: check whether the selected target can use direct AvaCapo Motion transfer"
-
-    def execute(self, context):
-        scene = context.scene
-        if not hasattr(scene, "avacapo_retarget_target"):
-            self.report({"WARNING"}, "Retarget properties are unavailable; re-enable the extension.")
-            return {"CANCELLED"}
-        try:
-            output_path = artifacts.export_direct_compatibility_report(
-                getattr(scene, "avacapo_retarget_source_armature", None),
-                getattr(scene, "avacapo_retarget_source_action", None),
-                scene.avacapo_retarget_target,
-                scene,
-            )
-        except (OSError, ValueError) as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"Saved direct compatibility report: {output_path}")
-        return {"FINISHED"}
-
-
-class AVACAPO_OT_export_root_height_capture(bpy.types.Operator):
-    """DEBUG ONLY: save rest and evaluated retarget coordinates for one rig."""
-
-    bl_idname = "avacapo.export_root_height_capture"
-    bl_label = "DEBUG ONLY: Save Root Height Capture"
-    bl_description = (
-        "DEBUG ONLY: save target rest joints and the first ten evaluated retarget frames"
-    )
-
-    def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
-        if armature is None or armature.type != "ARMATURE":
-            self.report({"ERROR"}, "Select a target armature first.")
-            return {"CANCELLED"}
-        action = armature.animation_data.action if armature.animation_data else None
-        provenance = action_provenance.read(action)
-        if action is None or provenance is None:
-            self.report({"ERROR"}, "The active Action is not an AvaCapo retargeted Action.")
-            return {"CANCELLED"}
-        joint_map = blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping)
-        try:
-            source_motion = action_provenance.load_source_motion(provenance, context.scene)
-            try:
-                target_hierarchy, _current_map, coordinate_transform = (
-                    blender_retarget_service.current_retarget_build(
-                        armature,
-                        joint_map,
-                    )
-                )
-            except ValueError:
-                # The capture must remain useful when the mapping was edited
-                # after the Action was built.  Rest/world evidence does not
-                # depend on a currently valid coordinate transform.
-                coordinate_transform = None
-                target_hierarchy = None
-            output_path = root_height_capture.export_root_height_capture(
-                armature,
-                action,
-                context.scene,
-                context.evaluated_depsgraph_get(),
-                source_motion,
-                provenance["source"],
-                current_joint_map=joint_map,
-                canonical_from_armature=coordinate_transform,
-                target_hierarchy=target_hierarchy,
-            )
-        except (OSError, ValueError) as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"Saved root-height capture: {output_path}")
-        return {"FINISHED"}
-
-
 class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
     bl_idname = "AVACAPO_PT_retarget_mapping"
     bl_label = "Retarget Mapping"
@@ -468,12 +367,6 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
         test_action = layout.row()
         test_action.enabled = blender_retarget_service.is_valid_mapping(armature)
         test_action.operator("avacapo.retarget_test_bvh", icon="PLAY")
-        root_height_capture = layout.row()
-        root_height_capture.enabled = (
-            armature.animation_data is not None
-            and action_provenance.read(armature.animation_data.action) is not None
-        )
-        root_height_capture.operator("avacapo.export_root_height_capture", icon="FILE_TEXT")
         _draw_source_action_retarget(layout, scene, armature)
 
 
@@ -500,20 +393,6 @@ def _draw_source_action_retarget(layout, scene, armature) -> None:
     box.label(text="AvaCapo Source Animation", icon="ARMATURE_DATA")
     box.prop(scene, "avacapo_retarget_source_armature", text="Source Armature")
     box.prop(scene, "avacapo_retarget_source_action", text="Source Action")
-    comparison = box.row()
-    comparison.enabled = (
-        scene.avacapo_retarget_source_armature is not None
-        and scene.avacapo_retarget_source_action is not None
-    )
-    # DEBUG ONLY: compare this imported Action with the bundled Backflip BVH.
-    comparison.operator("avacapo.export_debug_source_motion_comparison", icon="FILE_TEXT")
-    direct_report = box.row()
-    direct_report.enabled = (
-        armature is not None
-        and scene.avacapo_retarget_source_armature is not None
-        and scene.avacapo_retarget_source_action is not None
-    )
-    direct_report.operator("avacapo.export_direct_compatibility_report", icon="FILE_TEXT")
     row = box.row()
     row.enabled = (
         blender_retarget_service.is_valid_mapping(armature)
@@ -621,9 +500,6 @@ _CLASSES = (
     AVACAPO_OT_retarget_source_action,
     AVACAPO_OT_retarget_again,
     AVACAPO_OT_refresh_retarget_status,
-    AVACAPO_OT_export_debug_source_motion_comparison,
-    AVACAPO_OT_export_direct_compatibility_report,
-    AVACAPO_OT_export_root_height_capture,
     AVACAPO_PT_retarget_mapping,
 )
 
