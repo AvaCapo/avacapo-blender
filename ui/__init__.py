@@ -18,6 +18,7 @@ from .track_panels import (
 )
 from .track_properties import CT_Take, CT_Clip, CT_Scene
 from .track_runtime import runtime
+from .update_notice import TIMER_CALLBACKS as UPDATE_TIMER_CALLBACKS, stop_update_notice
 
 
 CLASSES = (
@@ -45,6 +46,7 @@ def _state():
         _registration_state = {
             "handle": None, "keymaps": [], "classes": [], "timers": TIMER_CALLBACKS,
             "reset_runtime": runtime.reset,
+            "update_timers": UPDATE_TIMER_CALLBACKS,
         }
     # driver_namespace is reset when a .blend is loaded; keep the resource registry alive.
     namespace[_STATE_KEY] = _registration_state
@@ -54,6 +56,7 @@ def _state():
 @persistent
 def _on_load_pre(_):
     cancel_generation(_state().get("timers", set()))
+    stop_update_notice(_state().get("update_timers", set()))
 
 
 @persistent
@@ -68,6 +71,7 @@ def unregister():
         states.append(legacy)
     for state in states:
         cancel_generation(state.get("timers", set()))
+        stop_update_notice(state.get("update_timers", set()))
         for handler_list, callback in state.get("handlers", []):
             if callback in handler_list:
                 handler_list.remove(callback)
@@ -107,6 +111,7 @@ def register():
     state = _state()
     state.update(
         timers=TIMER_CALLBACKS,  reset_runtime=runtime.reset,
+        update_timers=UPDATE_TIMER_CALLBACKS,
     )
     try:
         for cls in CLASSES:

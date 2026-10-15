@@ -1,33 +1,25 @@
-import bpy
+"""Check addon versions without accessing Blender or registering UI callbacks."""
+
 import threading
 
 import requests
 
-from .config import Config
-from .logger import log
-from .state_controller import State
+from ..common.config import Config
+from ..common.logger import log
+from ..common.version import ADDON_VERSION, is_version_less, normalize_version
 from .storage import Storage
-from .version import ADDON_VERSION, is_version_less, normalize_version
 
 config = Config()
 
 
-def _tag_ui_redraw() -> None:
-    screen = getattr(bpy.context, "screen", None)
-    if screen is None:
-        return
+class UpdateState:
+    """Version-check progress and results available to callers."""
 
-    for area in screen.areas:
-        if area.type == "VIEW_3D":
-            area.tag_redraw()
-
-
-def _refresh_update_notice_timer() -> float | None:
-    if State.update_check_started:
-        return 0.5
-
-    _tag_ui_redraw()
-    return None
+    current_addon_version: tuple[int, ...] = ()
+    latest_addon_version: tuple[int, ...] = ()
+    update_available: bool = False
+    update_check_started: bool = False
+    update_check_done: bool = False
 
 
 def _parse_version(value) -> tuple[int, ...] | None:
@@ -72,38 +64,39 @@ def _check_for_updates_worker() -> None:
         if latest_version is None:
             raise ValueError(f"Invalid addon version payload: {payload!r}")
 
-        State.latest_addon_version = latest_version
-        State.update_available = is_version_less(State.current_addon_version, latest_version)
+        UpdateState.latest_addon_version = latest_version
+        UpdateState.update_available = is_version_less(
+            UpdateState.current_addon_version, latest_version
+        )
     except Exception as exc:
-        State.latest_addon_version = ()
-        State.update_available = False
+        UpdateState.latest_addon_version = ()
+        UpdateState.update_available = False
         log.warning("Addon update check failed: %s", exc)
     finally:
-        State.update_check_done = True
-        State.update_check_started = False
+        UpdateState.update_check_done = True
+        UpdateState.update_check_started = False
 
 
 def reset_update_check_state() -> None:
-    State.current_addon_version = normalize_version(ADDON_VERSION)
-    State.latest_addon_version = ()
-    State.update_available = False
-    State.update_check_done = False
-    State.update_check_started = False
+    UpdateState.current_addon_version = normalize_version(ADDON_VERSION)
+    UpdateState.latest_addon_version = ()
+    UpdateState.update_available = False
+    UpdateState.update_check_done = False
+    UpdateState.update_check_started = False
 
 
 def start_update_check(*, force: bool = False) -> None:
-    if State.update_check_started:
+    """Start a background check; callers own any UI notification or polling."""
+    if UpdateState.update_check_started:
         return
-    if State.update_check_done and not force:
+    if UpdateState.update_check_done and not force:
         return
 
     reset_update_check_state()
     if not Storage.api_token:
         return
 
-    State.update_check_started = True
-    bpy.app.timers.register(_refresh_update_notice_timer, first_interval=0.5)
-
+    UpdateState.update_check_started = True
     thread = threading.Thread(
         target=_check_for_updates_worker,
         name="avacapo-update-check",
