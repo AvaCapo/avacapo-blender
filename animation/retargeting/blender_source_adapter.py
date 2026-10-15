@@ -3,7 +3,7 @@
 This is the inverse boundary for source Actions imported from AvaCapo's
 canonical BVH contract. It is intentionally *not* a generic Blender Action
 exporter: a generic Action has no portable declaration of the source rest
-frame or channel contract needed to recover a Broom ``Motion`` safely.
+frame or channel contract needed to recover a portable ``Motion`` safely.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from . import blender_adapter, canonical_source
 
 
 def motion_from_avacapo_action(source_armature, action, scene):
-    """Recover canonical Broom ``Motion`` from an AvaCapo source Action.
+    """Recover canonical ``Motion`` from an AvaCapo source Action.
 
     The returned hierarchy deliberately has identity ``local_orientation``.
     Blender's bone rest bases are an implementation detail of the imported
@@ -128,9 +128,8 @@ def _sample_action_frames(
                 source_position = source_from_armature_matrix @ armature_position
                 row.extend(float(source_position[axis]) for axis in range(3))
 
-            # Forward import writes P = B^-1 (G^-1 R G) B.  Therefore
-            # R = G B P B^-1 G^-1.  This is the critical inverse that the old
-            # debug extractor omitted by treating P as R directly.
+            # Forward import writes P = B^-1 (G^-1 R G) B. Therefore
+            # R = G B P B^-1 G^-1.
             source_rotation = (
                 source_from_armature_matrix
                 @ rest_basis

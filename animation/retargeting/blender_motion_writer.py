@@ -1,8 +1,4 @@
-"""Blender-only writer for a retargeted Broom ``Motion``.
-
-It is deliberately isolated from legacy BVH/Mixamo application: input is the
-target Motion produced by the mapped workflow and output is one Blender Action.
-"""
+"""Write a retargeted ``Motion`` to one Blender Action."""
 
 from __future__ import annotations
 
@@ -156,7 +152,7 @@ def _current_retarget_bases(skeleton) -> dict[str, Matrix]:
 
 
 def _retarget_joint_locations(motion, joint_index, position_columns, armature_from_canonical, rest_bases):
-    """Convert Broom local translations to Blender pose-bone locations."""
+    """Convert local joint translations to Blender pose-bone locations."""
     hierarchy = motion.hierarchy
     joint = hierarchy.joints[joint_index]
     joint_basis_inverse = rest_bases[joint.name].inverted()
@@ -172,8 +168,8 @@ def _retarget_joint_locations(motion, joint_index, position_columns, armature_fr
         if parent_basis is None:
             armature_delta = (armature_from_canonical @ Matrix.Translation(local_delta)).to_translation()
         else:
-            # Broom child translations use parent rest-local axes; Blender
-            # pose-bone locations use the current bone's rest-local axes.
+            # Child translations use parent rest-local axes; Blender pose-bone
+            # locations use the current bone's rest-local axes.
             armature_delta = parent_basis @ local_delta
         locations.append(tuple(joint_basis_inverse @ armature_delta))
     return locations

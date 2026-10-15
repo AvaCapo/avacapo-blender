@@ -29,7 +29,7 @@ def _target_hierarchy():
 
 
 class ExplicitMappingTests(unittest.TestCase):
-    def test_broom_suggestion_keeps_match_metadata(self):
+    def test_name_based_suggestion_keeps_match_metadata(self):
         source = mapping.canonical_source_hierarchy()
         target = Hierarchy((
             Joint("Root", -1, (0.0, 0.0, 0.0), ("Xposition", "Yposition", "Zposition", "Xrotation", "Yrotation", "Zrotation")),

@@ -23,7 +23,7 @@ def mapping_fingerprint(joint_map) -> str:
 
 
 def target_hierarchy_fingerprint(target_hierarchy, canonical_from_armature) -> str:
-    """Fingerprint exactly the target representation consumed by Broom."""
+    """Fingerprint exactly the compiled target representation."""
     return _fingerprint(
         {
             "canonical_from_armature": _matrix_values(canonical_from_armature),
@@ -58,12 +58,7 @@ def bvh_source(path) -> dict[str, str]:
 
 
 def blender_action_source(armature, action) -> dict[str, str]:
-    """Record a local Blender source with persistent IDs and display names.
-
-    A future server source is a different provenance kind: it will store a
-    server-side animation ID (and, if needed, cache identity), not these
-    Blender-local IDs.
-    """
+    """Record a local Blender source with persistent IDs and display names."""
     if armature is None or armature.type != "ARMATURE":
         raise ValueError("Retarget source must be an armature.")
     if action is None:
@@ -218,32 +213,33 @@ def _ensure_unique_source_identity(data_block, data_blocks) -> str:
 
 
 def _resolve_source_datablock(data_blocks, recorded_uuid, recorded_name, label: str):
-    """Resolve current Blender data by UUID, retaining names for legacy records."""
-    if isinstance(recorded_uuid, str) and recorded_uuid:
-        matches = [
-            candidate
-            for candidate in data_blocks
-            if candidate.get(_SOURCE_IDENTITY_PROPERTY) == recorded_uuid
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            named = [candidate for candidate in matches if candidate.name == recorded_name]
-            if len(named) == 1:
-                return named[0]
-            raise ValueError(
-                f"Original Blender source {label} ID is ambiguous; choose the source again "
-                "and create a new retarget."
-            )
+    """Resolve current Blender data by persistent UUID.
+
+    The readable name only disambiguates an invalid duplicate UUID.
+    """
+    if not isinstance(recorded_uuid, str) or not recorded_uuid:
         raise ValueError(
-            f"Original Blender source {label} is unavailable by its persistent ID."
+            f"Original Blender source {label} has no persistent ID. "
+            "Create a new retargeted Action."
         )
-    if not isinstance(recorded_name, str) or not recorded_name:
-        raise ValueError(f"Original Blender source {label} has no valid reference.")
-    candidate = data_blocks.get(recorded_name)
-    if candidate is None:
-        raise ValueError(f"Original Blender source {label} is unavailable: {recorded_name!r}")
-    return candidate
+    matches = [
+        candidate
+        for candidate in data_blocks
+        if candidate.get(_SOURCE_IDENTITY_PROPERTY) == recorded_uuid
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        named = [candidate for candidate in matches if candidate.name == recorded_name]
+        if len(named) == 1:
+            return named[0]
+        raise ValueError(
+            f"Original Blender source {label} ID is ambiguous; choose the source again "
+            "and create a new retarget."
+        )
+    raise ValueError(
+        f"Original Blender source {label} is unavailable by its persistent ID."
+    )
 
 
 def _fingerprint(value) -> str:

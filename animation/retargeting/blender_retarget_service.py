@@ -24,6 +24,61 @@ def mapping_dict(state) -> dict[str, str]:
     }
 
 
+def cached_mapping_errors(state) -> list[str]:
+    """Return structural validation errors last computed for a mapping state."""
+    return [error for error in state.validation_errors.splitlines() if error]
+
+
+def cached_invalid_source_joints(state) -> frozenset[str]:
+    """Return source rows identified as invalid by the cached validation."""
+    return frozenset(name for name in state.invalid_source_joints.splitlines() if name)
+
+
+def confirmation_errors(armature) -> list[str]:
+    """Return validation errors that prevent confirming the current draft."""
+    state = armature.avacapo_retarget_mapping
+    errors = cached_mapping_errors(state)
+    if not state.validation_ready:
+        errors.insert(0, "Mapping validation needs refresh.")
+    return errors
+
+
+def mapping_status_errors(armature) -> list[str]:
+    """Return validation errors that describe the current mapping state.
+
+    A confirmed map remains current only when its cached structural validation
+    is fresh and it was confirmed under the active coordinate contract.
+    """
+    state = armature.avacapo_retarget_mapping
+    errors = confirmation_errors(armature)
+    if (
+        state.confirmed
+        and state.confirmed_coordinate_contract != COORDINATE_CONTRACT_VERSION
+    ):
+        errors.append("Mapping must be reconfirmed for the current coordinate contract.")
+    return errors
+
+
+def can_confirm_mapping(armature) -> bool:
+    """Whether the current draft has no errors that prevent confirmation."""
+    state = armature.avacapo_retarget_mapping
+    return bool(state.entries) and not confirmation_errors(armature)
+
+
+def confirmed_mapping_errors(armature) -> list[str]:
+    """Return policy errors that prevent retargeting with this mapping."""
+    state = armature.avacapo_retarget_mapping
+    errors = mapping_status_errors(armature)
+    if not state.confirmed:
+        errors.insert(0, "Mapping has not been confirmed.")
+    return errors
+
+
+def is_valid_mapping(armature) -> bool:
+    """Whether the armature has a confirmed mapping usable for retargeting."""
+    return not confirmed_mapping_errors(armature)
+
+
 def ensure_mapping_entries(armature, state) -> None:
     """Create one persisted editable row for every canonical source joint."""
     if armature is None or armature.type != "ARMATURE":
@@ -56,7 +111,7 @@ def mapping_entry_changed(armature, state) -> None:
 
 
 def apply_auto_mapping(armature, state) -> int:
-    """Fill empty rows from Broom's proposal without overwriting user choices."""
+    """Fill empty rows from a name-based proposal without overwriting user choices."""
     ensure_mapping_entries(armature, state)
     state.known_detection_attempted = True
     source = mapping.canonical_source_hierarchy()
@@ -405,7 +460,7 @@ def _try_apply_known_rig_mapping(armature, state) -> str | None:
 
 
 def _cached_validation_errors(state) -> list[str]:
-    return [error for error in state.validation_errors.splitlines() if error]
+    return cached_mapping_errors(state)
 
 
 def _identity():

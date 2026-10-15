@@ -1,4 +1,4 @@
-"""Host-independent explicit-mapping Broom retarget workflow."""
+"""Host-independent explicit-mapping retarget workflow."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from . import mapping
 
 
 def load_bvh_motion(path) -> object:
-    """Load an external BVH into Broom's portable ``Motion`` representation."""
+    """Load an external BVH into a portable ``Motion`` representation."""
     import broom.io
 
     source_path = Path(path)
@@ -30,9 +30,9 @@ def retarget_mapped_motion(
 
     The source is AvaCapo's canonical hierarchy, whose root offset is zero.
     Its standing height is therefore measured from its actual rest geometry,
-    including End Sites, before Broom transfers root translation. Target
-    standing height deliberately uses Broom's default: the global rest height
-    of the target joint explicitly mapped from the source root.
+    including End Sites, before root translation is transferred. Target
+    standing height is the global rest height of the target joint explicitly
+    mapped from the source root.
 
     No floor alignment or contact solving is enabled here.
     """
@@ -65,14 +65,11 @@ def retarget_mapped_motion(
         target_hierarchy,
         joint_map,
         scale=resolved_scale,
-        # DEBUG: bypass Broom's current position-only rest-frame heuristic.
-        # This is not the final policy: once Broom uses real
-        # Joint.local_orientation rest frames, restore rest-pose correction.
+        # Use each joint's explicit rest orientation when correcting rotations.
         rotation_correction="local_orientation",
         floor_height=None,
         up_axis="Y",
         source_root_height=source_root_height,
-        # Intentionally leave target_mapped_root_height at Broom's default.
-        # It is the mapped target joint's global rest height, not a plugin
-        # heuristic or a separately selected floor joint.
+        # Leave target_mapped_root_height unset so it is taken from the mapped
+        # target joint's global rest height.
     )

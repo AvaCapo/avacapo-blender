@@ -1,4 +1,4 @@
-"""Portable compiler from plain rest-joint records to Broom ``Hierarchy``.
+"""Portable compiler from plain rest-joint records to ``Hierarchy``.
 
 This module deliberately has no Blender imports. DCC adapters provide simple
 records with names, parents, rest joint positions, rest matrices and optional
@@ -18,7 +18,7 @@ _ROTATION_SINGULAR_VALUE_EPSILON = 1.0e-8
 
 
 def compile_rest_records(records: Sequence[Mapping[str, object]], skeleton_from_adapter):
-    """Compile portable rest records into a Broom hierarchy.
+    """Compile portable rest records into a ``Hierarchy``.
 
     Each record requires ``name``, ``parent`` (or ``None``), ``head`` and a
     3x3 rest ``matrix``. Optional ``tail``, ``use_connect``,
@@ -163,8 +163,8 @@ def _channels_for_rest_record(record):
     use_connect = record.get("use_connect", True)
     if not isinstance(use_connect, bool):
         raise ValueError(f"use_connect[{record['name']}] must be boolean.")
-    # All rotation axes remain declared for the first Broom contract. Blender
-    # pose rotation locks require a future explicit channel-capability policy.
+    # Export declares all three rotation axes. Blender pose rotation locks are
+    # not represented as channel restrictions.
     if (
         record["parent"] is None
         or record.get("was_adapter_root", False)

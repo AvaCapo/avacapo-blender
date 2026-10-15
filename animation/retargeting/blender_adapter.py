@@ -1,4 +1,4 @@
-"""Blender-only boundary for compiling an armature to a Broom hierarchy.
+"""Blender-only boundary for compiling an armature to a canonical hierarchy.
 
 The common ``mapping`` and ``workflow`` modules deliberately do not import
 this module. The portable ``rest_hierarchy`` compiler accepts the records
@@ -13,7 +13,7 @@ from . import rest_hierarchy
 
 
 _ROTATION_SINGULAR_VALUE_EPSILON = 1.0e-8
-# Source semantic directions expressed in Broom's right-handed coordinate
+# Source semantic directions expressed in the canonical right-handed coordinate
 # system. The ordered semantic triple (right, up, front) is intentionally
 # left-handed: the generated source places character-right on -X.
 _SOURCE_SEMANTIC_BASIS = np.diag((-1.0, 1.0, 1.0))
@@ -143,10 +143,10 @@ def direct_armature_compatibility_errors(
 
 
 def armature_to_hierarchy(armature, skeleton_from_armature):
-    """Compile all Blender rest bones into a Broom 0.2 ``Hierarchy``.
+    """Compile all Blender rest bones into a ``Hierarchy``.
 
     ``skeleton_from_armature`` is an explicit proper 3x3 rotation ``G`` from
-    Blender armature-data coordinates to server/Broom coordinates.
+    Blender armature-data coordinates to canonical source coordinates.
     """
     if armature is None or armature.type != "ARMATURE":
         raise ValueError("Retarget target must be an armature.")

@@ -10,15 +10,23 @@ import bpy
 import bpy.props
 import bpy.types
 
-from . import action_provenance, blender_retarget_service, blender_source_adapter, canonical_source, mapping, workflow
-from .debug import artifacts, root_height_capture, source_comparison
+from ..animation.retargeting import (
+    action_provenance,
+    blender_retarget_service,
+    blender_source_adapter,
+    canonical_source,
+    mapping,
+    workflow,
+)
+from ..animation.retargeting.debug import artifacts, root_height_capture, source_comparison
 
 
 _STATE_KEY = "avacapo_retarget_mapping_ui_classes"
-# DEBUG ONLY: bundled local BVH used for a temporary retarget smoke test.
-# Remove this path and its operator before the server-animation workflow ships.
-_TEST_BVH_PATH = Path(__file__).resolve().parents[2] / "assets" / "tmp_animations" / "blender_backflip.bvh"
+# DEBUG ONLY: bundled Backflip BVH fixture.
+_TEST_BVH_PATH = Path(__file__).resolve().parents[1] / "assets" / "tmp_animations" / "blender_backflip.bvh"
 _RELOAD_TIMER_KEY = "avacapo_retarget_ui_reload"
+
+
 def _entry_changed(entry, _context):
     owner = entry.id_data
     state = getattr(owner, "avacapo_retarget_mapping", None)
@@ -50,54 +58,6 @@ class AVACAPO_RetargetMappingState(bpy.types.PropertyGroup):
     rest_skeleton_dirty: bpy.props.BoolProperty(default=False)
 
 
-def mapping_dict(state) -> dict[str, str]:
-    return blender_retarget_service.mapping_dict(state)
-
-
-def _cached_mapping_errors(state) -> list[str]:
-    return [error for error in state.validation_errors.splitlines() if error]
-
-
-def _cached_invalid_sources(state) -> frozenset[str]:
-    return frozenset(name for name in state.invalid_source_joints.splitlines() if name)
-
-
-def confirmed_mapping_errors(armature) -> list[str]:
-    """Return errors that must reject a supposedly confirmed mapping."""
-    state = armature.avacapo_retarget_mapping
-    errors = _cached_mapping_errors(state)
-    if not state.validation_ready:
-        errors.insert(0, "Mapping validation needs refresh.")
-    if (
-        state.confirmed
-        and state.confirmed_coordinate_contract
-        != blender_retarget_service.COORDINATE_CONTRACT_VERSION
-    ):
-        errors.append("Mapping must be reconfirmed for the current coordinate contract.")
-    if not state.confirmed:
-        errors.insert(0, "Mapping has not been confirmed.")
-    return errors
-
-
-def is_valid_mapping(armature) -> bool:
-    """Whether this armature has a confirmed, unchanged mapping."""
-    return not confirmed_mapping_errors(armature)
-
-
-def apply_auto_mapping(armature) -> int:
-    return blender_retarget_service.apply_auto_mapping(
-        armature,
-        armature.avacapo_retarget_mapping,
-    )
-
-
-def clear_mapping(armature) -> None:
-    blender_retarget_service.clear_mapping(
-        armature,
-        armature.avacapo_retarget_mapping,
-    )
-
-
 def _target_changed(scene, _context):
     armature = scene.avacapo_retarget_target
     if armature is None:
@@ -123,7 +83,10 @@ class AVACAPO_OT_suggest_retarget_mapping(bpy.types.Operator):
     def execute(self, context):
         armature = context.scene.avacapo_retarget_target
         try:
-            changed = apply_auto_mapping(armature)
+            changed = blender_retarget_service.apply_auto_mapping(
+                armature,
+                armature.avacapo_retarget_mapping,
+            )
         except ValueError as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -139,7 +102,10 @@ class AVACAPO_OT_clear_retarget_mapping(bpy.types.Operator):
     def execute(self, context):
         armature = context.scene.avacapo_retarget_target
         try:
-            clear_mapping(armature)
+            blender_retarget_service.clear_mapping(
+                armature,
+                armature.avacapo_retarget_mapping,
+            )
         except ValueError as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
@@ -169,7 +135,7 @@ class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
 
 def _reload_retarget_ui_after_operator():
     """Reload after the current operator has returned and released its class."""
-    addon_module_name = __package__.split(".", maxsplit=1)[0]
+    addon_module_name = __package__.rsplit(".", maxsplit=1)[0]
     addon_module = sys.modules.get(addon_module_name)
     if addon_module is not None:
         addon_module.reload_retarget_ui()
@@ -222,7 +188,7 @@ class AVACAPO_OT_retarget_test_bvh(bpy.types.Operator):
         if armature is None or armature.type != "ARMATURE":
             self.report({"ERROR"}, "Select an armature first.")
             return {"CANCELLED"}
-        errors = confirmed_mapping_errors(armature)
+        errors = blender_retarget_service.confirmed_mapping_errors(armature)
         if errors:
             self.report({"ERROR"}, errors[0])
             return {"CANCELLED"}
@@ -233,7 +199,7 @@ class AVACAPO_OT_retarget_test_bvh(bpy.types.Operator):
                 source_motion,
                 f"AvaCapo Retarget - {_TEST_BVH_PATH.stem}",
                 action_provenance.bvh_source(_TEST_BVH_PATH),
-                mapping_dict(armature.avacapo_retarget_mapping),
+                blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
             )
             state = armature.avacapo_retarget_mapping
             state.retarget_action_status = "up_to_date"
@@ -260,7 +226,7 @@ class AVACAPO_OT_retarget_source_action(bpy.types.Operator):
         if armature is None or armature.type != "ARMATURE":
             self.report({"ERROR"}, "Select a target armature first.")
             return {"CANCELLED"}
-        errors = confirmed_mapping_errors(armature)
+        errors = blender_retarget_service.confirmed_mapping_errors(armature)
         if errors:
             self.report({"ERROR"}, errors[0])
             return {"CANCELLED"}
@@ -275,7 +241,7 @@ class AVACAPO_OT_retarget_source_action(bpy.types.Operator):
                 source_motion,
                 f"AvaCapo Retarget - {source_action.name}",
                 action_provenance.blender_action_source(source_armature, source_action),
-                mapping_dict(armature.avacapo_retarget_mapping),
+                blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
             )
             state = armature.avacapo_retarget_mapping
             state.retarget_action_status = "up_to_date"
@@ -300,7 +266,7 @@ class AVACAPO_OT_retarget_again(bpy.types.Operator):
         if armature is None or armature.type != "ARMATURE":
             self.report({"ERROR"}, "Select a target armature first.")
             return {"CANCELLED"}
-        errors = confirmed_mapping_errors(armature)
+        errors = blender_retarget_service.confirmed_mapping_errors(armature)
         if errors:
             self.report({"ERROR"}, errors[0])
             return {"CANCELLED"}
@@ -316,7 +282,7 @@ class AVACAPO_OT_retarget_again(bpy.types.Operator):
                 source_motion,
                 action,
                 provenance["source"],
-                mapping_dict(armature.avacapo_retarget_mapping),
+                blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
             )
             state = armature.avacapo_retarget_mapping
             state.retarget_action_status = "up_to_date"
@@ -347,7 +313,7 @@ class AVACAPO_OT_refresh_retarget_status(bpy.types.Operator):
                 armature,
                 armature.avacapo_retarget_mapping,
                 action,
-                mapping_dict(armature.avacapo_retarget_mapping),
+                blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
             )
         except ValueError as error:
             self.report({"ERROR"}, str(error))
@@ -426,7 +392,7 @@ class AVACAPO_OT_export_root_height_capture(bpy.types.Operator):
         if action is None or provenance is None:
             self.report({"ERROR"}, "The active Action is not an AvaCapo retargeted Action.")
             return {"CANCELLED"}
-        joint_map = mapping_dict(armature.avacapo_retarget_mapping)
+        joint_map = blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping)
         try:
             source_motion = action_provenance.load_source_motion(provenance, context.scene)
             try:
@@ -470,9 +436,8 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        # An old panel draw can be scheduled while hot reload is removing and
-        # recreating Scene properties. Do not dereference a half-unregistered
-        # UI; the next redraw occurs after register() restores the properties.
+        # A panel draw can run while hot reload recreates Scene properties.
+        # Wait for the next redraw instead of accessing incomplete UI state.
         required_scene_properties = (
             "avacapo_retarget_target",
             "avacapo_retarget_source_armature",
@@ -492,10 +457,8 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
             layout.label(text="Choose a custom armature to create a draft.", icon="INFO")
             return
         state = armature.avacapo_retarget_mapping
-        structural_errors = _cached_mapping_errors(state)
-        invalid_sources = _cached_invalid_sources(state)
-        if not state.validation_ready:
-            structural_errors = ["Mapping validation needs refresh.", *structural_errors]
+        structural_errors = blender_retarget_service.mapping_status_errors(armature)
+        invalid_sources = blender_retarget_service.cached_invalid_source_joints(state)
         visible_structural_errors = _visible_mapping_errors(structural_errors, state.confirmed)
         errors = list(visible_structural_errors)
         if state.draft_error and state.draft_error not in errors:
@@ -530,10 +493,10 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
         else:
             layout.label(text="Required mappings are complete.", icon="CHECKMARK")
         actions = layout.row(align=True)
-        actions.enabled = bool(state.entries) and state.validation_ready and not structural_errors
+        actions.enabled = blender_retarget_service.can_confirm_mapping(armature)
         actions.operator("avacapo.confirm_retarget_mapping", icon="CHECKMARK")
         test_action = layout.row()
-        test_action.enabled = is_valid_mapping(armature)
+        test_action.enabled = blender_retarget_service.is_valid_mapping(armature)
         test_action.operator("avacapo.retarget_test_bvh", icon="PLAY")
         root_height_capture = layout.row()
         root_height_capture.enabled = (
@@ -583,7 +546,7 @@ def _draw_source_action_retarget(layout, scene, armature) -> None:
     direct_report.operator("avacapo.export_direct_compatibility_report", icon="FILE_TEXT")
     row = box.row()
     row.enabled = (
-        is_valid_mapping(armature)
+        blender_retarget_service.is_valid_mapping(armature)
         and scene.avacapo_retarget_source_armature is not None
         and scene.avacapo_retarget_source_action is not None
     )
@@ -608,7 +571,7 @@ def _draw_active_retarget_action_status(layout, armature) -> None:
         status_row.alert = True
         status_row.label(text="Retarget recommended", icon="ERROR")
         row = layout.row()
-        row.enabled = is_valid_mapping(armature)
+        row.enabled = blender_retarget_service.is_valid_mapping(armature)
         row.operator("avacapo.retarget_again", icon="FILE_REFRESH")
         return
     layout.label(text="Retarget status has not been refreshed", icon="INFO")
@@ -624,11 +587,10 @@ def _draw_mapping_entries(
     *,
     show_missing_required_errors,
 ):
-    """Draw the legacy mapping-editor table with the current entry schema.
+    """Draw the Source Bone to Target Bone mapping table.
 
     Required source joints keep the normal label treatment. Optional joints are
     deliberately de-emphasised, while every target selector remains editable.
-    This is the interaction model from the previous custom-mapping editor.
     """
     header = layout.row(align=True)
     header.label(text="Source Bone")
@@ -745,16 +707,17 @@ def unregister():
     for cls in reversed(registered):
         if _is_property_group(cls):
             _unregister_class_if_needed(cls)
+    bpy.app.driver_namespace.pop(_STATE_KEY, None)
 
 
 def _registered_retarget_classes():
     """Return current and stale registered classes after an interrupted reload."""
     known = {}
-    for cls in bpy.app.driver_namespace.pop(_STATE_KEY, []):
+    for cls in bpy.app.driver_namespace.get(_STATE_KEY, []):
         known[cls.__name__] = cls
     for cls in _CLASSES:
         registered = getattr(bpy.types, cls.__name__, None)
-        if registered is not None:
+        if registered is not None and cls.__name__ not in known:
             known[cls.__name__] = registered
     return tuple(known.values())
 
@@ -769,9 +732,11 @@ def _is_property_group(cls) -> bool:
 def _unregister_class_if_needed(cls) -> None:
     try:
         bpy.utils.unregister_class(cls)
-    except RuntimeError:
-        # It may have been removed by another extension lifecycle callback.
-        pass
+    except RuntimeError as error:
+        message = str(error).lower()
+        if "not registered" in message or "missing bl_rna attribute" in message:
+            return
+        raise
 
 
 def _register_class_if_needed(cls) -> None:

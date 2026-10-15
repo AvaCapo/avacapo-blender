@@ -7,9 +7,8 @@ from collections.abc import Mapping
 
 from . import canonical_source
 
-# Required semantic anchors for the first humanoid retargeting pass. The
-# remaining server joints are optional: their absence must not block a user
-# from confirming a useful mapping.
+# Required semantic anchors for humanoid mapping. Remaining source joints are
+# optional: their absence does not block confirmation of a useful mapping.
 REQUIRED_SOURCE_JOINTS = frozenset({
     "Hips", "Head",
     "LeftArm", "RightArm", "LeftHand", "RightHand",
@@ -23,7 +22,7 @@ def canonical_source_hierarchy():
 
 
 def suggest_mapping(source_hierarchy, target_hierarchy, *, min_score: float = 0.65):
-    """Return Broom's name-based mapping proposal with score/reason metadata."""
+    """Return a name-based mapping proposal with score/reason metadata."""
     import broom.retargeting.mapping
 
     return broom.retargeting.mapping.map_joints(
@@ -66,12 +65,7 @@ def mapping_errors(
     *,
     required_source_names=REQUIRED_SOURCE_JOINTS,
 ) -> list[str]:
-    """Return all actionable mapping errors for the editor and workflow.
-
-    The legacy editor showed all local mapping errors before its Save button
-    became available. Keep that behaviour here rather than relying on a later
-    retarget operation to expose only the first invalid pair.
-    """
+    """Return every actionable mapping error for the editor and workflow."""
     source_names = set(source_hierarchy.joint_names)
     target_names = set(target_hierarchy.joint_names)
     errors = []

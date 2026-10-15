@@ -3,7 +3,7 @@
 The handler only notices edits to an assigned target armature's *rest* data.
 It never compiles a hierarchy in Blender's depsgraph callback: that work is
 debounced into a timer, so panel drawing remains display-only and edit-mode
-updates do not repeatedly invoke Broom.
+updates do not repeatedly rebuild retarget state.
 """
 
 from __future__ import annotations
