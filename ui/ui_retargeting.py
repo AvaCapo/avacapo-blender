@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-import sys
 
 import bpy
 import bpy.props
@@ -24,7 +23,6 @@ from ..animation.retargeting.debug import artifacts, root_height_capture, source
 _STATE_KEY = "avacapo_retarget_mapping_ui_classes"
 # DEBUG ONLY: bundled Backflip BVH fixture.
 _TEST_BVH_PATH = Path(__file__).resolve().parents[1] / "assets" / "tmp_animations" / "blender_backflip.bvh"
-_RELOAD_TIMER_KEY = "avacapo_retarget_ui_reload"
 
 
 def _entry_changed(entry, _context):
@@ -130,30 +128,6 @@ class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
         armature.select_set(True)
         context.view_layer.objects.active = armature
         self.report({"INFO"}, f"AvaCapo reference rig ready: {armature.name!r}.")
-        return {"FINISHED"}
-
-
-def _reload_retarget_ui_after_operator():
-    """Reload after the current operator has returned and released its class."""
-    addon_module_name = __package__.rsplit(".", maxsplit=1)[0]
-    addon_module = sys.modules.get(addon_module_name)
-    if addon_module is not None:
-        addon_module.reload_retarget_ui()
-    bpy.app.driver_namespace.pop(_RELOAD_TIMER_KEY, None)
-    return None
-
-
-class AVACAPO_OT_reload_retarget_ui(bpy.types.Operator):
-    bl_idname = "avacapo.reload_retarget_ui"
-    bl_label = "Reload Retarget UI"
-    bl_description = "Reload only the Retarget panel without restarting Blender"
-
-    def execute(self, _context):
-        previous = bpy.app.driver_namespace.get(_RELOAD_TIMER_KEY)
-        if previous is not None and bpy.app.timers.is_registered(previous):
-            bpy.app.timers.unregister(previous)
-        bpy.app.driver_namespace[_RELOAD_TIMER_KEY] = _reload_retarget_ui_after_operator
-        bpy.app.timers.register(_reload_retarget_ui_after_operator, first_interval=0.0)
         return {"FINISHED"}
 
 
@@ -357,7 +331,7 @@ class AVACAPO_OT_export_direct_compatibility_report(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         if not hasattr(scene, "avacapo_retarget_target"):
-            self.report({"WARNING"}, "Retarget UI is reloading; try again in a moment.")
+            self.report({"WARNING"}, "Retarget properties are unavailable; re-enable the extension.")
             return {"CANCELLED"}
         try:
             output_path = artifacts.export_direct_compatibility_report(
@@ -436,8 +410,8 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        # A panel draw can run while hot reload recreates Scene properties.
-        # Wait for the next redraw instead of accessing incomplete UI state.
+        # A failed or incomplete extension registration can leave the panel
+        # visible before its Scene properties exist. Do not access them here.
         required_scene_properties = (
             "avacapo_retarget_target",
             "avacapo_retarget_source_armature",
@@ -447,7 +421,7 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
             not all(hasattr(scene, name) for name in required_scene_properties)
             or not hasattr(bpy.types.Object, "avacapo_retarget_mapping")
         ):
-            layout.label(text="Retarget UI is reloading…", icon="FILE_REFRESH")
+            layout.label(text="Retarget properties are unavailable; re-enable the extension.", icon="ERROR")
             return
         layout.prop(scene, "avacapo_retarget_target", text="Target Armature")
         # DEBUG ONLY: fixture setup for strict direct-compatibility checks.
@@ -465,14 +439,10 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
             errors.append(state.draft_error)
 
         _draw_mapping_status(layout, state, errors)
-        row = layout.row(align=True)
-        split = row.split(factor=0.90, align=True)
-        mapping_buttons = split.row(align=True)
-        reload_button = split.row(align=True)
+        mapping_buttons = layout.row(align=True)
         mapping_split = mapping_buttons.split(factor=0.5, align=True)
         mapping_split.operator("avacapo.suggest_retarget_mapping", icon="VIEWZOOM")
         mapping_split.operator("avacapo.clear_retarget_mapping", icon="TRASH")
-        reload_button.operator("avacapo.reload_retarget_ui", text="", icon="FILE_REFRESH")
         if state.entries:
             _draw_mapping_entries(
                 layout,
@@ -646,7 +616,6 @@ _CLASSES = (
     AVACAPO_OT_suggest_retarget_mapping,
     AVACAPO_OT_clear_retarget_mapping,
     AVACAPO_OT_append_avacapo_reference_armature,
-    AVACAPO_OT_reload_retarget_ui,
     AVACAPO_OT_confirm_retarget_mapping,
     AVACAPO_OT_retarget_test_bvh,
     AVACAPO_OT_retarget_source_action,
@@ -711,15 +680,40 @@ def unregister():
 
 
 def _registered_retarget_classes():
-    """Return current and stale registered classes after an interrupted reload."""
-    known = {}
+    """Return every current or stale Retarget UI class Blender may retain."""
+    expected_names = frozenset(cls.__name__ for cls in _CLASSES)
+    known = []
+    seen_ids = set()
+
+    def add(candidate):
+        if (
+            candidate is None
+            or id(candidate) in seen_ids
+            or getattr(candidate, "__name__", None) not in expected_names
+            or not _is_retarget_ui_class(candidate)
+        ):
+            return
+        seen_ids.add(id(candidate))
+        known.append(candidate)
+
     for cls in bpy.app.driver_namespace.get(_STATE_KEY, []):
-        known[cls.__name__] = cls
+        add(cls)
     for cls in _CLASSES:
-        registered = getattr(bpy.types, cls.__name__, None)
-        if registered is not None and cls.__name__ not in known:
-            known[cls.__name__] = registered
-    return tuple(known.values())
+        add(getattr(bpy.types, cls.__name__, None))
+    for base_class in (bpy.types.PropertyGroup, bpy.types.Operator, bpy.types.Panel):
+        lookup = getattr(base_class, "bl_rna_get_subclass_py", None)
+        if lookup is not None:
+            for class_name in expected_names:
+                add(lookup(class_name, None))
+        for cls in base_class.__subclasses__():
+            add(cls)
+    return tuple(known)
+
+
+def _is_retarget_ui_class(cls) -> bool:
+    """Whether a class belongs to this UI module, including an older reload."""
+    module_name = getattr(cls, "__module__", "")
+    return module_name == __name__ or module_name.endswith(".ui.ui_retargeting")
 
 
 def _is_property_group(cls) -> bool:
@@ -740,8 +734,8 @@ def _unregister_class_if_needed(cls) -> None:
 
 
 def _register_class_if_needed(cls) -> None:
-    """Register after removing a stale class left by an interrupted reload."""
-    stale = getattr(bpy.types, cls.__name__, None)
-    if stale is not None:
-        _unregister_class_if_needed(stale)
+    """Register after removing a stale class with the same Blender type name."""
+    for stale in _registered_retarget_classes():
+        if stale.__name__ == cls.__name__:
+            _unregister_class_if_needed(stale)
     bpy.utils.register_class(cls)

@@ -2,32 +2,12 @@
 
 from __future__ import annotations
 
-import importlib
 import traceback
 
 import bpy
 
 from .ui import ui_retargeting, ui_tracks
-from .animation import animation_utils
-from .animation.retargeting import (
-    action_provenance,
-    blender_adapter,
-    blender_motion_writer,
-    blender_retarget_service,
-    blender_retarget_watcher,
-    blender_source_adapter,
-    canonical_source,
-    known_rig_mapping,
-    mapping,
-    rest_hierarchy,
-    workflow,
-)
-# DEBUG ONLY:
-from .animation.retargeting.debug import (
-    artifacts as retarget_debug_artifacts,
-    root_height_capture as retarget_debug_root_height_capture,
-    source_comparison as retarget_debug_source_comparison,
-)
+from .animation.retargeting import blender_retarget_watcher
 
 
 _TRACKS_TIMER_KEY = "avacapo_deferred_timeline_tracks_launch"
@@ -42,33 +22,6 @@ def _launch_timeline_tracks_after_registration():
     finally:
         bpy.app.driver_namespace.pop(_TRACKS_TIMER_KEY, None)
     return None
-
-
-def reload_retarget_ui() -> None:
-    """Reload only the isolated Retarget panel and its modules in dependency order."""
-    global action_provenance, animation_utils, blender_adapter, blender_motion_writer, blender_retarget_service, blender_retarget_watcher, blender_source_adapter, canonical_source, known_rig_mapping, mapping, rest_hierarchy, retarget_debug_artifacts, retarget_debug_root_height_capture, retarget_debug_source_comparison, ui_retargeting, workflow
-
-    blender_retarget_watcher.unregister()
-    ui_retargeting.unregister()
-    canonical_source = importlib.reload(canonical_source)
-    mapping = importlib.reload(mapping)
-    workflow = importlib.reload(workflow)
-    rest_hierarchy = importlib.reload(rest_hierarchy)
-    blender_adapter = importlib.reload(blender_adapter)
-    blender_source_adapter = importlib.reload(blender_source_adapter)
-    action_provenance = importlib.reload(action_provenance)
-    known_rig_mapping = importlib.reload(known_rig_mapping)
-    retarget_debug_source_comparison = importlib.reload(retarget_debug_source_comparison)
-    retarget_debug_root_height_capture = importlib.reload(retarget_debug_root_height_capture)
-    animation_utils = importlib.reload(animation_utils)
-    blender_motion_writer = importlib.reload(blender_motion_writer)
-    retarget_debug_artifacts = importlib.reload(retarget_debug_artifacts)
-    blender_retarget_service = importlib.reload(blender_retarget_service)
-    blender_retarget_watcher = importlib.reload(blender_retarget_watcher)
-    ui_retargeting = importlib.reload(ui_retargeting)
-    ui_retargeting.register()
-    blender_retarget_watcher.register()
-    blender_retarget_watcher.schedule_target_initialization()
 
 
 def register():

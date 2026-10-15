@@ -16,20 +16,23 @@ from . import blender_retarget_service
 
 
 _HANDLER_KEY = "avacapo_retarget_rest_skeleton_handler"
+_LOAD_HANDLER_KEY = "avacapo_retarget_load_handler"
 _TIMER_KEY = "avacapo_retarget_rest_skeleton_refresh"
-_RESTORE_TIMER_KEY = "avacapo_retarget_restore_targets"
+_INITIALIZATION_TIMER_KEY = "avacapo_retarget_initialize_targets"
 _DEBOUNCE_SECONDS = 0.15
 
 
 def register() -> None:
-    """Install one reload-safe depsgraph handler."""
+    """Install handlers that maintain state after rest edits and file loads."""
     unregister()
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph_update)
     bpy.app.driver_namespace[_HANDLER_KEY] = _on_depsgraph_update
+    bpy.app.handlers.load_post.append(_on_load_post)
+    bpy.app.driver_namespace[_LOAD_HANDLER_KEY] = _on_load_post
 
 
 def unregister() -> None:
-    """Remove handlers and pending timers left by this module or a reload."""
+    """Remove this module's handlers and pending refresh timers."""
     for handler in tuple(bpy.app.handlers.depsgraph_update_post):
         if (
             getattr(handler, "__module__", None) == __name__
@@ -38,20 +41,28 @@ def unregister() -> None:
             bpy.app.handlers.depsgraph_update_post.remove(handler)
     bpy.app.driver_namespace.pop(_HANDLER_KEY, None)
 
+    for handler in tuple(bpy.app.handlers.load_post):
+        if (
+            getattr(handler, "__module__", None) == __name__
+            and getattr(handler, "__name__", None) == "_on_load_post"
+        ):
+            bpy.app.handlers.load_post.remove(handler)
+    bpy.app.driver_namespace.pop(_LOAD_HANDLER_KEY, None)
+
     timer = bpy.app.driver_namespace.pop(_TIMER_KEY, None)
     if timer is not None and bpy.app.timers.is_registered(timer):
         bpy.app.timers.unregister(timer)
-    restore_timer = bpy.app.driver_namespace.pop(_RESTORE_TIMER_KEY, None)
-    if restore_timer is not None and bpy.app.timers.is_registered(restore_timer):
-        bpy.app.timers.unregister(restore_timer)
+    initialization_timer = bpy.app.driver_namespace.pop(_INITIALIZATION_TIMER_KEY, None)
+    if initialization_timer is not None and bpy.app.timers.is_registered(initialization_timer):
+        bpy.app.timers.unregister(initialization_timer)
 
 
 def schedule_target_initialization() -> None:
-    """Initialize restored target properties after restricted registration ends."""
-    timer = bpy.app.driver_namespace.get(_RESTORE_TIMER_KEY)
+    """Schedule state refresh once normal Blender data access is available."""
+    timer = bpy.app.driver_namespace.get(_INITIALIZATION_TIMER_KEY)
     if timer is not None and bpy.app.timers.is_registered(timer):
         return
-    bpy.app.driver_namespace[_RESTORE_TIMER_KEY] = _initialize_restored_targets
+    bpy.app.driver_namespace[_INITIALIZATION_TIMER_KEY] = _initialize_restored_targets
     bpy.app.timers.register(_initialize_restored_targets, first_interval=0.1)
 
 
@@ -82,6 +93,12 @@ def _on_depsgraph_update(_scene, depsgraph) -> None:
         # A handler exception can otherwise make Blender silently stop calling
         # this watcher. There is no reliable target state to update here.
         logger.log.exception("Unexpected AvaCapo retarget depsgraph watcher failure")
+
+
+@bpy.app.handlers.persistent
+def _on_load_post(_unused) -> None:
+    """Refresh persisted target state after a new Blender file has loaded."""
+    schedule_target_initialization()
 
 
 def _schedule_refresh() -> None:
@@ -122,7 +139,7 @@ def _refresh_dirty_targets():
 
 
 def _initialize_restored_targets():
-    """Restore cached state only once normal Blender data access is available."""
+    """Refresh persisted target state only after Blender data is accessible."""
     try:
         scenes = tuple(bpy.data.scenes)
     except AttributeError:
@@ -130,7 +147,7 @@ def _initialize_restored_targets():
         # Keep the same registered timer and try again after registration.
         return 0.1
 
-    bpy.app.driver_namespace.pop(_RESTORE_TIMER_KEY, None)
+    bpy.app.driver_namespace.pop(_INITIALIZATION_TIMER_KEY, None)
     try:
         for scene in scenes:
             armature = getattr(scene, "avacapo_retarget_target", None)
