@@ -1,6 +1,10 @@
 import json
-from .logger import log
-from .config import Config
+import os
+from pathlib import Path
+import tempfile
+
+from ..common.logger import log
+from ..common.config import Config
 
 config = Config()
 
@@ -10,31 +14,44 @@ class Storage:
     base_url: str = ""
 
     @classmethod
-    def load(cls) -> None:
-        log.debug("storage loading")
+    def load(cls, path: str | os.PathLike | None = None) -> bool:
+        """Explicitly load settings; a missing file never creates one."""
         try:
-            with open(config.STORAGE_PATH) as f:
+            with open(path or config.STORAGE_PATH, encoding="utf-8") as f:
                 _dict = json.load(f)
-            for k, v in _dict.items():
-                if k in cls.__annotations__:
-                    setattr(cls, k, v)
-                else:
-                    log.warning("Unknown key in storage: '%s', skipping.", k)
+            if not isinstance(_dict, dict):
+                raise ValueError("Settings must be a JSON object.")
+            values = {key: _dict.get(key, "") for key in cls.__annotations__}
+            if any(not isinstance(value, str) for value in values.values()):
+                raise ValueError("Settings fields must be strings.")
         except FileNotFoundError:
-            log.warning("Storage file not found, creating.")
-            cls.save()
-        except json.JSONDecodeError as e:
-            log.error("Storage file corrupt: %s", e)
+            cls.api_token = cls.base_url = ""
+            return False
+        except (OSError, ValueError):
+            cls.api_token = cls.base_url = ""
+            log.error("Could not load settings: unreadable or invalid settings file.")
+            return False
+        for key, value in values.items():
+            setattr(cls, key, value)
+        return True
 
     @classmethod
-    def save(cls) -> None:
-        known_fields = cls.__annotations__
-        data = {}
-        for key in known_fields:
-            data[key] = getattr(cls, key)
-        with open(config.STORAGE_PATH, "w") as f:
-            json.dump(data, f, indent=2)
-
-
-Storage.load()
-log.debug("Storage loaded; API token configured: %s", bool(Storage.api_token))
+    def save(cls, path: str | os.PathLike | None = None) -> None:
+        """Replace the file atomically, without truncating existing settings on failure."""
+        destination = Path(path or config.STORAGE_PATH)
+        data = {key: getattr(cls, key) for key in cls.__annotations__}
+        if any(not isinstance(value, str) for value in data.values()):
+            raise ValueError("Settings fields must be strings.")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=destination.parent, delete=False
+            ) as stream:
+                temporary = stream.name
+                json.dump(data, stream, indent=2, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            if temporary is not None and os.path.exists(temporary):
+                os.unlink(temporary)
