@@ -2,8 +2,8 @@ import bpy
 from bpy.app.handlers import persistent
 from typing import Literal, TypeAlias
 
-from .config import Config
-from .logger import log
+from ..common.config import Config
+from ..common.logger import log
 from .retarget_maps import MIXAMO_REQUIRED_BONES, canonical_bone_name
 
 config = Config()

@@ -6,9 +6,9 @@ from mathutils import Matrix, Euler, Quaternion, Vector
 from bpy_extras import anim_utils
 from broom.bvh.schemas import BVHDocument
 
-from .logger import log
-from .rig_utils import infer_rig_type
-from .config import Config
+from ..common.config import Config
+from ..common.logger import log
+from . import rig_utils
 from .retarget_maps import (
     MIXAMO_RETARGET_BONES,
     MIXAMO_SCALE_REFERENCE_BONES,
@@ -23,13 +23,13 @@ def apply_animation(
     document: BVHDocument,
     action: bpy.types.Action,
 ) -> None:
-    match infer_rig_type(obj):
+    match rig_utils.infer_rig_type(obj):
         case "avacapo_bvh_v1":
             apply_bvh(obj, document, action)
         case "mixamo":
             apply_bvh_to_mixamo(obj, document, action)
         case _:
-            log.error(f"cannot apply animation to {infer_rig_type}")
+            log.error(f"cannot apply animation to {rig_utils.infer_rig_type(obj)}")
 
 
 def reset_pose_transforms(obj: bpy.types.Object) -> None:

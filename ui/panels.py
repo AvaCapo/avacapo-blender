@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from .config import Config
 from .storage import Storage
 from . import animation_utils
-from . import bvh_smpl
+from ..animation import bvh_npz
 from . import constraint_utils
 from . import rig_utils
 from .server import get_fps
@@ -615,7 +615,7 @@ def draw_clip(layout: bpy.types.UILayout, obj: bpy.types.Object, clip) -> None:
         convert_op.clip_name = clip.name
         convert_op.attempt_uid = active_attempt.uid
 
-        conversion = bvh_smpl.get_cached_conversion(active_attempt.action_name)
+        conversion = bvh_npz.get_cached_conversion(active_attempt.action_name)
         if conversion is not None:
             size_kib = len(conversion) / 1024.0
             box_attempts.label(
