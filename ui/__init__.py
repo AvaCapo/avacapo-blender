@@ -1,4 +1,4 @@
-"""Register the timeline UI and own its Blender resources."""
+"""Register Blender UI resources for the add-on."""
 
 import bpy
 from bpy.app.handlers import persistent
@@ -19,6 +19,8 @@ from .track_panels import (
 from .track_properties import CT_Take, CT_Clip, CT_Scene
 from .track_runtime import runtime
 from .update_notice import TIMER_CALLBACKS as UPDATE_TIMER_CALLBACKS, stop_update_notice
+from . import ui_retargeting
+from ..animation.retargeting import blender_retarget_watcher
 
 
 CLASSES = (
@@ -64,7 +66,14 @@ def _on_load_post(_):
     _state()
 
 
+def _unregister_retargeting():
+    """Remove Retarget handlers before their UI properties and classes."""
+    blender_retarget_watcher.unregister()
+    ui_retargeting.unregister()
+
+
 def unregister():
+    _unregister_retargeting()
     states = [_state()]
     legacy = bpy.app.driver_namespace.get(_LEGACY_STATE_KEY)
     if legacy is not None and legacy is not states[0]:
@@ -141,6 +150,9 @@ def register():
             ):
                 item = keymap.keymap_items.new(operator, button, value)
                 state["keymaps"].append((keymap, item))
+        ui_retargeting.register()
+        blender_retarget_watcher.register()
+        blender_retarget_watcher.schedule_target_initialization()
     except Exception:
         unregister()
         raise
