@@ -37,6 +37,7 @@ class AnimationJobs:
         public_url = f"{self.base_url}/api/v1/public"
         self.status_url = f"{public_url}/api-avacapo-status/"
         self.download_url = f"{public_url}/api-avacapo-download/"
+        self.cancel_url = f"{public_url}/api-avacapo-cancel/"
 
     def _remaining(self, deadline, stage):
         remaining = deadline - time.monotonic()
@@ -120,6 +121,19 @@ class AnimationJobs:
                 "Submission response was lost; the server may already have created the job.",
             ) from None
 
+    def cancel_job(self, api_token, hashed_id) -> None:
+        """Request cancellation once; HTTP 202 means the server accepted the request."""
+        self._validate_identity(api_token, hashed_id)
+        try:
+            with requests.post(
+                self.cancel_url, params={"api_token": api_token, "hashed_id": hashed_id},
+                timeout=(Config.CONNECT_TIMEOUT, Config.REQUEST_TIMEOUT),
+            ) as response:
+                if response.status_code not in {200, 202}:
+                    raise self._http_error(response, "cancelling")
+        except requests.RequestException:
+            raise GenerationError("Server cancellation request failed.") from None
+
     def get_job_status(self, api_token, hashed_id, *, cancel_event=None, deadline=None) -> str:
         self._validate_identity(api_token, hashed_id)
         if deadline is None:
@@ -132,7 +146,7 @@ class AnimationJobs:
             status = _json_string(response, "status")
         self._remaining(deadline, "status")
         _check_cancel(cancel_event)
-        if status not in {"pending", "processing", "ready", "failed"}:
+        if status not in {"pending", "processing", "ready", "failed", "cancelled"}:
             raise GenerationError("Server returned an unknown job status.")
         return status
 
@@ -151,6 +165,8 @@ class AnimationJobs:
             previous_status = status
             if status == "ready":
                 return
+            if status == "cancelled":
+                raise GenerationCancelled()
             if status == "failed":
                 raise GenerationError("Animation generation failed on the server.")
             self._pause(Config.POLL_INTERVAL, deadline, "status", cancel_event)

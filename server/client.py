@@ -21,7 +21,7 @@ def _build_animation_name(prompt: str) -> str:
 def get_animation(
     name=None, prompt="", duration=5.0, temperature=1.0, model="", in_place=False,
     cycled=False, *, api_token=None, fps=Config.DEFAULT_FPS, cancel_event=None,
-    on_progress=None, base_url=None,
+    on_progress=None, base_url=None,source='blender'
 ) -> bytes:
     if not isinstance(prompt, str) or not prompt.strip():
         raise GenerationError("Text generation requires a prompt.")
@@ -35,7 +35,8 @@ def get_animation(
     payload = {
         "prompt": prompt, "prompt_duration": duration, "prompt_fps": fps,
         "prompt_temperature": temperature, "name": name or _build_animation_name(prompt),
-        "api_token": token, "model": model or Config.DEFAULT_MODEL_TYPE, "cycled": cycled,
+        "api_token": token, "model": model or Config.DEFAULT_MODEL_TYPE,
+        "cycled": cycled, "source": source
     }
     return jobs.generate_animation(
         f"{jobs.base_url}/api/v1/public/api-avacapo-prompt/",
@@ -48,7 +49,7 @@ def get_animation_constraints(
     name=None, prompt="", num_frames=150, pose_constraints=None, motion_files=None, seed=42,
     text_weight=2.0, constraint_weight=2.5, first_heading=0.0, direction=None, model="gen2",
     in_place=False, cycled=False, *, api_token=None, cancel_event=None, on_progress=None,
-    base_url=None,
+    base_url=None, source='blender'
 ) -> bytes:
     if type(num_frames) is not int or num_frames <= 0 or type(seed) is not int or seed < 0:
         raise GenerationError("num_frames must be positive and seed must be non-negative integers.")
@@ -91,7 +92,7 @@ def get_animation_constraints(
         "model": model or Config.DEFAULT_MODEL_TYPE, "num_frames": num_frames,
         "direction": direction, "pose_constraints": normalized,
         "seed": seed or secrets.randbelow(2**31 - 1) + 1, "text_weight": text_weight,
-        "constraint_weight": constraint_weight, "first_heading": first_heading, "cycled": cycled,
+        "constraint_weight": constraint_weight, "first_heading": first_heading, "cycled": cycled, "source": source
     }
     token = Storage.api_token if api_token is None else api_token
     files = [
@@ -114,7 +115,7 @@ def get_animation_inbetween(
     left_context_pose, right_context_pose, name=None, prompt="", left_frame=0, right_frame=0,
     left_context_frames=1, right_context_frames=1, inbetween_frames=150, seed=42, model="gen2",
     in_place=False, end_offset_x=0.0, end_offset_z=0.0, align_heading=True,
-    *, api_token=None, cancel_event=None, on_progress=None, base_url=None,
+    *, api_token=None, cancel_event=None, on_progress=None, base_url=None, source='blender'
 ) -> bytes:
     if any(type(value) is not int or value < 0 for value in (left_frame, right_frame, seed)):
         raise GenerationError("Context indices and seed must be non-negative integers.")
@@ -133,7 +134,7 @@ def get_animation_inbetween(
         "right_frame": right_frame, "left_context_frames": left_context_frames,
         "right_context_frames": right_context_frames, "gap_frames": inbetween_frames,
         "seed": seed or secrets.randbelow(2**31 - 1) + 1, "end_offset_x": end_offset_x,
-        "end_offset_z": end_offset_z, "align_heading": align_heading,
+        "end_offset_z": end_offset_z, "align_heading": align_heading, "source": source,
     }
     token = Storage.api_token if api_token is None else api_token
     jobs = AnimationJobs(base_url=base_url)

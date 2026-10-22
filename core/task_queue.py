@@ -2,12 +2,13 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-from threading import Condition, Event, RLock
+from threading import Condition, Event, RLock, Thread
 import time
 import uuid
 
 from ..common.config import Config
 from ..server import client
+from ..server.jobs import AnimationJobs
 from .generation_models import (
     GenerationCancelled, GenerationCommand, GenerationError, GenerationMode,
     GenerationResult,
@@ -30,6 +31,7 @@ class GenerationQueue:
         self._pending = {}
         self._futures = {}
         self._cancel_events = {}
+        self._cancel_threads = {}
         self._results = {}
         self._events = {}
 
@@ -82,12 +84,16 @@ class GenerationQueue:
                 if len(self._futures) >= self.max_concurrent:
                     break
                 self._pending.pop(task_id)
+                self._cancel_threads[task_id] = Thread(
+                    target=self._cancel_server_job, args=(task_id, token)
+                )
                 try:
                     future = self._executor.submit(
                         self._execute, task_id, command, token, self._cancel_events[task_id]
                     )
                 except Exception:
                     self._cancel_events.pop(task_id)
+                    self._cancel_threads.pop(task_id)
                     self._set_task(task_id, status=TaskStatus.FAILED, finished_at=time.time(),
                                    error="Could not start the generation worker.")
                     continue
@@ -137,15 +143,29 @@ class GenerationQueue:
             error = "Animation generation failed."
         with self._lock:
             task = self._tasks[task_id]
-            if task.status in TERMINAL_STATUSES:
-                return
-            if cancel_event.is_set():
-                status, error = TaskStatus.CANCELLED, None
-            if status == TaskStatus.SUCCEEDED:
-                self._results[task_id] = GenerationResult(
-                    task_id, task.server_job_id, content, task.resolved_seed
-                )
-            self._set_task(task_id, status=status, error=error, finished_at=time.time())
+            if task.status not in TERMINAL_STATUSES:
+                if cancel_event.is_set():
+                    status, error = TaskStatus.CANCELLED, None
+                if status == TaskStatus.SUCCEEDED:
+                    self._results[task_id] = GenerationResult(
+                        task_id, task.server_job_id, content, task.resolved_seed
+                    )
+                self._set_task(task_id, status=status, error=error, finished_at=time.time())
+            cancel_thread = self._cancel_threads[task_id]
+            # A cancellation during submission can only be sent after the ID arrives.
+            if cancel_event.is_set() and task.server_job_id and cancel_thread.ident is None:
+                cancel_thread.start()
+        if cancel_thread.ident is not None:
+            cancel_thread.join()  # wait()/stop() also wait for the cancellation request.
+
+    def _cancel_server_job(self, task_id, token):
+        with self._lock:
+            job_id = self._tasks[task_id].server_job_id
+        try:
+            AnimationJobs(base_url=self.base_url).cancel_job(token, job_id)
+        except GenerationError as exc:
+            with self._lock:
+                self._set_task(task_id, error=str(exc))
 
     def _generate(self, command, *, api_token, cancel_event, on_progress):
         """Call the AvaCapo endpoint for this command's mode."""
@@ -173,6 +193,7 @@ class GenerationQueue:
         with self._lock:
             self._futures.pop(task_id, None)
             self._cancel_events.pop(task_id, None)
+            self._cancel_threads.pop(task_id, None)
             self.update_cycle()
             self._changed.notify_all()
 
@@ -183,6 +204,9 @@ class GenerationQueue:
             self._cancel_events[task_id].set()
             self._set_task(task_id, status=TaskStatus.CANCELLED, finished_at=time.time())
             self._pending.pop(task_id, None)
+            if self._tasks[task_id].server_job_id:
+                # Send immediately, even while the worker is blocked in a status/download GET.
+                self._cancel_threads[task_id].start()
             future = self._futures.get(task_id)
             if future is not None:
                 future.cancel()  # Running work keeps its pool slot until it actually exits.
