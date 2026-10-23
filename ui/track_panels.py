@@ -33,11 +33,11 @@ class CLIPS_MT_takes(Menu):
         if clip is None or not clip.takes:
             self.layout.label(text="No takes")
             return
-        for index, take in enumerate(clip.takes):
+        for take in clip.takes:
             op = self.layout.operator(
                 "clips.set_take", text=f"{take.name}   {round(take.progress * 100)}%",
-                icon='CHECKMARK' if index == clip.active_take else 'BLANK1')
-            op.clip_uid, op.index = clip.uid, index
+                icon='CHECKMARK' if take.uid == clip.active_take_uid else 'BLANK1')
+            op.clip_uid, op.take_uid = clip.uid, take.uid
 
 
 class CLIPS_MT_stick(Menu):
@@ -66,7 +66,7 @@ class CLIPS_MT_clip(Menu):
         uid = runtime.menu_target.clip_uid
         layout.operator("clips.new_take", text="New Take").clip_uid = uid
         op = layout.operator("clips.edit_prompt", text="Change Prompt / Settings...")
-        op.clip_uid, op.make_take = uid, True
+        # op.clip_uid, op.make_take = uid, True
         layout.menu("CLIPS_MT_takes", text="Change Take")
         layout.menu("CLIPS_MT_stick", text="Stick to Neighbors")
         layout.separator()
@@ -108,8 +108,6 @@ class CLIPS_PT_panel(Panel):
 
         box = layout.box()
         box.prop(clip, "name")
-        box.prop(clip, "prompt")
-        box.prop(clip, "seed")
 
         col = box.column(align=True)
         row = col.row(align=True)
@@ -128,18 +126,15 @@ class CLIPS_PT_panel(Panel):
 
         box = layout.box()
         box.label(text="Takes")
-        box.template_list("CLIPS_UL_takes", "", clip, "takes", clip, "active_take",
+        box.template_list("CLIPS_UL_takes", "", clip, "takes", clip, "active_take_index",
                           rows=STYLE.take_list_rows)
         take = takes.current_take(clip)
         if take is not None:
             col = box.column(align=True)
             col.prop(take, "offset")
-            col.prop(take, "length")
-            col.prop(take, "progress", slider=True)
         row = box.row(align=True)
         row.operator("clips.new_take", text="New Take").clip_uid = clip.uid
-        op = row.operator("clips.edit_prompt", text="Prompt...")
-        op.clip_uid, op.make_take = clip.uid, True
+        row.operator("clips.edit_prompt", text="Generate Take...").clip_uid = clip.uid
         box.operator("clips.delete_takes").clip_uid = clip.uid
 
         layout.operator("clips.delete_clip", icon='TRASH').clip_uid = clip.uid

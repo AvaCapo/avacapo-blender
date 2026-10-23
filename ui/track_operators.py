@@ -1,17 +1,88 @@
 """Blender events and operators; timeline mutations are delegated to core."""
 
+import math
+
 import bpy
-from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 
+from ..common.config import Config
+from ..animation import blender_actions, test_take_generation
 from ..core import takes, tracks
+from ..core.generation_models import GenerationCommand, TextParameters
 from .track_drawing import ClipDrawing
-from .track_generation import request_generation
 from .track_properties import edit_track
 from .track_runtime import (
     HoverTarget, MenuTarget, in_timeline, runtime, select_mouse_button, tag_redraw,
 )
 from .track_style import STYLE
+
+
+def _visible_working_curves(data, clip):
+    """Return Working-Action curves corresponding to the active Take."""
+    active_take = takes.current_take(clip)
+    if active_take is None:
+        return None, ()
+
+    working_action = data.working_action
+    working_slot = blender_actions.find_action_slot_by_handle(
+        working_action,
+        int(data.working_slot_handle),
+    )
+    if working_slot is None:
+        raise ValueError("Working Action binding is incomplete.")
+
+    take_action = active_take.take_action
+    take_slot = blender_actions.find_action_slot_by_handle(
+        take_action,
+        int(active_take.take_slot_handle),
+    )
+    if take_slot is None:
+        raise ValueError(f"Take {active_take.uid} Action binding is incomplete.")
+
+    working = {
+        (curve.data_path, int(curve.array_index)): curve
+        for curve in blender_actions.iter_slot_fcurves(working_action, working_slot)
+    }
+    curves = []
+    for take_curve in blender_actions.iter_slot_fcurves(take_action, take_slot):
+        identity = (take_curve.data_path, int(take_curve.array_index))
+        curve = working.get(identity)
+        if curve is None:
+            raise ValueError(f"Working Action has no curve for {identity!r}.")
+        curves.append(curve)
+    return working_action, curves
+
+
+def _select_clip_keys(data, clip):
+    """Select only the active Take's visible keys and return one key as an anchor."""
+    _clear_working_key_selection(data)
+    action, visible_curves = _visible_working_curves(data, clip)
+    if action is None:
+        return None
+
+    anchor = None
+    for curve in visible_curves:
+        for key in curve.keyframe_points:
+            if clip.start <= key.co.x < clip.end:
+                key.select_control_point = True
+                key.select_left_handle = True
+                key.select_right_handle = True
+                if anchor is None:
+                    anchor = key, float(key.co.x)
+    return action, anchor
+
+
+def _clear_working_key_selection(data):
+    action = data.working_action
+    slot = blender_actions.find_action_slot_by_handle(action, int(data.working_slot_handle))
+    if slot is None:
+        return
+    for curve in blender_actions.iter_slot_fcurves(action, slot):
+        for key in curve.keyframe_points:
+            key.select_control_point = False
+            key.select_left_handle = False
+            key.select_right_handle = False
 
 
 class CLIPS_OT_hover(Operator):
@@ -74,6 +145,9 @@ class CLIPS_OT_mouse(Operator):
         if data is None:
             return {'PASS_THROUGH'}
         if hit.kind == 'NONE':
+            if select_event:
+                data.active_uid = 0
+                tag_redraw()
             return {'PASS_THROUGH'}
         if menu_event:
             return self._open_menu(hit)
@@ -82,17 +156,14 @@ class CLIPS_OT_mouse(Operator):
                 return self._create_with_prompt(context, hit)
             if hit.kind == 'BODY':
                 data.active_uid = hit.clip.uid
-                bpy.ops.clips.edit_prompt(
-                    'INVOKE_DEFAULT', clip_uid=hit.clip.uid, make_take=False,
-                )
+                _select_clip_keys(data, hit.clip)
+                bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=hit.clip.uid)
                 return {'FINISHED'}
             return {'PASS_THROUGH'}
         if hit.kind == 'EMPTY':
-            if not data.active_uid:
-                return {'CANCELLED'}
             data.active_uid = 0
             tag_redraw()
-            return {'FINISHED'}
+            return {'PASS_THROUGH'}
         return self._begin_drag(context, event, data, hit, view)
 
     def _open_menu(self, hit):
@@ -108,7 +179,7 @@ class CLIPS_OT_mouse(Operator):
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
         tag_redraw()
-        bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=clip.uid, make_take=True)
+        bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=clip.uid)
         return {'FINISHED'}
 
     def _begin_drag(self, context, event, data, hit, view):
@@ -120,6 +191,19 @@ class CLIPS_OT_mouse(Operator):
         self._mouse_button = event.type
         self._start_mouse_x = event.mouse_region_x
         self._pixels_per_frame = view.pixels_per_frame
+        self._native_drag = False
+        self._animation_snap_settings = None
+        try:
+            selected = _select_clip_keys(data, hit.clip)
+        except ValueError as exc:
+            self.report({'WARNING'}, str(exc))
+            return {'CANCELLED'}
+        if self._session.kind == 'BODY' and selected is not None:
+            try:
+                self._start_native_drag(context, selected)
+            except ValueError as exc:
+                self.report({'WARNING'}, str(exc))
+                return {'CANCELLED'}
         runtime.hover = HoverTarget(hit.kind, self._session.uid, self._session.other_uid)
         context.window.cursor_modal_set('MOVE_X')
         context.window_manager.modal_handler_add(self)
@@ -135,6 +219,8 @@ class CLIPS_OT_mouse(Operator):
         if clip is None or context.scene != self._scene:
             self.cancel(context)
             return {'CANCELLED'}
+        if self._native_drag:
+            return self._modal_native_drag(context, data, event)
         if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
             delta = round((event.mouse_region_x - self._start_mouse_x) / self._pixels_per_frame)
             edit_track(data, tracks.update_drag, self._session, delta)
@@ -155,7 +241,92 @@ class CLIPS_OT_mouse(Operator):
             return {'PASS_THROUGH'}
         return {'RUNNING_MODAL'}
 
+    def _start_native_drag(self, context, selected):
+        """Start Blender's native key transform for the active Take.
+
+        TODO(native-time-translate): TIME_TRANSLATE exposes no public API for
+        neighbour bounds. This experiment deliberately runs it even for a Clip
+        with neighbours, so its mismatch with the retained Clip bounds can be
+        observed in the UI.
+        """
+        _action, anchor = selected
+        if anchor is None:
+            return
+
+        tool_settings = context.scene.tool_settings
+        self._animation_snap_settings = (
+            tool_settings,
+            tool_settings.snap_anim_element,
+            tool_settings.use_snap_time_absolute,
+        )
+        tool_settings.snap_anim_element = 'FRAME'
+        tool_settings.use_snap_time_absolute = False
+        try:
+            result = bpy.ops.transform.transform(
+                'INVOKE_DEFAULT',
+                mode='TIME_TRANSLATE',
+                use_proportional_edit=False,
+                snap=True,
+                release_confirm=True
+            )
+        except Exception as exc:
+            self._restore_animation_snapping()
+            raise ValueError(f"Could not start native Time Translate: {exc}") from None
+        if 'RUNNING_MODAL' not in result:
+            self._restore_animation_snapping()
+            raise ValueError("Native Time Translate did not start a modal operation.")
+
+        self._native_drag = True
+
+    def _restore_animation_snapping(self):
+        settings = self._animation_snap_settings
+        if settings is None:
+            return
+        tool_settings, snap_anim_element, use_snap_time_absolute = settings
+        tool_settings.snap_anim_element = snap_anim_element
+        tool_settings.use_snap_time_absolute = use_snap_time_absolute
+        self._animation_snap_settings = None
+
+    def _modal_native_drag(self, context, data, event):
+        """Experiment: pass a mouse move to TIME_TRANSLATE only when it fits."""
+        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
+            delta = math.floor(
+                (event.mouse_region_x - self._start_mouse_x)
+                / self._pixels_per_frame + 0.5
+            )
+            edit_track(data, tracks.update_drag, self._session, delta)
+            tag_redraw()
+            if self._session.last_valid_delta == delta:
+                return {'PASS_THROUGH'}
+            return {'RUNNING_MODAL'}
+        if event.type == self._mouse_button and event.value == 'RELEASE':
+            self._restore_animation_snapping()
+            self._native_drag = False
+            self._finish(context)
+            return {'FINISHED', 'PASS_THROUGH'}
+        if event.value == 'PRESS' and (
+            event.type == 'ESC'
+            or event.type in {'LEFTMOUSE', 'RIGHTMOUSE'} and event.type != self._mouse_button
+        ):
+            edit_track(data, tracks.cancel_drag, self._session)
+            self._restore_animation_snapping()
+            self._native_drag = False
+            self._finish(context)
+            return {'CANCELLED', 'PASS_THROUGH'}
+        return {'RUNNING_MODAL', 'PASS_THROUGH'}
+
     def cancel(self, context):
+        if self._native_drag:
+            try:
+                data = getattr(self._scene, "clip_data", None)
+                if data is not None:
+                    edit_track(data, tracks.cancel_drag, self._session)
+            except ReferenceError:
+                pass
+            self._restore_animation_snapping()
+            self._native_drag = False
+            self._finish(context)
+            return
         try:
             data = getattr(self._scene, "clip_data", None)
             if data is not None:
@@ -182,12 +353,26 @@ class _ClipOp:
             self.report({'WARNING'}, "No clip")
         return data, clip
 
-    def _generate_take(self, context, clip):
-        take = edit_track(context.scene.clip_data, takes.add_take, clip)
+    def _generate_take(self, context, clip, *, command=None):
+        # TODO(test-generation): replace the bundled BVH result with the server
+        # response, preserving the same Take-Action materialize contract.
         try:
-            request_generation(context.scene, clip.uid, take.uid)
-        except (RuntimeError, ReferenceError) as exc:
-            self.report({'WARNING'}, f"Could not start generation: {exc}")
+            take = test_take_generation.generate_test_take(
+                context.scene,
+                clip,
+                create_take=lambda: edit_track(
+                    context.scene.clip_data,
+                    takes.add_take,
+                    clip,
+                    command=command,
+                    activate=False,
+                ),
+            )
+        except (OSError, RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not generate Take: {exc}")
+            return False
+        self.report({'INFO'}, f"Generated {take.name} from the temporary test BVH")
+        return True
 
 
 class CLIPS_OT_create(Operator):
@@ -245,19 +430,23 @@ class CLIPS_OT_shrink_neighbors(Operator):
 
 
 class CLIPS_OT_edit_prompt(_ClipOp, Operator):
-    """Edit the prompt and settings of a clip"""
+    """Collect generation settings and create a Take."""
     bl_idname = "clips.edit_prompt"
-    bl_label = "Clip Prompt"
+    bl_label = "Generate Take"
     bl_options = {'UNDO'}
     prompt: StringProperty(name="Prompt", options={'SKIP_SAVE'})
-    seed: IntProperty(name="Seed", min=0, options={'SKIP_SAVE'}, description="0 = random")
-    make_take: BoolProperty(name="Generate New Take", default=True, options={'SKIP_SAVE'})
+    model: StringProperty(
+        name="Model", default=Config.DEFAULT_MODEL_TYPE, options={'SKIP_SAVE'},
+    )
+    temperature: FloatProperty(name="Temperature", min=0.001, options={'SKIP_SAVE'})
+    cycled: BoolProperty(name="Cycled", options={'SKIP_SAVE'})
+    in_place: BoolProperty(name="In Place", options={'SKIP_SAVE'})
 
     def invoke(self, context, event):
         _, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        self.prompt, self.seed = clip.prompt, clip.seed
+        self.temperature = Config.DEFAULT_TEMPERATURE
         return context.window_manager.invoke_props_dialog(self, width=STYLE.prompt_dialog_width)
 
     def draw(self, context):
@@ -265,22 +454,39 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         row = col.row()
         row.activate_init = True
         row.prop(self, "prompt", text="")
-        col.prop(self, "seed")
-        col.prop(self, "make_take")
+        row = col.row(align=True)
+        row.prop(self, "model")
+        row.prop(self, "temperature")
+        row = col.row(align=True)
+        row.prop(self, "cycled")
+        row.prop(self, "in_place")
 
     def execute(self, context):
         _, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        clip.prompt, clip.seed = self.prompt, self.seed
-        if self.make_take:
-            self._generate_take(context, clip)
+        if not self._generate_take(
+            context, clip,
+            command=GenerationCommand(
+                prompt=self.prompt, model=self.model,
+                in_place=self.in_place,
+                parameters=TextParameters(
+                    # TODO(postprocess-fps): keep the model request at the configured
+                    # 24 FPS. Scene FPS is for later local post-processing, not this request.
+                    duration=(clip.end - clip.start) / Config.DEFAULT_FPS,
+                    fps=Config.DEFAULT_FPS,
+                    temperature=self.temperature,
+                    cycled=self.cycled,
+                ),
+            ),
+        ):
+            return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}
 
 
 class CLIPS_OT_new_take(_ClipOp, Operator):
-    """Generate a new take with the clip's current prompt and settings"""
+    """Generate a new Take with empty UI settings."""
     bl_idname = "clips.new_take"
     bl_label = "New Take"
     bl_options = {'UNDO'}
@@ -289,7 +495,8 @@ class CLIPS_OT_new_take(_ClipOp, Operator):
         _, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        self._generate_take(context, clip)
+        if not self._generate_take(context, clip):
+            return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}
 
@@ -334,6 +541,8 @@ class CLIPS_OT_copy_clip(_ClipOp, Operator):
         _, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
+        # TODO: copy the Clip-owned Text records together with metadata.
+        # Copying only RNA creates Takes whose source/payload is missing.
         runtime.clipboard = tracks.serialize_clip(clip)
         return {'FINISHED'}
 
@@ -348,6 +557,7 @@ class CLIPS_OT_paste_clip(Operator):
     def execute(self, context):
         if runtime.clipboard is None:
             return {'CANCELLED'}
+        # TODO: restore independent Text records before exposing pasted Takes.
         clip = edit_track(context.scene.clip_data, tracks.paste_clip, runtime.clipboard, self.frame)
         if clip is None:
             self.report({'WARNING'}, "Not enough free space for the copied clip")
@@ -361,16 +571,19 @@ class CLIPS_OT_set_take(_ClipOp, Operator):
     bl_idname = "clips.set_take"
     bl_label = "Choose Take"
     bl_options = {'UNDO'}
-    index: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    take_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def execute(self, context):
         _, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        if not takes.select_take(clip, self.index):
-            self.report({'WARNING'}, "No take at this index")
+        try:
+            take = test_take_generation.switch_take(context.scene, clip, self.take_uid)
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not switch Take: {exc}")
             return {'CANCELLED'}
         tag_redraw()
+        self.report({'INFO'}, f"Switched to {take.name}")
         return {'FINISHED'}
 
 
@@ -390,7 +603,8 @@ class CLIPS_OT_stick(_ClipOp, Operator):
         if not edit_track(data, tracks.stick_to_neighbors, clip.uid, self.mode):
             self.report({'INFO'}, "There is no neighbour to stick to")
             return {'CANCELLED'}
-        self._generate_take(context, clip)
+        if not self._generate_take(context, clip):
+            return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}
 

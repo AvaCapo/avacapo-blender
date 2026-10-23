@@ -10,7 +10,6 @@ import bpy.utils
 import bpy_extras.anim_utils
 from mathutils import Euler, Matrix, Vector
 
-
 @dataclass(frozen=True)
 class _PreparedCurve:
     data_path: str
@@ -33,12 +32,21 @@ class _CurveSnapshot:
     points: tuple[tuple[float, float, str], ...]
 
 
-def prepare_retargeted_motion(skeleton, motion, *, canonical_from_armature) -> _PreparedMotion:
+def prepare_retargeted_motion(
+    skeleton,
+    motion,
+    *,
+    canonical_from_armature,
+    frame_start: float = 1.0,
+    frame_step: float = 1.0,
+) -> _PreparedMotion:
     """Validate and calculate every Blender curve without mutating an Action."""
     if skeleton.type != "ARMATURE" or skeleton.pose is None:
         raise ValueError("Retarget target must be an armature with a pose.")
     if motion.frame_count < 1:
         raise ValueError("Retargeted motion must contain at least one frame.")
+    if not math.isfinite(frame_start) or not math.isfinite(frame_step) or frame_step <= 0.0:
+        raise ValueError("Frame start and frame step must be finite; frame step must be positive.")
 
     hierarchy = motion.hierarchy
     bases = _current_retarget_bases(skeleton)
@@ -49,7 +57,7 @@ def prepare_retargeted_motion(skeleton, motion, *, canonical_from_armature) -> _
     if missing_bases:
         raise ValueError("Confirmed rest basis is missing motion bones: " + ", ".join(missing_bases))
 
-    frame_times = tuple(float(index + 1) for index in range(motion.frame_count))
+    frame_times = tuple(float(frame_start + index * frame_step) for index in range(motion.frame_count))
     armature_from_canonical = Matrix(canonical_from_armature).inverted()
     armature_from_canonical.resize_4x4()
     curves = []

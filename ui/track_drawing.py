@@ -217,8 +217,9 @@ class ClipDrawing:
                         palette.stripe,
                     )
                 label_left, label_right = visible_start, visible_end
-
-        labels.append((clip.prompt.strip() or clip.name, label_left, label_right, palette.text))
+        # TODO: decide if we need to show prompt here
+        # labels.append((clip.prompt.strip() or clip.name, label_left, label_right, palette.text))
+        labels.append((clip.name, label_left, label_right, palette.text))
 
     @staticmethod
     def _draw_sync_dot(mesh, clips_by_uid, view, metrics, center_y, hover):

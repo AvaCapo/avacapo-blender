@@ -5,9 +5,26 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class TakeData:
+    uid: int
     name: str
     prompt: str
+    generation_mode: str
+    generation_name: str
+    generation_model: str
+    generation_in_place: bool
+    duration_seconds: float
+    fps: float
+    temperature: float
+    cycled: bool
     seed: int
+    left_frame: int
+    right_frame: int
+    left_context_frames: int
+    right_context_frames: int
+    gap_frames: int
+    end_offset_x: float
+    end_offset_z: float
+    align_heading: bool
     offset: int
     length: int
     progress: float
@@ -16,10 +33,8 @@ class TakeData:
 @dataclass(frozen=True)
 class ClipData:
     name: str
-    prompt: str
-    seed: int
     length: int
-    active_take: int
+    active_take_uid: int
     takes: tuple[TakeData, ...]
 
 

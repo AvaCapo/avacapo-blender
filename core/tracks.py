@@ -187,17 +187,32 @@ def serialize_clip(clip) -> ClipData:
     """Copy clip values without retaining references to Blender records."""
     return ClipData(
         name=clip.name,
-        prompt=clip.prompt,
-        seed=clip.seed,
         length=clip.end - clip.start,
-        active_take=clip.active_take,
+        active_take_uid=clip.active_take_uid,
         takes=tuple(
             TakeData(
+                uid=take.uid,
                 name=take.name,
                 prompt=take.prompt,
+                generation_mode=take.generation_mode,
+                generation_name=take.generation_name,
+                generation_model=take.generation_model,
+                generation_in_place=take.generation_in_place,
+                duration_seconds=take.duration_seconds,
+                fps=take.fps,
+                temperature=take.temperature,
+                cycled=take.cycled,
                 seed=take.seed,
-                offset=take.offset,
-                length=take.length,
+                left_frame=take.left_frame,
+                right_frame=take.right_frame,
+                left_context_frames=take.left_context_frames,
+                right_context_frames=take.right_context_frames,
+                gap_frames=take.gap_frames,
+                end_offset_x=take.end_offset_x,
+                end_offset_z=take.end_offset_z,
+                align_heading=take.align_heading,
+                length=int(take.length),
+                offset=int(take.offset),
                 progress=take.progress,
             )
             for take in clip.takes
@@ -207,10 +222,10 @@ def serialize_clip(clip) -> ClipData:
 
 def restore_clip(store, payload: ClipData, start: int):
     clip = add_clip(store, start, start + payload.length, name=payload.name)
-    clip.prompt, clip.seed = payload.prompt, payload.seed
     for take_payload in payload.takes:
         takes.restore_take(store, clip, take_payload)
-    clip.active_take = payload.active_take
+    if payload.active_take_uid:
+        takes.select_take(clip, payload.active_take_uid)
     return clip
 
 
