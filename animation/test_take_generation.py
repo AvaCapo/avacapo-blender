@@ -3,11 +3,10 @@
 from pathlib import Path
 
 import bpy
-import bpy_extras.anim_utils
 import numpy as np
 
-from . import take_actions
 from .retargeting import blender_motion_writer, blender_retarget_service, workflow
+from ..timeline import actions
 
 
 # TODO(test-generation): replace this bundled BVH adapter with the server result
@@ -44,15 +43,16 @@ def generate_test_take(scene, track, clip, *, create_take):
     blender_motion_writer.apply_prepared_motion(
         armature,
         action,
+        slot,
         prepared,
         assign_to_skeleton=False,
     )
 
-    take_curves = _curve_map(action, slot)
-    working_curves = _ensure_working_curves(working_binding, take_curves)
-    take_actions.materialize_take(
-        working_curves,
-        take_curves,
+    actions.materialize_take(
+        working_binding[1],
+        working_binding[2],
+        action,
+        slot,
         clip.start,
         clip.end,
         take.offset,
@@ -60,32 +60,6 @@ def generate_test_take(scene, track, clip, *, create_take):
     clip.active_take_uid = take.uid
     take.progress = 1.0
     return take
-
-
-def switch_take(scene, track, clip, take_uid):
-    """Checkpoint the visible Take, then materialize the selected one."""
-    target_take = next((take for take in clip.takes if take.uid == take_uid), None)
-    if target_take is None:
-        raise ValueError(f"Take {take_uid} does not belong to this Clip.")
-    if target_take.uid == clip.active_take_uid:
-        return target_take
-
-    working_binding = _working_binding(track, _working_armature(track))
-    active_take = _active_take(clip)
-    if active_take is not None:
-        _checkpoint_active_take(working_binding, active_take, clip)
-
-    action, slot = _take_binding(target_take)
-    take_curves = _curve_map(action, slot)
-    take_actions.materialize_take(
-        _ensure_working_curves(working_binding, take_curves),
-        take_curves,
-        clip.start,
-        clip.end,
-        target_take.offset,
-    )
-    clip.active_take_uid = target_take.uid
-    return target_take
 
 
 def _working_armature(track):
@@ -110,15 +84,17 @@ def _working_binding(track, armature):
 def _new_take_action(armature, clip, take):
     action = bpy.data.actions.new(name=f"AvaCapo Take {clip.uid}.{take.uid}")
     slot = action.slots.new(armature.id_type, name=armature.name)
-    bpy_extras.anim_utils.action_ensure_channelbag_for_slot(action, slot)
+    actions.ensure_slot_channelbag(action, slot)
     return action, slot
 
 
 def _checkpoint_active_take(working_binding, take, clip):
     action, slot = _take_binding(take)
-    take_actions.checkpoint_take(
-        _curve_map(working_binding[1], working_binding[2]),
-        _curve_map(action, slot),
+    actions.checkpoint_take(
+        working_binding[1],
+        working_binding[2],
+        action,
+        slot,
         clip.start,
         clip.end,
         take.offset,
@@ -132,31 +108,8 @@ def _take_binding(take):
     return action, _slot_by_handle(action, take.take_slot_handle, f"Take {take.uid}")
 
 
-def _curve_map(action, slot):
-    bag = bpy_extras.anim_utils.action_ensure_channelbag_for_slot(action, slot)
-    return {(curve.data_path, int(curve.array_index)): curve for curve in bag.fcurves}
-
-
-def _ensure_working_curves(working_binding, take_curves):
-    _armature, action, slot = working_binding
-    bag = bpy_extras.anim_utils.action_ensure_channelbag_for_slot(action, slot)
-    curves = {(curve.data_path, int(curve.array_index)): curve for curve in bag.fcurves}
-    for identity, take_curve in take_curves.items():
-        if identity not in curves:
-            group_name = None if take_curve.group is None else take_curve.group.name
-            curves[identity] = bag.fcurves.new(
-                identity[0],
-                index=identity[1],
-                group_name=group_name,
-            )
-    return curves
-
-
 def _slot_by_handle(action, handle, label):
-    slots = [slot for slot in action.slots if slot.handle == handle]
-    if len(slots) != 1:
-        raise ValueError(f"{label} Slot is missing or ambiguous.")
-    return slots[0]
+    return actions.find_slot(action, handle, label)
 
 
 def _active_take(clip):

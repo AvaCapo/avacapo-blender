@@ -97,13 +97,12 @@ def prepare_retargeted_motion(
     return _PreparedMotion(frame_times=frame_times, curves=tuple(curves))
 
 
-def apply_prepared_motion(skeleton, action, prepared, *, assign_to_skeleton: bool) -> None:
+def apply_prepared_motion(skeleton, action, action_slot, prepared, *, assign_to_skeleton: bool) -> None:
     """Write already validated curves to one Action.
 
     Callers that replace an existing Action should use a staging Action first,
     then :func:`replace_action_slot_from_staging` below.
     """
-    action_slot = action_slot_for_object(action, skeleton)
     channelbag = bpy_extras.anim_utils.action_ensure_channelbag_for_slot(action, action_slot)
     for fcurve in list(channelbag.fcurves):
         channelbag.fcurves.remove(fcurve)

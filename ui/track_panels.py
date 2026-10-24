@@ -89,7 +89,12 @@ class CLIPS_UL_takes(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data,
                   active_propname, index):
         row = layout.row(align=True)
-        row.label(text=item.name)
+        op = row.operator(
+            "clips.set_take",
+            text=item.name,
+            depress=item.uid == data.active_take_uid,
+        )
+        op.clip_uid, op.take_uid = data.uid, item.uid
         row.label(text=f"{round(item.progress * 100)}%")
 
 

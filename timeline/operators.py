@@ -8,6 +8,7 @@ from ..animation import test_take_generation
 from ..common.config import Config
 from ..core import takes, tracks
 from ..core.generation_models import GenerationCommand, TextParameters
+from . import operations
 from .properties import edit_track, ensure_track, find_track
 from .runtime import runtime, tag_redraw
 from .track_style import STYLE
@@ -292,7 +293,7 @@ class CLIPS_OT_set_take(_ClipOp, Operator):
         if clip is None:
             return {'CANCELLED'}
         try:
-            take = test_take_generation.switch_take(context.scene, track, clip, self.take_uid)
+            take = operations.switch_take(track, clip, self.take_uid)
         except (RuntimeError, ValueError, ReferenceError) as exc:
             self.report({'WARNING'}, f"Could not switch Take: {exc}")
             return {'CANCELLED'}

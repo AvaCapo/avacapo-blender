@@ -248,17 +248,9 @@ class CT_Clip(PropertyGroup):
         )
 
     def _set_active_take_index(self, value):
-        if _writing_properties or not 0 <= value < len(self.takes):
-            return
-        from ..animation import test_take_generation
-        track = track_for_clip(self.id_data, self)
-        if track is not None:
-            test_take_generation.switch_take(
-                self.id_data,
-                track,
-                self,
-                self.takes[value].uid,
-            )
+        # Selection is an explicit `clips.set_take` command. template_list
+        # still needs a setter for its derived active index.
+        return None
 
     takes: CollectionProperty(type=CT_Take)
     active_take_uid: IntProperty(options={'HIDDEN'})
