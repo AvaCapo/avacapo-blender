@@ -15,10 +15,9 @@ from .retargeting import blender_motion_writer, blender_retarget_service, workfl
 _TEST_BVH_PATH = Path(__file__).resolve().parents[1] / "assets" / "tmp_animations" / "blender_backflip.bvh"
 
 
-def generate_test_take(scene, clip, *, create_take):
+def generate_test_take(scene, track, clip, *, create_take):
     """Generate one local Take Action, then materialize it into the Working Action."""
-    data = scene.clip_data
-    armature = _working_armature(scene)
+    armature = _working_armature(track)
     source_motion = _test_source_motion()
     target, joint_map, canonical_from_armature = blender_retarget_service.current_retarget_build(
         armature,
@@ -33,7 +32,7 @@ def generate_test_take(scene, clip, *, create_take):
         frame_step=_scene_fps(scene) * source_motion.frame_time,
     )
 
-    working_binding = _working_binding(data, armature)
+    working_binding = _working_binding(track, armature)
     active_take = _active_take(clip)
     if active_take is not None:
         _checkpoint_active_take(working_binding, active_take, clip)
@@ -63,7 +62,7 @@ def generate_test_take(scene, clip, *, create_take):
     return take
 
 
-def switch_take(scene, clip, take_uid):
+def switch_take(scene, track, clip, take_uid):
     """Checkpoint the visible Take, then materialize the selected one."""
     target_take = next((take for take in clip.takes if take.uid == take_uid), None)
     if target_take is None:
@@ -71,8 +70,7 @@ def switch_take(scene, clip, take_uid):
     if target_take.uid == clip.active_take_uid:
         return target_take
 
-    data = scene.clip_data
-    working_binding = _working_binding(data, _working_armature(scene))
+    working_binding = _working_binding(track, _working_armature(track))
     active_take = _active_take(clip)
     if active_take is not None:
         _checkpoint_active_take(working_binding, active_take, clip)
@@ -90,49 +88,23 @@ def switch_take(scene, clip, take_uid):
     return target_take
 
 
-def _working_armature(scene):
-    data = scene.clip_data
-    if data.working_object is not None:
-        if data.working_object.type != "ARMATURE":
-            raise ValueError("Working Object must be an armature.")
-        return data.working_object
-    armature = getattr(scene, "avacapo_retarget_target", None)
-    if armature is None or armature.type != "ARMATURE":
-        raise ValueError("Choose a target armature in Retarget before generating a Take.")
-    errors = blender_retarget_service.confirmed_mapping_errors(armature)
+def _working_armature(track):
+    if track.object is None or track.object.type != "ARMATURE":
+        raise ValueError("Working Object must be an armature.")
+    errors = blender_retarget_service.confirmed_mapping_errors(track.object)
     if errors:
         raise ValueError(errors[0])
-    return armature
+    return track.object
 
 
-def _working_binding(data, armature):
-    if data.working_object is not None or data.working_action is not None or data.working_slot_handle:
-        if data.working_object != armature or data.working_action is None:
-            raise ValueError("Working Action binding is incomplete.")
-        return armature, data.working_action, _slot_by_handle(
-            data.working_action,
-            data.working_slot_handle,
-            "Working Action",
-        )
-
-    animation_data = armature.animation_data
-    if animation_data is not None and animation_data.action is not None:
-        action = animation_data.action
-        slot = animation_data.action_slot
-        if slot is None:
-            raise ValueError("Current Working Action has no selected Slot.")
-    else:
-        action = bpy.data.actions.new(name="AvaCapo Working Action")
-        slot = action.slots.new(armature.id_type, name=armature.name)
-        animation_data = armature.animation_data_create()
-        animation_data.action = action
-        animation_data.action_slot = slot
-
-    bpy_extras.anim_utils.action_ensure_channelbag_for_slot(action, slot)
-    data.working_object = armature
-    data.working_action = action
-    data.working_slot_handle = int(slot.handle)
-    return armature, action, slot
+def _working_binding(track, armature):
+    if track.object != armature or track.working_action is None:
+        raise ValueError("Working Action binding is incomplete.")
+    return armature, track.working_action, _slot_by_handle(
+        track.working_action,
+        track.working_slot_handle,
+        "Working Action",
+    )
 
 
 def _new_take_action(armature, clip, take):

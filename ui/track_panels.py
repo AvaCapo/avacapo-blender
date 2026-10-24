@@ -5,6 +5,7 @@ import math
 from bpy.types import Menu, Panel, UIList
 
 from ..core import takes, tracks
+from ..timeline.properties import find_track
 from ..timeline.runtime import runtime
 from ..timeline.track_style import STYLE
 
@@ -29,7 +30,11 @@ class CLIPS_MT_takes(Menu):
     bl_label = "Change Take"
 
     def draw(self, context):
-        clip = tracks.find_clip(context.scene.clip_data.clips, runtime.menu_target.clip_uid)
+        track = find_track(context)
+        if track is None or track.uid != runtime.menu_target.track_uid:
+            self.layout.label(text="No takes")
+            return
+        clip = tracks.find_clip(track.clips, runtime.menu_target.clip_uid)
         if clip is None or not clip.takes:
             self.layout.label(text="No takes")
             return
@@ -44,8 +49,10 @@ class CLIPS_MT_stick(Menu):
     bl_label = "Stick to Neighbors"
 
     def draw(self, context):
-        data = context.scene.clip_data
-        previous, following = tracks.neighbors(data.clips, runtime.menu_target.clip_uid)
+        track = find_track(context)
+        if track is None or track.uid != runtime.menu_target.track_uid:
+            return
+        previous, following = tracks.neighbors(track.clips, runtime.menu_target.clip_uid)
         has_previous, has_next = previous is not None, following is not None
         for label, mode, enabled in (
             ("Both", 'BOTH', has_previous and has_next),
@@ -96,12 +103,18 @@ class CLIPS_PT_panel(Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        clip_data = scene.clip_data
-        layout.prop(clip_data, "default_length")
+        armature = context.active_object
+        if armature is None or armature.type != 'ARMATURE' or not armature.select_get():
+            layout.label(text="Select an armature", icon='INFO')
+            return
+
+        data = scene.clip_data
+        layout.prop(data, "default_length")
         layout.operator("clips.create", text="New Clip at Current Frame",
                         icon='ADD').frame = scene.frame_current
 
-        clip = tracks.active_clip(clip_data)
+        track = find_track(context)
+        clip = tracks.active_clip(track) if track is not None else None
         if clip is None:
             layout.label(text="Select a clip in the Timeline")
             return

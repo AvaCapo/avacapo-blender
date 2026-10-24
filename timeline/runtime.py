@@ -10,6 +10,7 @@ from ..core.schemas import ClipData
 @dataclass(frozen=True)
 class HoverTarget:
     kind: str = "NONE"
+    track_uid: int = 0
     uid: int = 0
     other_uid: int = 0
 
@@ -17,6 +18,7 @@ class HoverTarget:
 @dataclass(frozen=True)
 class MenuTarget:
     frame: float = 0.0
+    track_uid: int = 0
     clip_uid: int = 0
 
 

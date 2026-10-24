@@ -40,6 +40,111 @@ class BlenderTrackStore:
         clip.takes.clear()
 
 
+def find_track(context):
+    """Find the Track for the current Object, Action, and Slot without creating data."""
+    scene = context.scene
+    armature = context.active_object
+    if armature is None or armature.type != 'ARMATURE' or not armature.select_get():
+        return None
+    animation_data = armature.animation_data
+    if animation_data is None or animation_data.action is None or animation_data.action_slot is None:
+        return None
+    action = animation_data.action
+    slot = animation_data.action_slot
+    return next(
+        (
+            track for track in scene.clip_data.tracks
+            if track.object == armature
+            and track.working_action == action
+            and int(track.working_slot_handle) == int(slot.handle)
+        ),
+        None,
+    )
+
+
+def ensure_track(context):
+    """Find or create the Track for an explicit Timeline mutation."""
+    scene = context.scene
+    armature = context.active_object
+    if armature is None or armature.type != 'ARMATURE' or not armature.select_get():
+        raise ValueError("Select an armature before changing the Timeline.")
+
+    animation_data = armature.animation_data
+    data = scene.clip_data
+    previous_active_track_uid = data.active_track_uid
+    previous_next_track_uid = data.next_track_uid
+    created_action = None
+    created_track = None
+    created_animation_data = animation_data is None
+    try:
+        if animation_data is None:
+            animation_data = armature.animation_data_create()
+        action = animation_data.action
+        slot = animation_data.action_slot
+        if action is None:
+            action = bpy.data.actions.new(name="AvaCapo Working Action")
+            created_action = action
+            slot = action.slots.new(armature.id_type, name=armature.name)
+            animation_data.action = action
+            animation_data.action_slot = slot
+        elif slot is None:
+            raise ValueError("Current Working Action has no selected Slot.")
+
+        slots = [candidate for candidate in action.slots if candidate.handle == slot.handle]
+        if len(slots) != 1:
+            raise ValueError("Current Working Action Slot is missing or ambiguous.")
+
+        for existing_track in data.tracks:
+            for clip in existing_track.clips:
+                for take in clip.takes:
+                    if take.take_action == action:
+                        raise ValueError("A Take Action cannot be used as a Working Action.")
+
+        track = next(
+            (
+                candidate for candidate in data.tracks
+                if candidate.object == armature
+                and candidate.working_action == action
+                and int(candidate.working_slot_handle) == int(slot.handle)
+            ),
+            None,
+        )
+        if track is None:
+            track = data.tracks.add()
+            created_track = track
+            track.uid = data.next_track_uid
+            data.next_track_uid += 1
+            track.name = f"Track {track.uid}"
+            track.object = armature
+            track.working_action = action
+            track.working_slot_handle = int(slot.handle)
+        data.active_track_uid = track.uid
+        return track
+    except Exception:
+        if created_track is not None:
+            for index, candidate in enumerate(data.tracks):
+                if candidate == created_track:
+                    data.tracks.remove(index)
+                    break
+            data.next_track_uid = previous_next_track_uid
+        data.active_track_uid = previous_active_track_uid
+        if created_action is not None:
+            animation_data.action = None
+            animation_data.action_slot = None
+            bpy.data.actions.remove(created_action)
+        if created_animation_data:
+            armature.animation_data_clear()
+        raise
+
+
+def track_for_clip(scene, clip):
+    """Return the Track that owns this RNA Clip record."""
+    for track in scene.clip_data.tracks:
+        if any(candidate == clip for candidate in track.clips):
+            return track
+    return None
+
+
 def edit_track(data, operation, *args, **kwargs):
     """Run a core mutation without re-entering RNA callbacks, including nested calls."""
     global _writing_properties
@@ -95,7 +200,9 @@ class CT_Clip(PropertyGroup):
         if _writing_properties:
             self["_start"] = int(value)
         else:
-            edit_track(self.id_data.clip_data, tracks.resize_start, self.uid, value)
+            track = track_for_clip(self.id_data, self)
+            if track is not None:
+                edit_track(track, tracks.resize_start, self.uid, value)
 
     def _get_end(self):
         return self.get("_end", 1)
@@ -104,17 +211,23 @@ class CT_Clip(PropertyGroup):
         if _writing_properties:
             self["_end"] = int(value)
         else:
-            edit_track(self.id_data.clip_data, tracks.resize_end, self.uid, value)
+            track = track_for_clip(self.id_data, self)
+            if track is not None:
+                edit_track(track, tracks.resize_end, self.uid, value)
 
     def _get_duration(self):
         return self.end - self.start
 
     def _set_duration(self, value):
-        edit_track(self.id_data.clip_data, tracks.set_duration, self.uid, value)
+        track = track_for_clip(self.id_data, self)
+        if track is not None:
+            edit_track(track, tracks.set_duration, self.uid, value)
 
     def _on_bind_changed(self, context):
         if not _writing_properties:
-            edit_track(self.id_data.clip_data, tracks.apply_bindings)
+            track = track_for_clip(self.id_data, self)
+            if track is not None:
+                edit_track(track, tracks.apply_bindings)
 
     start: IntProperty(name="Start", get=_get_start, set=_set_start)
     end: IntProperty(name="End", get=_get_end, set=_set_end)
@@ -138,11 +251,14 @@ class CT_Clip(PropertyGroup):
         if _writing_properties or not 0 <= value < len(self.takes):
             return
         from ..animation import test_take_generation
-        test_take_generation.switch_take(
-            self.id_data,
-            self,
-            self.takes[value].uid,
-        )
+        track = track_for_clip(self.id_data, self)
+        if track is not None:
+            test_take_generation.switch_take(
+                self.id_data,
+                track,
+                self,
+                self.takes[value].uid,
+            )
 
     takes: CollectionProperty(type=CT_Take)
     active_take_uid: IntProperty(options={'HIDDEN'})
@@ -152,19 +268,23 @@ class CT_Clip(PropertyGroup):
         get=_get_active_take_index, set=_set_active_take_index, min=0,
     )
     take_counter: IntProperty(default=0, options={'HIDDEN'})
-    target_object: PointerProperty(type=bpy.types.Object, options={'HIDDEN'})
-    target_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
-    target_slot_handle: IntProperty(options={'HIDDEN'})
-    binding_initialized: BoolProperty(options={'HIDDEN'})
+
+
+class CT_Track(PropertyGroup):
+    uid: IntProperty(options={'HIDDEN'})
+    name: StringProperty(name="Track")
+    object: PointerProperty(type=bpy.types.Object, options={'HIDDEN'})
+    working_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
+    working_slot_handle: IntProperty(options={'HIDDEN'})
+    active_clip_uid: IntProperty(default=0, options={'HIDDEN'})
+    next_clip_uid: IntProperty(default=1, options={'HIDDEN'})
+    clips: CollectionProperty(type=CT_Clip)
 
 
 class CT_Scene(PropertyGroup):
-    clips: CollectionProperty(type=CT_Clip)
-    active_uid: IntProperty(default=0)
-    next_uid: IntProperty(default=1)
-    working_object: PointerProperty(type=bpy.types.Object, options={'HIDDEN'})
-    working_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
-    working_slot_handle: IntProperty(options={'HIDDEN'})
+    active_track_uid: IntProperty(default=0, options={'HIDDEN'})
+    next_track_uid: IntProperty(default=1, options={'HIDDEN'})
+    tracks: CollectionProperty(type=CT_Track)
     default_length: IntProperty(
         name="Default Length", min=TimelineConfig.MIN_CLIP_LENGTH,
         default=TimelineConfig.DEFAULT_CLIP_LENGTH,

@@ -8,7 +8,7 @@ from bpy.types import Operator
 from ..animation import blender_actions
 from ..core import takes, tracks
 from .drawing import ClipDrawing
-from .properties import edit_track
+from .properties import edit_track, ensure_track, find_track
 from .runtime import (
     HoverTarget, MenuTarget, in_timeline, runtime, select_mouse_button, tag_redraw,
 )
@@ -92,16 +92,17 @@ class CLIPS_OT_hover(Operator):
         return in_timeline(context)
 
     def invoke(self, context, event):
-        data = getattr(context.scene, "clip_data", None)
+        track = find_track(context)
         hover = HoverTarget()
-        if data is not None and len(data.clips):
+        if track is not None and len(track.clips):
             view, metrics = ClipDrawing.metrics(context.region)
             hit = ClipDrawing.hit_test(
-                data.clips, view, metrics, event.mouse_region_x, event.mouse_region_y,
+                track.clips, view, metrics, event.mouse_region_x, event.mouse_region_y,
             )
             if hit.kind in {'LEFT', 'RIGHT', 'SYNC'}:
                 hover = HoverTarget(
-                    hit.kind, hit.clip.uid, hit.other.uid if hit.other is not None else 0,
+                    hit.kind, track.uid, hit.clip.uid,
+                    hit.other.uid if hit.other is not None else 0,
                 )
         if hover != runtime.hover:
             runtime.hover = hover
@@ -121,12 +122,11 @@ class CLIPS_OT_mouse(Operator):
 
     def invoke(self, context, event):
         select_button = select_mouse_button(context)
-        data = getattr(context.scene, "clip_data", None)
-        if data is None:
-            return {'PASS_THROUGH'}
+        track = find_track(context)
+        clips = () if track is None else track.clips
         view, metrics = ClipDrawing.metrics(context.region)
         hit = ClipDrawing.hit_test(
-            data.clips, view, metrics,
+            clips, view, metrics,
             event.mouse_region_x, event.mouse_region_y,
         )
         menu_button = 'W' if select_button == 'RIGHTMOUSE' else 'RIGHTMOUSE'
@@ -135,36 +135,47 @@ class CLIPS_OT_mouse(Operator):
         if not (menu_event or select_event):
             return {'PASS_THROUGH'}
         if hit.kind == 'NONE':
-            if select_event:
-                data.active_uid = 0
+            if select_event and track is not None:
+                track.active_clip_uid = 0
                 tag_redraw()
             return {'PASS_THROUGH'}
         if menu_event:
-            return self._open_menu(hit)
+            return self._open_menu(hit, track)
         if event.value == 'DOUBLE_CLICK':
             if hit.kind == 'EMPTY':
                 return self._create_with_prompt(context, hit)
             if hit.kind == 'BODY':
-                data.active_uid = hit.clip.uid
-                _select_clip_keys(data, hit.clip)
+                track.active_clip_uid = hit.clip.uid
+                _select_clip_keys(track, hit.clip)
                 bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=hit.clip.uid)
                 return {'FINISHED'}
             return {'PASS_THROUGH'}
         if hit.kind == 'EMPTY':
-            data.active_uid = 0
-            tag_redraw()
+            if track is not None:
+                track.active_clip_uid = 0
+                tag_redraw()
             return {'PASS_THROUGH'}
-        return self._begin_drag(context, event, data, hit, view)
+        return self._begin_drag(context, event, track, hit, view)
 
-    def _open_menu(self, hit):
+    def _open_menu(self, hit, track):
         uid = 0 if hit.kind == 'EMPTY' else hit.clip.uid
-        runtime.menu_target = MenuTarget(hit.frame, uid)
+        runtime.menu_target = MenuTarget(hit.frame, 0 if track is None else track.uid, uid)
         bpy.ops.wm.call_menu(name="CLIPS_MT_empty" if not uid else "CLIPS_MT_clip")
         return {'CANCELLED'}
 
     def _create_with_prompt(self, context, hit):
-        data = context.scene.clip_data
-        clip = edit_track(data, tracks.create_clip_at, hit.frame, data.default_length)
+        scene = context.scene
+        track = find_track(context)
+        clips = () if track is None else track.clips
+        if tracks.new_range(clips, hit.frame, scene.clip_data.default_length) is None:
+            self.report({'WARNING'}, "No free space here")
+            return {'CANCELLED'}
+        try:
+            track = track or ensure_track(context)
+        except ValueError as exc:
+            self.report({'WARNING'}, str(exc))
+            return {'CANCELLED'}
+        clip = edit_track(track, tracks.create_clip_at, hit.frame, scene.clip_data.default_length)
         if clip is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
@@ -172,19 +183,20 @@ class CLIPS_OT_mouse(Operator):
         bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=clip.uid)
         return {'FINISHED'}
 
-    def _begin_drag(self, context, event, data, hit, view):
+    def _begin_drag(self, context, event, track, hit, view):
         self._session = edit_track(
-            data, tracks.begin_drag, hit.kind, hit.clip.uid,
+            track, tracks.begin_drag, hit.kind, hit.clip.uid,
             hit.other.uid if hit.other is not None else 0,
         )
         self._scene = context.scene
+        self._track = track
         self._mouse_button = event.type
         self._start_mouse_x = event.mouse_region_x
         self._pixels_per_frame = view.pixels_per_frame
         self._native_drag = False
         self._animation_snap_settings = None
         try:
-            selected = _select_clip_keys(data, hit.clip)
+            selected = _select_clip_keys(track, hit.clip)
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
@@ -194,7 +206,7 @@ class CLIPS_OT_mouse(Operator):
             except ValueError as exc:
                 self.report({'WARNING'}, str(exc))
                 return {'CANCELLED'}
-        runtime.hover = HoverTarget(hit.kind, self._session.uid, self._session.other_uid)
+        runtime.hover = HoverTarget(hit.kind, track.uid, self._session.uid, self._session.other_uid)
         context.window.cursor_modal_set('MOVE_X')
         context.window_manager.modal_handler_add(self)
         tag_redraw()
@@ -202,18 +214,18 @@ class CLIPS_OT_mouse(Operator):
 
     def modal(self, context, event):
         try:
-            data = getattr(self._scene, "clip_data", None)
-            clip = tracks.find_clip(data.clips, self._session.uid) if data is not None else None
+            track = self._track
+            clip = tracks.find_clip(track.clips, self._session.uid)
         except ReferenceError:
             clip = None
         if clip is None or context.scene != self._scene:
             self.cancel(context)
             return {'CANCELLED'}
         if self._native_drag:
-            return self._modal_native_drag(context, data, event)
+            return self._modal_native_drag(context, track, event)
         if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
             delta = round((event.mouse_region_x - self._start_mouse_x) / self._pixels_per_frame)
-            edit_track(data, tracks.update_drag, self._session, delta)
+            edit_track(track, tracks.update_drag, self._session, delta)
             tag_redraw()
             return {'RUNNING_MODAL'}
         if event.type == self._mouse_button and event.value == 'RELEASE':
@@ -271,14 +283,14 @@ class CLIPS_OT_mouse(Operator):
         tool_settings.use_snap_time_absolute = use_snap_time_absolute
         self._animation_snap_settings = None
 
-    def _modal_native_drag(self, context, data, event):
+    def _modal_native_drag(self, context, track, event):
         """Pass a mouse move to TIME_TRANSLATE only when it fits."""
         if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
             delta = math.floor(
                 (event.mouse_region_x - self._start_mouse_x)
                 / self._pixels_per_frame + 0.5
             )
-            edit_track(data, tracks.update_drag, self._session, delta)
+            edit_track(track, tracks.update_drag, self._session, delta)
             tag_redraw()
             if self._session.last_valid_delta == delta:
                 return {'PASS_THROUGH'}
@@ -292,7 +304,7 @@ class CLIPS_OT_mouse(Operator):
             event.type == 'ESC'
             or event.type in {'LEFTMOUSE', 'RIGHTMOUSE'} and event.type != self._mouse_button
         ):
-            edit_track(data, tracks.cancel_drag, self._session)
+            edit_track(track, tracks.cancel_drag, self._session)
             self._restore_animation_snapping()
             self._native_drag = False
             self._finish(context)
@@ -302,9 +314,7 @@ class CLIPS_OT_mouse(Operator):
     def cancel(self, context):
         if self._native_drag:
             try:
-                data = getattr(self._scene, "clip_data", None)
-                if data is not None:
-                    edit_track(data, tracks.cancel_drag, self._session)
+                edit_track(self._track, tracks.cancel_drag, self._session)
             except ReferenceError:
                 pass
             self._restore_animation_snapping()
@@ -312,9 +322,7 @@ class CLIPS_OT_mouse(Operator):
             self._finish(context)
             return
         try:
-            data = getattr(self._scene, "clip_data", None)
-            if data is not None:
-                edit_track(data, tracks.cancel_drag, self._session)
+            edit_track(self._track, tracks.cancel_drag, self._session)
         except ReferenceError:
             pass
         finally:

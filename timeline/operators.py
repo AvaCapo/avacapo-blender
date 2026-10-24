@@ -8,7 +8,7 @@ from ..animation import test_take_generation
 from ..common.config import Config
 from ..core import takes, tracks
 from ..core.generation_models import GenerationCommand, TextParameters
-from .properties import edit_track
+from .properties import edit_track, ensure_track, find_track
 from .runtime import runtime, tag_redraw
 from .track_style import STYLE
 
@@ -18,21 +18,25 @@ class _ClipOp:
     clip_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def _get_clip(self, context):
-        data = context.scene.clip_data
-        clip = tracks.find_clip(data.clips, self.clip_uid or data.active_uid)
+        track = find_track(context)
+        if track is None:
+            self.report({'WARNING'}, "No Track for the current Action and Slot")
+            return None, None
+        clip = tracks.find_clip(track.clips, self.clip_uid or track.active_clip_uid)
         if clip is None:
             self.report({'WARNING'}, "No clip")
-        return data, clip
+        return track, clip
 
-    def _generate_take(self, context, clip, *, command=None):
+    def _generate_take(self, context, track, clip, *, command=None):
         # TODO(test-generation): replace the bundled BVH result with the server
         # response, preserving the same Take-Action materialize contract.
         try:
             take = test_take_generation.generate_test_take(
                 context.scene,
+                track,
                 clip,
                 create_take=lambda: edit_track(
-                    context.scene.clip_data,
+                    track,
                     takes.add_take,
                     clip,
                     command=command,
@@ -54,8 +58,18 @@ class CLIPS_OT_create(Operator):
     frame: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def execute(self, context):
-        data = context.scene.clip_data
-        if edit_track(data, tracks.create_clip_at, self.frame, data.default_length) is None:
+        scene = context.scene
+        track = find_track(context)
+        clips = () if track is None else track.clips
+        if tracks.new_range(clips, self.frame, scene.clip_data.default_length) is None:
+            self.report({'WARNING'}, "No free space here")
+            return {'CANCELLED'}
+        try:
+            track = track or ensure_track(context)
+        except ValueError as exc:
+            self.report({'WARNING'}, str(exc))
+            return {'CANCELLED'}
+        if edit_track(track, tracks.create_clip_at, self.frame, scene.clip_data.default_length) is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
         tag_redraw()
@@ -71,9 +85,20 @@ class CLIPS_OT_fill_gap(Operator):
 
     def execute(self, context):
         scene = context.scene
-        data = scene.clip_data
+        track = find_track(context)
+        clips = () if track is None else track.clips
+        if not tracks.fill_ranges(
+            clips, self.frame, scene.clip_data.default_length, scene.frame_start, scene.frame_end,
+        ):
+            self.report({'WARNING'}, "No free space here")
+            return {'CANCELLED'}
+        try:
+            track = track or ensure_track(context)
+        except ValueError as exc:
+            self.report({'WARNING'}, str(exc))
+            return {'CANCELLED'}
         if not edit_track(
-            data, tracks.fill_gap, self.frame, data.default_length,
+            track, tracks.fill_gap, self.frame, scene.clip_data.default_length,
             scene.frame_start, scene.frame_end,
         ):
             self.report({'WARNING'}, "No free space here")
@@ -91,8 +116,12 @@ class CLIPS_OT_shrink_neighbors(Operator):
 
     def execute(self, context):
         scene = context.scene
+        track = find_track(context)
+        if track is None:
+            self.report({'INFO'}, "No Track for the current Action and Slot")
+            return {'CANCELLED'}
         if not edit_track(
-            scene.clip_data, tracks.shrink_neighbors, self.frame, scene.frame_current,
+            track, tracks.shrink_neighbors, self.frame, scene.frame_current,
         ):
             self.report({'INFO'}, "The current frame is not inside a neighbouring clip")
             return {'CANCELLED'}
@@ -133,11 +162,11 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         row.prop(self, "in_place")
 
     def execute(self, context):
-        _, clip = self._get_clip(context)
+        track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
         if not self._generate_take(
-            context, clip,
+            context, track, clip,
             command=GenerationCommand(
                 prompt=self.prompt, model=self.model,
                 in_place=self.in_place,
@@ -163,10 +192,10 @@ class CLIPS_OT_new_take(_ClipOp, Operator):
     bl_options = {'UNDO'}
 
     def execute(self, context):
-        _, clip = self._get_clip(context)
+        track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        if not self._generate_take(context, clip):
+        if not self._generate_take(context, track, clip):
             return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}
@@ -179,10 +208,10 @@ class CLIPS_OT_delete_takes(_ClipOp, Operator):
     bl_options = {'UNDO'}
 
     def execute(self, context):
-        data, clip = self._get_clip(context)
+        track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        edit_track(data, takes.delete_takes, clip)
+        edit_track(track, takes.delete_takes, clip)
         tag_redraw()
         return {'FINISHED'}
 
@@ -194,10 +223,10 @@ class CLIPS_OT_delete_clip(_ClipOp, Operator):
     bl_options = {'UNDO'}
 
     def execute(self, context):
-        data, clip = self._get_clip(context)
+        track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        edit_track(data, tracks.remove_clip, clip.uid)
+        edit_track(track, tracks.remove_clip, clip.uid)
         tag_redraw()
         return {'FINISHED'}
 
@@ -228,8 +257,22 @@ class CLIPS_OT_paste_clip(Operator):
     def execute(self, context):
         if runtime.clipboard is None:
             return {'CANCELLED'}
+        track = find_track(context)
+        clips = () if track is None else track.clips
+        if not tracks.is_free(
+            clips,
+            self.frame,
+            self.frame + runtime.clipboard.length,
+        ):
+            self.report({'WARNING'}, "Not enough free space for the copied clip")
+            return {'CANCELLED'}
+        try:
+            track = track or ensure_track(context)
+        except ValueError as exc:
+            self.report({'WARNING'}, str(exc))
+            return {'CANCELLED'}
         # TODO: restore independent Text records before exposing pasted Takes.
-        clip = edit_track(context.scene.clip_data, tracks.paste_clip, runtime.clipboard, self.frame)
+        clip = edit_track(track, tracks.paste_clip, runtime.clipboard, self.frame)
         if clip is None:
             self.report({'WARNING'}, "Not enough free space for the copied clip")
             return {'CANCELLED'}
@@ -245,11 +288,11 @@ class CLIPS_OT_set_take(_ClipOp, Operator):
     take_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def execute(self, context):
-        _, clip = self._get_clip(context)
+        track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
         try:
-            take = test_take_generation.switch_take(context.scene, clip, self.take_uid)
+            take = test_take_generation.switch_take(context.scene, track, clip, self.take_uid)
         except (RuntimeError, ValueError, ReferenceError) as exc:
             self.report({'WARNING'}, f"Could not switch Take: {exc}")
             return {'CANCELLED'}
@@ -269,13 +312,13 @@ class CLIPS_OT_stick(_ClipOp, Operator):
     )
 
     def execute(self, context):
-        data, clip = self._get_clip(context)
+        track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        if not edit_track(data, tracks.stick_to_neighbors, clip.uid, self.mode):
+        if not edit_track(track, tracks.stick_to_neighbors, clip.uid, self.mode):
             self.report({'INFO'}, "There is no neighbour to stick to")
             return {'CANCELLED'}
-        if not self._generate_take(context, clip):
+        if not self._generate_take(context, track, clip):
             return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}
@@ -291,10 +334,10 @@ class CLIPS_OT_set_frame(_ClipOp, Operator):
     )
 
     def execute(self, context):
-        data, clip = self._get_clip(context)
+        track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
         operation = tracks.resize_start if self.which == 'START' else tracks.resize_end
-        edit_track(data, operation, clip.uid, context.scene.frame_current)
+        edit_track(track, operation, clip.uid, context.scene.frame_current)
         tag_redraw()
         return {'FINISHED'}

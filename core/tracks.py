@@ -20,7 +20,7 @@ def find_clip(clips, uid: int):
 
 
 def active_clip(data):
-    return find_clip(data.clips, data.active_uid) if data.active_uid else None
+    return find_clip(data.clips, data.active_clip_uid) if data.active_clip_uid else None
 
 
 def neighbors(clips, uid: int) -> tuple:
@@ -162,8 +162,8 @@ def add_clip(store, start: int, end: int, name: str | None = None):
     if end - start < TimelineConfig.MIN_CLIP_LENGTH:
         raise ValueError("A clip must span at least one frame")
     clip = store.allocate_clip()
-    clip.uid = store.data.next_uid
-    store.data.next_uid += 1
+    clip.uid = store.data.next_clip_uid
+    store.data.next_clip_uid += 1
     clip.name = name or f"Clip {clip.uid}"
     clip.start, clip.end = start, end
     return clip
@@ -178,8 +178,8 @@ def remove_clip(store, uid: int) -> bool:
     if following is not None and following.bind_start:
         following.bind_start = False
     store.remove_clip_record(uid)
-    if store.data.active_uid == uid:
-        store.data.active_uid = 0
+    if store.data.active_clip_uid == uid:
+        store.data.active_clip_uid = 0
     return True
 
 
@@ -234,7 +234,7 @@ def create_clip_at(store, frame: float, default_length: int):
     if interval is None:
         return None
     clip = add_clip(store, *interval)
-    store.data.active_uid = clip.uid
+    store.data.active_clip_uid = clip.uid
     return clip
 
 
@@ -355,12 +355,12 @@ def paste_clip(store, payload: ClipData, frame: int):
     if not is_free(store.clips, frame, frame + payload.length):
         return None
     clip = restore_clip(store, payload, frame)
-    store.data.active_uid = clip.uid
+    store.data.active_clip_uid = clip.uid
     return clip
 
 
 def begin_drag(store, kind: str, uid: int, other_uid: int = 0) -> DragSession:
-    store.data.active_uid = uid
+    store.data.active_clip_uid = uid
     return DragSession(kind, uid, other_uid, snapshot(store))
 
 

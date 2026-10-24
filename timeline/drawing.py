@@ -9,7 +9,8 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 
 from ..core import takes, tracks
-from .runtime import in_timeline, runtime, ui_scale
+from .properties import find_track
+from .runtime import HoverTarget, in_timeline, runtime, ui_scale
 from .track_style import STYLE
 
 
@@ -294,6 +295,7 @@ class ClipDrawing:
 
 
 def draw_callback():
-    clip_data = getattr(bpy.context.scene, "clip_data", None)
-    if clip_data is not None and len(clip_data.clips):
-        ClipDrawing.draw(clip_data.clips, clip_data.active_uid, runtime.hover)
+    track = find_track(bpy.context)
+    if track is not None and len(track.clips):
+        hover = runtime.hover if runtime.hover.track_uid == track.uid else HoverTarget()
+        ClipDrawing.draw(track.clips, track.active_clip_uid, hover)
