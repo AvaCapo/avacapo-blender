@@ -32,17 +32,14 @@ class _ClipOp:
         # TODO(test-generation): replace the bundled BVH result with the server
         # response, preserving the same Take-Action materialize contract.
         try:
-            take = test_take_generation.generate_test_take(
-                context.scene,
+            source_motion, source_text = test_take_generation.load_test_motion()
+            take = operations.apply_generated_motion(
                 track,
                 clip,
-                create_take=lambda: edit_track(
-                    track,
-                    takes.add_take,
-                    clip,
-                    command=command,
-                    activate=False,
-                ),
+                command=command,
+                source_motion=source_motion,
+                source_text=source_text,
+                scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
             )
         except (OSError, RuntimeError, ValueError, ReferenceError) as exc:
             self.report({'WARNING'}, f"Could not generate Take: {exc}")

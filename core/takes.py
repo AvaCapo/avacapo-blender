@@ -17,11 +17,7 @@ def add_take(
     store, clip, *, command: GenerationCommand | None = None,
     uid: int | None = None, activate: bool = True,
 ):
-    """Allocate a Take owned by ``clip`` and optionally select it.
-
-    TODO: a real generation request must create this record only after its
-    result is available. The demo backend still creates an empty Take first.
-    """
+    """Allocate a Take owned by ``clip`` and optionally select it."""
     if uid is None:
         clip.take_counter += 1
         uid = clip.take_counter
@@ -53,6 +49,16 @@ def select_take(clip, take_uid: int) -> bool:
 def delete_takes(store, clip) -> None:
     store.clear_take_records(clip)
     clip.active_take_uid = 0
+
+
+def remove_take(store, clip, take_uid: int) -> bool:
+    """Remove one Take record without touching resources owned by its caller."""
+    if find_take(clip, take_uid) is None:
+        return False
+    store.remove_take_record(clip, take_uid)
+    if clip.active_take_uid == take_uid:
+        clip.active_take_uid = 0
+    return True
 
 
 def shift_offsets(clip, start_delta: int) -> None:

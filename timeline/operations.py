@@ -1,7 +1,64 @@
 """Compound Timeline commands that keep Track metadata and Action windows consistent."""
 
+import math
+
+import bpy
+
 from ..core import takes
+from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
 from . import actions
+from .properties import edit_track
+
+
+def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps):
+    """Retarget one source Motion and publish its Take only after it is usable."""
+    armature = _working_armature(track)
+    if not isinstance(source_text, str) or not source_text:
+        raise ValueError("Generated source text is missing.")
+    if not math.isfinite(scene_fps) or scene_fps <= 0.0:
+        raise ValueError("Scene FPS must be positive and finite.")
+
+    target, joint_map, canonical_from_armature = blender_retarget_service.current_retarget_build(
+        armature,
+        blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
+    )
+    retargeted_motion = workflow.retarget_mapped_motion(source_motion, target, joint_map)
+    prepared = blender_motion_writer.prepare_retargeted_motion(
+        armature,
+        retargeted_motion,
+        canonical_from_armature=canonical_from_armature,
+        frame_start=0.0,
+        frame_step=scene_fps * source_motion.frame_time,
+    )
+
+    # Resolve this before creating any resource owned by the new Take.
+    _working_binding(track, armature)
+
+    take_uid = clip.take_counter + 1
+    action = source_record = take = None
+    try:
+        action, slot = _new_take_action(armature, clip.uid, take_uid)
+        blender_motion_writer.apply_prepared_motion(
+            armature, action, slot, prepared, assign_to_skeleton=False,
+        )
+        source_record = _new_source_text(clip.uid, take_uid, source_text)
+
+        take = edit_track(
+            track, takes.add_take, clip, command=command, activate=False,
+        )
+        take.take_action = action
+        take.take_slot_handle = int(slot.handle)
+        take.source_motion_text = source_record
+
+        switch_take(track, clip, take.uid)
+        take.progress = 1.0
+        return take
+    except Exception:
+        if take is not None:
+            edit_track(track, takes.remove_take, clip, take.uid)
+        _remove_if_unused(bpy.data.actions, action)
+        _remove_if_unused(bpy.data.texts, source_record)
+        raise
 
 
 def switch_take(track, clip, take_uid):
@@ -88,3 +145,40 @@ def _take_binding(take):
     return take.take_action, actions.find_slot(
         take.take_action, take.take_slot_handle, f"Take {take.uid}",
     )
+
+
+def _working_armature(track):
+    armature = track.object
+    if armature is None or armature.type != "ARMATURE":
+        raise ValueError("Working Object must be an armature.")
+    errors = blender_retarget_service.confirmed_mapping_errors(armature)
+    if errors:
+        raise ValueError(errors[0])
+    return armature
+
+
+def _working_binding(track, armature):
+    if track.object != armature or track.working_action is None:
+        raise ValueError("Working Action binding is incomplete.")
+    return track.working_action, actions.find_slot(
+        track.working_action, track.working_slot_handle, "Working Action",
+    )
+
+
+def _new_take_action(armature, clip_uid, take_uid):
+    action = bpy.data.actions.new(name=f"AvaCapo Take {clip_uid}.{take_uid}")
+    slot = action.slots.new(armature.id_type, name=armature.name)
+    return action, slot
+
+
+def _new_source_text(clip_uid, take_uid, source_text):
+    # TODO(source-motion-storage): test raw bytes saving. For now source BVH is
+    # stored as Text so it is saved inside the .blend without a JSON key payload.
+    record = bpy.data.texts.new(name=f"AvaCapo Source {clip_uid}.{take_uid}")
+    record.write(source_text)
+    return record
+
+
+def _remove_if_unused(collection, datablock):
+    if datablock is not None and datablock.users == 0:
+        collection.remove(datablock)

@@ -36,6 +36,12 @@ class BlenderTrackStore:
     def allocate_take(self, clip):
         return clip.takes.add()
 
+    def remove_take_record(self, clip, uid):
+        for index, take in enumerate(clip.takes):
+            if take.uid == uid:
+                clip.takes.remove(index)
+                return
+
     def clear_take_records(self, clip):
         clip.takes.clear()
 
@@ -179,6 +185,7 @@ class CT_Take(PropertyGroup):
     align_heading: BoolProperty(default=True, options={'HIDDEN'})
     take_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
     take_slot_handle: IntProperty(options={'HIDDEN'})
+    source_motion_text: PointerProperty(type=bpy.types.Text, options={'HIDDEN'})
     offset: IntProperty(
         name="Offset", description="Frames from the clip start to the take start. "
         "Moving the clip does not change it")
