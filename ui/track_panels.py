@@ -5,8 +5,8 @@ import math
 from bpy.types import Menu, Panel, UIList
 
 from ..core import takes, tracks
-from .track_runtime import runtime
-from .track_style import STYLE
+from ..timeline.runtime import runtime
+from ..timeline.track_style import STYLE
 
 
 class CLIPS_MT_empty(Menu):

@@ -1,7 +1,6 @@
 """Timeline pixel geometry, hit testing and GPU/BLF rendering."""
 
 import math
-import os
 from dataclasses import dataclass
 
 import blf
@@ -10,7 +9,7 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 
 from ..core import takes, tracks
-from .track_runtime import in_timeline, runtime, ui_scale
+from .runtime import in_timeline, runtime, ui_scale
 from .track_style import STYLE
 
 
