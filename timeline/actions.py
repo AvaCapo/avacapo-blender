@@ -130,10 +130,10 @@ def shift_keys(data, delta):
     return shifted
 
 
-def _write_key(point, data, index):
+def _write_key(point, data, index, *, keyframe_type=None):
     point.interpolation = data["interpolation"][index]
     point.easing = data["easing"][index]
-    point.type = data["type"][index]
+    point.type = data["type"][index] if keyframe_type is None else keyframe_type
     for field in FLOAT_FIELDS:
         setattr(point, field, float(data[field][index]))
     point.handle_left_type = data["handle_left_type"][index]
@@ -170,8 +170,10 @@ def _restore_one(point, state):
         setattr(point, field, state[field])
 
 
-def replace_range(curve, incoming, start, end):
+def replace_range(curve, incoming, start, end, *, keyframe_type=None):
     """Replace [start, end), preserving complete states of its outer keys."""
+    # TODO(generated-key-ownership): Timeline materialize must preserve keys
+    # whose type is not GENERATED instead of clearing the entire window.
     points = curve.keyframe_points
     times = curve_times(curve)
     if not np.all(np.diff(times) > 0):
@@ -207,7 +209,10 @@ def replace_range(curve, incoming, start, end):
             raise RuntimeError("Incorrect key positions after FAST insert.")
 
         for index in range(len(incoming_times)):
-            _write_key(points[insert_start + index], incoming, index)
+            _write_key(
+                points[insert_start + index], incoming, index,
+                keyframe_type=keyframe_type,
+            )
     curve.update()
     for frame, state in guards:
         times = curve_times(curve)
@@ -221,7 +226,17 @@ def replace_range(curve, incoming, start, end):
         curve.update()
 
 
-def materialize_take(working_action, working_slot, take_action, take_slot, clip_start, clip_end, take_offset):
+def materialize_take(
+    working_action,
+    working_slot,
+    take_action,
+    take_slot,
+    clip_start,
+    clip_end,
+    take_offset,
+    *,
+    keyframe_type="GENERATED",
+):
     """Copy a local Take window into the Working Action across the full channel scope."""
     working = read_slot_curves(working_action, working_slot)
     take = read_slot_curves(take_action, take_slot)
@@ -233,11 +248,19 @@ def materialize_take(working_action, working_slot, take_action, take_slot, clip_
         if target is None:
             target = _create_curve(working_action, working_slot, identity, source)
         keys = _empty_keys() if source is None else shift_keys(read_keys_range(source, local_start, local_end), origin)
-        replace_range(target, keys, clip_start, clip_end)
+        replace_range(
+            target,
+            keys,
+            clip_start,
+            clip_end,
+            keyframe_type=keyframe_type,
+        )
 
 
 def checkpoint_take(working_action, working_slot, take_action, take_slot, clip_start, clip_end, take_offset):
     """Copy a Working Action window back to a local Take across the full channel scope."""
+    # TODO(deprecated-immutable-takes): Take Actions are immutable. This remains
+    # temporarily for reference and will be removed after Resize/Offset cleanup.
     working = read_slot_curves(working_action, working_slot)
     take = read_slot_curves(take_action, take_slot)
     origin = clip_start + take_offset
@@ -257,6 +280,24 @@ def clear_range(action, slot, start, end):
         return
     for curve in read_slot_curves(action, slot).values():
         replace_range(curve, _empty_keys(), start, end)
+
+
+def bake_generated_range(action, slot, start, end):
+    """Make generated keys in [start, end) ordinary editable keyframes."""
+    if end <= start:
+        return
+    for curve in read_slot_curves(action, slot).values():
+        times = curve_times(curve)
+        left = int(np.searchsorted(times, start))
+        right = int(np.searchsorted(times, end))
+        changed = False
+        for index in range(left, right):
+            point = curve.keyframe_points[index]
+            if point.type == "GENERATED":
+                point.type = "KEYFRAME"
+                changed = True
+        if changed:
+            curve.update()
 
 
 def snapshot_range(action, slot, start, end):

@@ -40,7 +40,12 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
     try:
         action, slot = _new_take_action(armature, clip.uid, take_uid)
         blender_motion_writer.apply_prepared_motion(
-            armature, action, slot, prepared, assign_to_skeleton=False,
+            armature,
+            action,
+            slot,
+            prepared,
+            assign_to_skeleton=False,
+            keyframe_type="GENERATED",
         )
         source_record = _new_source_text(clip.uid, take_uid, source_text)
 
@@ -62,8 +67,8 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         raise
 
 
-def switch_take(track, clip, take_uid):
-    """Make one Take visible, restoring the previous state if the switch fails."""
+def switch_take(track, clip, take_uid, *, backup_working_area=False):
+    """Make one immutable Take visible in the Working Action."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
 
@@ -84,56 +89,31 @@ def switch_take(track, clip, take_uid):
     if target_action == working_action:
         raise ValueError("A Take Action cannot also be the Working Action.")
 
-    # Preflight every Slot before any Action is changed.
+    # Preflight the destination before any Working Action key is changed.
     actions.read_slot_curves(working_action, working_slot)
     actions.read_slot_curves(target_action, target_slot)
-    active_action = active_slot = None
-    if active_take is not None:
-        active_action, active_slot = _take_binding(active_take)
-        if active_action == working_action:
-            raise ValueError("A Take Action cannot also be the Working Action.")
-        if active_action == target_action:
-            raise ValueError("Different Takes cannot share one Take Action.")
-        actions.read_slot_curves(active_action, active_slot)
+    if active_take is not None and active_take.take_action == target_action:
+        raise ValueError("Different Takes cannot share one Take Action.")
 
-    working_snapshot = actions.snapshot_range(
-        working_action, working_slot, clip.start, clip.end,
-    )
-    active_snapshot = None
-    if active_take is not None:
-        active_origin = clip.start + active_take.offset
-        active_snapshot = actions.snapshot_range(
-            active_action,
-            active_slot,
-            clip.start - active_origin,
-            clip.end - active_origin,
+    working_snapshot = None
+    if backup_working_area:
+        working_snapshot = actions.snapshot_range(
+            working_action, working_slot, clip.start, clip.end,
         )
 
     try:
-        if active_take is not None:
-            actions.checkpoint_take(
-                working_action, working_slot, active_action, active_slot,
-                clip.start, clip.end, active_take.offset,
-            )
         actions.materialize_take(
             working_action, working_slot, target_action, target_slot,
             clip.start, clip.end, target_take.offset,
         )
     except Exception:
-        try:
-            actions.restore_range(
-                working_action, working_slot, working_snapshot, clip.start, clip.end,
-            )
-            if active_snapshot is not None:
+        if working_snapshot is not None:
+            try:
                 actions.restore_range(
-                    active_action,
-                    active_slot,
-                    active_snapshot,
-                    clip.start - active_origin,
-                    clip.end - active_origin,
+                    working_action, working_slot, working_snapshot, clip.start, clip.end,
                 )
-        except Exception as rollback_error:
-            raise RuntimeError("Could not restore Actions after switching Take.") from rollback_error
+            except Exception as rollback_error:
+                raise RuntimeError("Could not restore Working Action after switching Take.") from rollback_error
         raise
 
     clip.active_take_uid = target_take.uid
@@ -180,16 +160,6 @@ def set_take_offset(track, clip, requested_offset):
         working_snapshot = actions.snapshot_range(
             working_action, working_slot, clip.start, clip.end,
         )
-        local_start = min(-old_offset, -new_offset)
-        local_end = max(clip.end - clip.start - old_offset, clip.end - clip.start - new_offset)
-        take_snapshot = actions.snapshot_range(
-            take_action, take_slot, local_start, local_end,
-        )
-
-        actions.checkpoint_take(
-            working_action, working_slot, take_action, take_slot,
-            clip.start, clip.end, old_offset,
-        )
         edit_track(track, _set_take_offset, clip.uid, take.uid, new_offset)
         actions.materialize_take(
             working_action, working_slot, take_action, take_slot,
@@ -200,10 +170,6 @@ def set_take_offset(track, clip, requested_offset):
             if working_action is not None and 'working_snapshot' in locals():
                 actions.restore_range(
                     working_action, working_slot, working_snapshot, clip.start, clip.end,
-                )
-            if take_action is not None and 'take_snapshot' in locals():
-                actions.restore_range(
-                    take_action, take_slot, take_snapshot, local_start, local_end,
                 )
             edit_track(track, _set_take_offset, clip.uid, take.uid, old_offset)
         except Exception as rollback_error:
@@ -246,6 +212,13 @@ def bake_clip(track, clip):
     """Keep visible Working Action keys and remove this Clip's Take ownership."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
+    working_action, working_slot = _working_binding(track, track.object)
+    actions.bake_generated_range(
+        working_action,
+        working_slot,
+        clip.start,
+        clip.end,
+    )
     resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
     edit_track(track, takes.delete_takes, clip)
     if not edit_track(track, tracks.remove_clip, clip.uid):
@@ -364,9 +337,9 @@ def _resize(track, clip, metadata_operation, value):
 
     try:
         working_action, working_slot = _working_binding(track, track.object)
-        active = _active_take_bindings(active_clips, working_action, initial)
+        active = _active_take_bindings(active_clips, working_action)
         actions.read_slot_curves(working_action, working_slot)
-        for _clip, _take, action, slot, _old_offset in active:
+        for _clip, _take, action, slot in active:
             actions.read_slot_curves(action, slot)
 
         working_start = min(
@@ -380,21 +353,7 @@ def _resize(track, clip, metadata_operation, value):
         working_snapshot = actions.snapshot_range(
             working_action, working_slot, working_start, working_end,
         )
-        take_snapshots = [
-            _take_snapshot(candidate, take, action, slot, old_offset, initial[candidate.uid])
-            for candidate, take, action, slot, old_offset in active
-        ]
-
-        for candidate, take, action, slot, old_offset in active:
-            old = initial[candidate.uid]
-            actions.checkpoint_take(
-                working_action, working_slot, action, slot,
-                old.start, old.end, old_offset,
-            )
-            actions.checkpoint_take(
-                working_action, working_slot, action, slot,
-                candidate.start, candidate.end, take.offset,
-            )
+        for candidate, take, action, slot in active:
             actions.materialize_take(
                 working_action, working_slot, action, slot,
                 candidate.start, candidate.end, take.offset,
@@ -408,8 +367,6 @@ def _resize(track, clip, metadata_operation, value):
                 actions.restore_range(
                     working_action, working_slot, working_snapshot, working_start, working_end,
                 )
-            for action, slot, snapshot, start, end in locals().get('take_snapshots', ()):
-                actions.restore_range(action, slot, snapshot, start, end)
             edit_track(track, tracks.restore_snapshot, initial)
         except Exception as rollback_error:
             raise RuntimeError("Could not restore Actions after resizing Clip.") from rollback_error
@@ -417,7 +374,7 @@ def _resize(track, clip, metadata_operation, value):
     return True
 
 
-def _active_take_bindings(clips, working_action, initial):
+def _active_take_bindings(clips, working_action):
     bindings = []
     seen_actions = set()
     for clip in clips:
@@ -430,10 +387,7 @@ def _active_take_bindings(clips, working_action, initial):
         if action.as_pointer() in seen_actions:
             raise ValueError("Different Takes cannot share one Take Action.")
         seen_actions.add(action.as_pointer())
-        old_offset = dict(initial[clip.uid].take_offsets).get(take.uid)
-        if old_offset is None:
-            raise ValueError("Active Take is missing from the Track snapshot.")
-        bindings.append((clip, take, action, slot, old_offset))
+        bindings.append((clip, take, action, slot))
     return bindings
 
 
@@ -515,14 +469,6 @@ def _copy_take_resource(action, slot, source_text, label):
         _remove_if_unused(bpy.data.actions, copied_action)
         _remove_if_unused(bpy.data.texts, copied_text)
         raise
-
-
-def _take_snapshot(clip, take, action, slot, old_offset, old):
-    old_origin = old.start + old_offset
-    new_origin = clip.start + take.offset
-    start = min(old.start - old_origin, clip.start - new_origin)
-    end = max(old.end - old_origin, clip.end - new_origin)
-    return action, slot, actions.snapshot_range(action, slot, start, end), start, end
 
 
 def _range_changed(initial, clip):

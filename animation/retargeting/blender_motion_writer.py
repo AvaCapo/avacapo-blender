@@ -97,7 +97,15 @@ def prepare_retargeted_motion(
     return _PreparedMotion(frame_times=frame_times, curves=tuple(curves))
 
 
-def apply_prepared_motion(skeleton, action, action_slot, prepared, *, assign_to_skeleton: bool) -> None:
+def apply_prepared_motion(
+    skeleton,
+    action,
+    action_slot,
+    prepared,
+    *,
+    assign_to_skeleton: bool,
+    keyframe_type: str = "KEYFRAME",
+) -> None:
     """Write already validated curves to one Action.
 
     Callers that replace an existing Action should use a staging Action first,
@@ -106,7 +114,7 @@ def apply_prepared_motion(skeleton, action, action_slot, prepared, *, assign_to_
     channelbag = bpy_extras.anim_utils.action_ensure_channelbag_for_slot(action, action_slot)
     for fcurve in list(channelbag.fcurves):
         channelbag.fcurves.remove(fcurve)
-    _write_prepared_curves(channelbag, prepared)
+    _write_prepared_curves(channelbag, prepared, keyframe_type=keyframe_type)
     if assign_to_skeleton:
         assign_action(skeleton, action, action_slot)
 
@@ -210,7 +218,7 @@ def _rotation_samples(motion, joint_index, rotation_columns, rotation_mode):
     return samples, data_path
 
 
-def _write_prepared_curves(channelbag, prepared) -> None:
+def _write_prepared_curves(channelbag, prepared, *, keyframe_type: str) -> None:
     for prepared_curve in prepared.curves:
         for axis in range(len(prepared_curve.samples[0])):
             curve = channelbag.fcurves.new(
@@ -223,6 +231,7 @@ def _write_prepared_curves(channelbag, prepared) -> None:
                 point = curve.keyframe_points[index]
                 point.co = (frame, float(prepared_curve.samples[index][axis]))
                 point.interpolation = "LINEAR"
+                point.type = keyframe_type
             curve.update()
 
 
