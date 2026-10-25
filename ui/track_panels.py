@@ -79,6 +79,8 @@ class CLIPS_MT_clip(Menu):
         layout.separator()
         layout.operator("clips.copy_clip", text="Copy Clip",
                         icon='COPYDOWN').clip_uid = uid
+        layout.operator("clips.bake_clip", text="Bake Clip",
+                        icon='ACTION').clip_uid = uid
         layout.separator()
         layout.operator("clips.delete_takes", text="Delete All Takes").clip_uid = uid
         layout.operator("clips.delete_clip", text="Delete Clip",

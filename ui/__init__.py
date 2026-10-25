@@ -10,7 +10,8 @@ from ..timeline.interaction import CLIPS_OT_hover, CLIPS_OT_mouse
 from ..timeline.operators import (
     CLIPS_OT_create, CLIPS_OT_fill_gap,
     CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take,
-    CLIPS_OT_delete_takes, CLIPS_OT_delete_clip, CLIPS_OT_copy_clip, CLIPS_OT_paste_clip,
+    CLIPS_OT_delete_takes, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip, CLIPS_OT_copy_clip,
+    CLIPS_OT_paste_clip,
     CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
 )
 from .track_panels import (
@@ -28,7 +29,8 @@ CLASSES = (
     CT_Take, CT_Clip, CT_Track, CT_Scene,
     CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap,
     CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take,
-    CLIPS_OT_delete_takes, CLIPS_OT_delete_clip, CLIPS_OT_copy_clip, CLIPS_OT_paste_clip,
+    CLIPS_OT_delete_takes, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip, CLIPS_OT_copy_clip,
+    CLIPS_OT_paste_clip,
     CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
     CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip,
     CLIPS_UL_takes, CLIPS_PT_panel,

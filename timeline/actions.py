@@ -192,16 +192,20 @@ def replace_range(curve, incoming, start, end):
     for index in range(right - 1, left - 1, -1):
         points.remove(points[index], fast=True)
     if len(incoming_times):
-        old_count = len(points)
-        points.add(len(incoming_times))
-        for index, co in enumerate(incoming["co"]):
-            points[old_count + index].co = co
-        points.sort()
+        for frame, value in incoming["co"]:
+            points.insert(
+                float(frame),
+                float(value),
+                options={'FAST'},
+            )
+
         times = curve_times(curve)
         insert_start = int(np.searchsorted(times, incoming_times[0]))
         actual_times = times[insert_start:insert_start + len(incoming_times)]
+
         if not np.allclose(actual_times, incoming_times, rtol=0, atol=1e-4):
-            raise RuntimeError("Blender did not place incoming keyframes at their requested times.")
+            raise RuntimeError("Incorrect key positions after FAST insert.")
+
         for index in range(len(incoming_times)):
             _write_key(points[insert_start + index], incoming, index)
     curve.update()
@@ -245,6 +249,14 @@ def checkpoint_take(working_action, working_slot, take_action, take_slot, clip_s
             target = _create_curve(take_action, take_slot, identity, source)
         keys = _empty_keys() if source is None else shift_keys(read_keys_range(source, clip_start, clip_end), -origin)
         replace_range(target, keys, local_start, local_end)
+
+
+def clear_range(action, slot, start, end):
+    """Remove keys in [start, end) from every curve of one known Slot."""
+    if end <= start:
+        return
+    for curve in read_slot_curves(action, slot).values():
+        replace_range(curve, _empty_keys(), start, end)
 
 
 def snapshot_range(action, slot, start, end):

@@ -4,10 +4,11 @@ import math
 
 import bpy
 
-from ..core import takes
+from ..core import takes, tracks
 from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
 from . import actions
 from .properties import edit_track
+from .runtime import ClipboardClip, ClipboardTake
 
 
 def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps):
@@ -137,6 +138,421 @@ def switch_take(track, clip, take_uid):
 
     clip.active_take_uid = target_take.uid
     return target_take
+
+
+def resize_start(track, clip, requested_start):
+    """Resize a Clip's left edge while preserving its active Take data."""
+    return _resize(track, clip, tracks.resize_start, requested_start)
+
+
+def resize_end(track, clip, requested_end):
+    """Resize a Clip's right edge while preserving its active Take data."""
+    return _resize(track, clip, tracks.resize_end, requested_end)
+
+
+def set_duration(track, clip, duration):
+    """Set a Clip duration while preserving its active Take data."""
+    return _resize(track, clip, tracks.set_duration, duration)
+
+
+def set_take_offset(track, clip, requested_offset):
+    """Move the active Take's local window without losing Working Action edits."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    take = takes.current_take(clip)
+    if take is None:
+        raise ValueError("Clip has no active Take.")
+
+    old_offset = int(take.offset)
+    new_offset = int(requested_offset)
+    if new_offset == old_offset:
+        return False
+
+    working_action = working_slot = take_action = take_slot = None
+    try:
+        working_action, working_slot = _working_binding(track, track.object)
+        take_action, take_slot = _take_binding(take)
+        if take_action == working_action:
+            raise ValueError("A Take Action cannot also be the Working Action.")
+        actions.read_slot_curves(working_action, working_slot)
+        actions.read_slot_curves(take_action, take_slot)
+
+        working_snapshot = actions.snapshot_range(
+            working_action, working_slot, clip.start, clip.end,
+        )
+        local_start = min(-old_offset, -new_offset)
+        local_end = max(clip.end - clip.start - old_offset, clip.end - clip.start - new_offset)
+        take_snapshot = actions.snapshot_range(
+            take_action, take_slot, local_start, local_end,
+        )
+
+        actions.checkpoint_take(
+            working_action, working_slot, take_action, take_slot,
+            clip.start, clip.end, old_offset,
+        )
+        edit_track(track, _set_take_offset, clip.uid, take.uid, new_offset)
+        actions.materialize_take(
+            working_action, working_slot, take_action, take_slot,
+            clip.start, clip.end, new_offset,
+        )
+    except Exception:
+        try:
+            if working_action is not None and 'working_snapshot' in locals():
+                actions.restore_range(
+                    working_action, working_slot, working_snapshot, clip.start, clip.end,
+                )
+            if take_action is not None and 'take_snapshot' in locals():
+                actions.restore_range(
+                    take_action, take_slot, take_snapshot, local_start, local_end,
+                )
+            edit_track(track, _set_take_offset, clip.uid, take.uid, old_offset)
+        except Exception as rollback_error:
+            raise RuntimeError("Could not restore Actions after changing Take offset.") from rollback_error
+        raise
+    return True
+
+
+def delete_takes(track, clip):
+    """Remove all Take-owned resources and clear this Clip's Working window."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
+    cleared = _clear_clip_window(track, clip)
+    try:
+        edit_track(track, takes.delete_takes, clip)
+    except Exception:
+        _restore_cleared_window(cleared, clip)
+        raise
+    _remove_take_resources(track.working_action, resources)
+
+
+def delete_clip(track, clip):
+    """Clear this Clip's Working window, then remove its Takes and metadata."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
+    cleared = _clear_clip_window(track, clip)
+    try:
+        edit_track(track, takes.delete_takes, clip)
+        if not edit_track(track, tracks.remove_clip, clip.uid):
+            raise RuntimeError("Could not remove Clip metadata.")
+    except Exception:
+        _restore_cleared_window(cleared, clip)
+        raise
+    _remove_take_resources(track.working_action, resources)
+
+
+def bake_clip(track, clip):
+    """Keep visible Working Action keys and remove this Clip's Take ownership."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
+    edit_track(track, takes.delete_takes, clip)
+    if not edit_track(track, tracks.remove_clip, clip.uid):
+        raise RuntimeError("Could not remove Clip metadata.")
+    _remove_take_resources(track.working_action, resources)
+
+
+def copy_clip(clip):
+    """Copy Clip metadata and independent Take resources into the runtime clipboard."""
+    copied_takes = {}
+    try:
+        for take in clip.takes:
+            action, slot = _take_binding(take)
+            copied_action, copied_slot_handle, copied_text = _copy_take_resource(
+                action, slot, take.source_motion_text, f"Copied Take {take.uid}",
+            )
+            copied_takes[take.uid] = ClipboardTake(
+                copied_action, copied_slot_handle, copied_text,
+            )
+        return ClipboardClip(tracks.serialize_clip(clip), copied_takes)
+    except Exception:
+        _remove_take_resources(None, (
+            (item.action, item.source_text) for item in copied_takes.values()
+        ))
+        raise
+
+
+def paste_clip(track, clipboard, start):
+    """Paste a ClipboardClip with new, independent Take Actions and Text records."""
+    if not isinstance(clipboard, ClipboardClip):
+        raise ValueError("Timeline clipboard has no Take Action content.")
+    payload = clipboard.data
+    if not tracks.is_free(track.clips, start, start + payload.length):
+        raise ValueError("Not enough free space for the copied Clip.")
+
+    working_action, working_slot = _working_binding(track, track.object)
+    actions.read_slot_curves(working_action, working_slot)
+    copied_resources = {}
+    clip = None
+    try:
+        for take_data in payload.takes:
+            template = clipboard.takes.get(take_data.uid)
+            if template is None:
+                raise ValueError(f"Clipboard is missing Take {take_data.uid} resources.")
+            action, slot_handle, text = _copy_take_resource(
+                template.action,
+                actions.find_slot(
+                    template.action, template.slot_handle, f"Clipboard Take {take_data.uid}",
+                ),
+                template.source_text,
+                f"Pasted Take {take_data.uid}",
+            )
+            copied_resources[take_data.uid] = (action, slot_handle, text)
+
+        clip = edit_track(track, tracks.paste_clip, payload, start)
+        if clip is None:
+            raise ValueError("Not enough free space for the copied Clip.")
+        for take in clip.takes:
+            action, slot_handle, text = copied_resources[take.uid]
+            take.take_action = action
+            take.take_slot_handle = slot_handle
+            take.source_motion_text = text
+
+        active_take = takes.current_take(clip)
+        if active_take is not None:
+            action, slot = _take_binding(active_take)
+            actions.read_slot_curves(action, slot)
+            working_snapshot = actions.snapshot_range(
+                working_action, working_slot, clip.start, clip.end,
+            )
+            actions.materialize_take(
+                working_action, working_slot, action, slot,
+                clip.start, clip.end, active_take.offset,
+            )
+        return clip
+    except Exception:
+        try:
+            if 'working_snapshot' in locals():
+                actions.restore_range(
+                    working_action, working_slot, working_snapshot, clip.start, clip.end,
+                )
+            if clip is not None:
+                edit_track(track, tracks.remove_clip, clip.uid)
+            _remove_take_resources(
+                working_action,
+                ((action, text) for action, _slot_handle, text in copied_resources.values()),
+            )
+        except Exception as rollback_error:
+            raise RuntimeError("Could not restore Timeline after pasting Clip.") from rollback_error
+        raise
+
+
+def _resize(track, clip, metadata_operation, value):
+    """Apply one core resize and keep every affected active Take recoverable."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+
+    initial = edit_track(track, tracks.snapshot)
+    if not edit_track(track, metadata_operation, clip.uid, value):
+        raise ValueError("Could not resize Clip.")
+    changed = [
+        candidate for candidate in track.clips
+        if _range_changed(initial[candidate.uid], candidate)
+    ]
+    if not changed:
+        return False
+
+    active_clips = [
+        candidate for candidate in changed
+        if takes.current_take(candidate) is not None
+    ]
+    # An empty Clip owns no animation window.  Its resize must not alter keys
+    # that may have been authored independently in the Working Action.
+    if not active_clips:
+        return True
+
+    try:
+        working_action, working_slot = _working_binding(track, track.object)
+        active = _active_take_bindings(active_clips, working_action, initial)
+        actions.read_slot_curves(working_action, working_slot)
+        for _clip, _take, action, slot, _old_offset in active:
+            actions.read_slot_curves(action, slot)
+
+        working_start = min(
+            min(initial[candidate.uid].start, candidate.start)
+            for candidate in active_clips
+        )
+        working_end = max(
+            max(initial[candidate.uid].end, candidate.end)
+            for candidate in active_clips
+        )
+        working_snapshot = actions.snapshot_range(
+            working_action, working_slot, working_start, working_end,
+        )
+        take_snapshots = [
+            _take_snapshot(candidate, take, action, slot, old_offset, initial[candidate.uid])
+            for candidate, take, action, slot, old_offset in active
+        ]
+
+        for candidate, take, action, slot, old_offset in active:
+            old = initial[candidate.uid]
+            actions.checkpoint_take(
+                working_action, working_slot, action, slot,
+                old.start, old.end, old_offset,
+            )
+            actions.checkpoint_take(
+                working_action, working_slot, action, slot,
+                candidate.start, candidate.end, take.offset,
+            )
+            actions.materialize_take(
+                working_action, working_slot, action, slot,
+                candidate.start, candidate.end, take.offset,
+            )
+
+        for start, end in _released_ranges(initial, active_clips, track.clips):
+            actions.clear_range(working_action, working_slot, start, end)
+    except Exception:
+        try:
+            if 'working_snapshot' in locals():
+                actions.restore_range(
+                    working_action, working_slot, working_snapshot, working_start, working_end,
+                )
+            for action, slot, snapshot, start, end in locals().get('take_snapshots', ()):
+                actions.restore_range(action, slot, snapshot, start, end)
+            edit_track(track, tracks.restore_snapshot, initial)
+        except Exception as rollback_error:
+            raise RuntimeError("Could not restore Actions after resizing Clip.") from rollback_error
+        raise
+    return True
+
+
+def _active_take_bindings(clips, working_action, initial):
+    bindings = []
+    seen_actions = set()
+    for clip in clips:
+        take = takes.current_take(clip)
+        if take is None:
+            continue
+        action, slot = _take_binding(take)
+        if action == working_action:
+            raise ValueError("A Take Action cannot also be the Working Action.")
+        if action.as_pointer() in seen_actions:
+            raise ValueError("Different Takes cannot share one Take Action.")
+        seen_actions.add(action.as_pointer())
+        old_offset = dict(initial[clip.uid].take_offsets).get(take.uid)
+        if old_offset is None:
+            raise ValueError("Active Take is missing from the Track snapshot.")
+        bindings.append((clip, take, action, slot, old_offset))
+    return bindings
+
+
+def _set_take_offset(store, clip_uid, take_uid, offset):
+    clip = tracks.find_clip(store.clips, clip_uid)
+    take = takes.find_take(clip, take_uid) if clip is not None else None
+    if take is None:
+        raise ValueError("Take does not belong to this Clip.")
+    take.offset = int(offset)
+
+
+def _clear_clip_window(track, clip):
+    """Clear one Clip range with rollback if Blender rejects the write."""
+    working_action, working_slot = _working_binding(track, track.object)
+    actions.read_slot_curves(working_action, working_slot)
+    snapshot = actions.snapshot_range(
+        working_action, working_slot, clip.start, clip.end,
+    )
+    try:
+        actions.clear_range(working_action, working_slot, clip.start, clip.end)
+    except Exception:
+        try:
+            actions.restore_range(
+                working_action, working_slot, snapshot, clip.start, clip.end,
+            )
+        except Exception as rollback_error:
+            raise RuntimeError("Could not restore Working Action after clearing Clip.") from rollback_error
+        raise
+    return working_action, working_slot, snapshot
+
+
+def _restore_cleared_window(cleared, clip):
+    working_action, working_slot, snapshot = cleared
+    try:
+        actions.restore_range(
+            working_action, working_slot, snapshot, clip.start, clip.end,
+        )
+    except Exception as rollback_error:
+        raise RuntimeError("Could not restore Working Action after deleting Clip.") from rollback_error
+
+
+def _remove_take_resources(working_action, resources):
+    """Remove only unreferenced Take resources, never the Working Action."""
+    actions_to_remove = []
+    texts_to_remove = []
+    for action, text in resources:
+        if action is not None and action != working_action and action not in actions_to_remove:
+            actions_to_remove.append(action)
+        if text is not None and text not in texts_to_remove:
+            texts_to_remove.append(text)
+    for action in actions_to_remove:
+        _remove_if_unused(bpy.data.actions, action)
+    for text in texts_to_remove:
+        _remove_if_unused(bpy.data.texts, text)
+
+
+def _slot_index(action, slot):
+    for index, candidate in enumerate(action.slots):
+        if candidate.handle == slot.handle:
+            return index
+    raise ValueError("Take Action Slot is missing.")
+
+
+def _slot_at_index(action, index, label):
+    try:
+        return action.slots[index]
+    except IndexError:
+        raise ValueError(f"{label} Slot is missing.") from None
+
+
+def _copy_take_resource(action, slot, source_text, label):
+    copied_action = copied_text = None
+    try:
+        copied_action = action.copy()
+        copied_slot = _slot_at_index(copied_action, _slot_index(action, slot), label)
+        copied_text = None if source_text is None else source_text.copy()
+        return copied_action, int(copied_slot.handle), copied_text
+    except Exception:
+        _remove_if_unused(bpy.data.actions, copied_action)
+        _remove_if_unused(bpy.data.texts, copied_text)
+        raise
+
+
+def _take_snapshot(clip, take, action, slot, old_offset, old):
+    old_origin = old.start + old_offset
+    new_origin = clip.start + take.offset
+    start = min(old.start - old_origin, clip.start - new_origin)
+    end = max(old.end - old_origin, clip.end - new_origin)
+    return action, slot, actions.snapshot_range(action, slot, start, end), start, end
+
+
+def _range_changed(initial, clip):
+    return initial.start != clip.start or initial.end != clip.end
+
+
+def _released_ranges(initial, changed, clips):
+    occupied = sorted((clip.start, clip.end) for clip in clips)
+    ranges = []
+    for clip in changed:
+        old = initial[clip.uid]
+        ranges.extend(_subtract_range(old.start, old.end, clip.start, clip.end))
+    for start, end in ranges:
+        for occupied_start, occupied_end in occupied:
+            if end <= occupied_start or start >= occupied_end:
+                continue
+            if start < occupied_start:
+                yield start, occupied_start
+            start = max(start, occupied_end)
+            if start >= end:
+                break
+        if start < end:
+            yield start, end
+
+
+def _subtract_range(start, end, keep_start, keep_end):
+    if start < keep_start:
+        yield start, min(end, keep_start)
+    if keep_end < end:
+        yield max(start, keep_end), end
 
 
 def _take_binding(take):

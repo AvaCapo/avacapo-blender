@@ -209,7 +209,11 @@ class CLIPS_OT_delete_takes(_ClipOp, Operator):
         track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        edit_track(track, takes.delete_takes, clip)
+        try:
+            operations.delete_takes(track, clip)
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not delete Takes: {exc}")
+            return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}
 
@@ -224,7 +228,30 @@ class CLIPS_OT_delete_clip(_ClipOp, Operator):
         track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        edit_track(track, tracks.remove_clip, clip.uid)
+        try:
+            operations.delete_clip(track, clip)
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not delete Clip: {exc}")
+            return {'CANCELLED'}
+        tag_redraw()
+        return {'FINISHED'}
+
+
+class CLIPS_OT_bake_clip(_ClipOp, Operator):
+    """Keep visible animation and remove the Clip and its Takes."""
+    bl_idname = "clips.bake_clip"
+    bl_label = "Bake Clip"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        track, clip = self._get_clip(context)
+        if clip is None:
+            return {'CANCELLED'}
+        try:
+            operations.bake_clip(track, clip)
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not bake Clip: {exc}")
+            return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}
 
@@ -239,9 +266,11 @@ class CLIPS_OT_copy_clip(_ClipOp, Operator):
         _, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        # TODO: copy the Clip-owned Text records together with metadata.
-        # Copying only RNA creates Takes whose source/payload is missing.
-        runtime.clipboard = tracks.serialize_clip(clip)
+        try:
+            runtime.set_clipboard(operations.copy_clip(clip))
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not copy Clip: {exc}")
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -256,23 +285,15 @@ class CLIPS_OT_paste_clip(Operator):
         if runtime.clipboard is None:
             return {'CANCELLED'}
         track = find_track(context)
-        clips = () if track is None else track.clips
-        if not tracks.is_free(
-            clips,
-            self.frame,
-            self.frame + runtime.clipboard.length,
-        ):
-            self.report({'WARNING'}, "Not enough free space for the copied clip")
-            return {'CANCELLED'}
         try:
             track = track or ensure_track(context)
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
-        # TODO: restore independent Text records before exposing pasted Takes.
-        clip = edit_track(track, tracks.paste_clip, runtime.clipboard, self.frame)
-        if clip is None:
-            self.report({'WARNING'}, "Not enough free space for the copied clip")
+        try:
+            operations.paste_clip(track, runtime.clipboard, self.frame)
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not paste Clip: {exc}")
             return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}

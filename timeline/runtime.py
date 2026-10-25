@@ -23,14 +23,44 @@ class MenuTarget:
 
 
 @dataclass
+class ClipboardTake:
+    action: bpy.types.Action
+    slot_handle: int
+    source_text: bpy.types.Text | None
+
+
+@dataclass
+class ClipboardClip:
+    data: ClipData
+    takes: dict[int, ClipboardTake]
+
+    def release(self):
+        for copied_take in self.takes.values():
+            action = copied_take.action
+            if action.users == 0:
+                bpy.data.actions.remove(action)
+            text = copied_take.source_text
+            if text is not None and text.users == 0:
+                bpy.data.texts.remove(text)
+        self.takes.clear()
+
+
+@dataclass
 class TimelineRuntimeState:
     hover: HoverTarget = field(default_factory=HoverTarget)
     menu_target: MenuTarget = field(default_factory=MenuTarget)
-    clipboard: ClipData | None = None
+    clipboard: ClipboardClip | None = None
+
+    def set_clipboard(self, clipboard: ClipboardClip):
+        if isinstance(self.clipboard, ClipboardClip):
+            self.clipboard.release()
+        self.clipboard = clipboard
 
     def reset(self):
         self.hover = HoverTarget()
         self.menu_target = MenuTarget()
+        if isinstance(self.clipboard, ClipboardClip):
+            self.clipboard.release()
         self.clipboard = None
 
 def ui_scale():
