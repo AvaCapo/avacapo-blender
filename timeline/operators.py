@@ -67,7 +67,7 @@ class CLIPS_OT_create(Operator):
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
-        if edit_track(track, tracks.create_clip_at, self.frame, scene.clip_data.default_length) is None:
+        if operations.create_clip(track, self.frame, scene.clip_data.default_length) is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
         tag_redraw()
@@ -356,7 +356,11 @@ class CLIPS_OT_set_frame(_ClipOp, Operator):
         track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        operation = tracks.resize_start if self.which == 'START' else tracks.resize_end
-        edit_track(track, operation, clip.uid, context.scene.frame_current)
+        if self.which == 'START':
+            operations.move_clip(track, clip.uid, context.scene.frame_current)
+        else:
+            operations.resize_clip(
+                track, clip.uid, tracks.resize_end, context.scene.frame_current,
+            )
         tag_redraw()
         return {'FINISHED'}

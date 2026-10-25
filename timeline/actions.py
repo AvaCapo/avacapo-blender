@@ -43,6 +43,16 @@ def _channelbags(action, slot):
 
 def read_slot_curves(action, slot):
     """Return validated FCurves of a known Slot without creating a channelbag."""
+    result = _slot_curves(action, slot)
+    for identity, curve in result.items():
+        times = curve_times(curve)
+        if not np.all(np.diff(times) > 0):
+            raise ValueError(f"FCurve keys must be sorted and unique: {identity!r}.")
+    return result
+
+
+def _slot_curves(action, slot):
+    """Return known Slot curves without reading every keyframe time."""
     bags = _channelbags(action, slot)
     curves = () if not bags else tuple(bags[0].fcurves)
     result = {}
@@ -52,9 +62,6 @@ def read_slot_curves(action, slot):
             raise ValueError(f"Action Slot has duplicate FCurve {identity!r}.")
         if curve.modifiers:
             raise ValueError(f"Timeline range editing does not support FCurve modifiers: {identity!r}.")
-        times = curve_times(curve)
-        if not np.all(np.diff(times) > 0):
-            raise ValueError(f"FCurve keys must be sorted and unique: {identity!r}.")
         result[identity] = curve
     return result
 
@@ -255,6 +262,145 @@ def materialize_take(
             clip_end,
             keyframe_type=keyframe_type,
         )
+
+
+def apply_resize_delta(
+    working_action,
+    working_slot,
+    take_action,
+    take_slot,
+    old_start,
+    old_end,
+    new_start,
+    new_end,
+    take_origin,
+    *,
+    keyframe_type="GENERATED",
+):
+    """Apply only the changed part of one immutable Take to its Working window."""
+    removed = _range_difference(old_start, old_end, new_start, new_end)
+    added = _range_difference(new_start, new_end, old_start, old_end)
+    if not removed and not added:
+        return False
+
+    working = _slot_curves(working_action, working_slot)
+    take = _slot_curves(take_action, take_slot)
+    changed = False
+    for identity in sorted(working.keys() | take.keys()):
+        target = working.get(identity)
+        source = take.get(identity)
+        if target is None:
+            if source is None or not added:
+                continue
+            target = _create_curve(working_action, working_slot, identity, source)
+
+        points = target.keyframe_points
+        curve_changed = False
+        for start, end in removed:
+            left = _lower_bound(points, start)
+            right = _lower_bound(points, end)
+            for index in range(right - 1, left - 1, -1):
+                points.remove(points[index], fast=True)
+                curve_changed = True
+
+        if source is not None:
+            source_points = source.keyframe_points
+            for start, end in added:
+                left = _lower_bound(source_points, start - take_origin)
+                right = _lower_bound(source_points, end - take_origin)
+                for index in range(left, right):
+                    point = points.insert(
+                        float(source_points[index].co.x + take_origin),
+                        float(source_points[index].co.y),
+                        options={'FAST'},
+                    )
+                    _copy_key(point, source_points[index], take_origin, keyframe_type)
+                    curve_changed = True
+
+        if curve_changed:
+            target.update()
+            changed = True
+    return changed
+
+
+def translate_take_window(
+    working_action,
+    working_slot,
+    take_action,
+    take_slot,
+    start,
+    end,
+    delta,
+):
+    """Move active-Take keys in one Working Action window by whole frames."""
+    #NOTE: This is a separate realization of translate clip. 
+    # Faster Blender-native function is realized for a clip drag operation in the timeline.
+    if not delta or end <= start:
+        return False
+
+    working = _slot_curves(working_action, working_slot)
+    take = _slot_curves(take_action, take_slot)
+    changed = False
+    for identity in take:
+        curve = working.get(identity)
+        if curve is None:
+            continue
+
+        points = curve.keyframe_points
+        left = _lower_bound(points, start)
+        right = _lower_bound(points, end)
+        if left == right:
+            continue
+        for index in range(left, right):
+            point = points[index]
+            point.co.x += delta
+            point.handle_left.x += delta
+            point.handle_right.x += delta
+        points.sort()
+        curve.update()
+        changed = True
+    return changed
+
+
+def _range_difference(start, end, other_start, other_end):
+    ranges = []
+    if start < other_start:
+        ranges.append((start, min(end, other_start)))
+    if other_end < end:
+        ranges.append((max(start, other_end), end))
+    return [(left, right) for left, right in ranges if left < right]
+
+
+def _lower_bound(points, frame):
+    left, right = 0, len(points)
+    while left < right:
+        middle = (left + right) // 2
+        if points[middle].co.x < frame:
+            left = middle + 1
+        else:
+            right = middle
+    return left
+
+
+def _copy_key(target, source, time_offset, keyframe_type):
+    target.interpolation = source.interpolation
+    target.easing = source.easing
+    target.type = keyframe_type
+    for field in FLOAT_FIELDS:
+        setattr(target, field, getattr(source, field))
+    target.handle_left_type = source.handle_left_type
+    target.handle_right_type = source.handle_right_type
+    target.co = (source.co.x + time_offset, source.co.y)
+    target.handle_left = (
+        source.handle_left.x + time_offset,
+        source.handle_left.y,
+    )
+    target.handle_right = (
+        source.handle_right.x + time_offset,
+        source.handle_right.y,
+    )
+    for field in BOOL_FIELDS:
+        setattr(target, field, getattr(source, field))
 
 
 def checkpoint_take(working_action, working_slot, take_action, take_slot, clip_start, clip_end, take_offset):

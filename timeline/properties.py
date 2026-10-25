@@ -9,6 +9,7 @@ from bpy.types import PropertyGroup
 
 from ..common.config import Config, TimelineConfig
 from ..core import tracks
+from .runtime import tag_redraw
 
 
 _writing_properties = False
@@ -209,7 +210,9 @@ class CT_Clip(PropertyGroup):
         else:
             track = track_for_clip(self.id_data, self)
             if track is not None:
-                edit_track(track, tracks.resize_start, self.uid, value)
+                from . import operations
+                operations.move_clip(track, self.uid, value)
+                tag_redraw()
 
     def _get_end(self):
         return self.get("_end", 1)
@@ -220,7 +223,9 @@ class CT_Clip(PropertyGroup):
         else:
             track = track_for_clip(self.id_data, self)
             if track is not None:
-                edit_track(track, tracks.resize_end, self.uid, value)
+                from . import operations
+                operations.resize_clip(track, self.uid, tracks.resize_end, value)
+                tag_redraw()
 
     def _get_duration(self):
         return self.end - self.start
@@ -228,13 +233,16 @@ class CT_Clip(PropertyGroup):
     def _set_duration(self, value):
         track = track_for_clip(self.id_data, self)
         if track is not None:
-            edit_track(track, tracks.set_duration, self.uid, value)
+            from . import operations
+            operations.resize_clip(track, self.uid, tracks.set_duration, value)
+            tag_redraw()
 
     def _on_bind_changed(self, context):
         if not _writing_properties:
             track = track_for_clip(self.id_data, self)
             if track is not None:
                 edit_track(track, tracks.apply_bindings)
+                tag_redraw()
 
     start: IntProperty(name="Start", get=_get_start, set=_set_start)
     end: IntProperty(name="End", get=_get_end, set=_set_end)

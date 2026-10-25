@@ -235,6 +235,7 @@ def create_clip_at(store, frame: float, default_length: int):
         return None
     clip = add_clip(store, *interval)
     store.data.active_clip_uid = clip.uid
+    apply_bindings(store)
     return clip
 
 

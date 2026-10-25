@@ -120,19 +120,116 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False):
     return target_take
 
 
-def resize_start(track, clip, requested_start):
-    """Resize a Clip's left edge while preserving its active Take data."""
-    return _resize(track, clip, tracks.resize_start, requested_start)
+def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
+    """Apply Working Action resize deltas from one Track snapshot."""
+    # TODO(investigate-binding-propagation): Binding should affect at most one
+    # neighbour per operation. Once that invariant is explicit, replace this
+    # Track-wide metadata scan with the known affected Clip.
+    skipped = set(skip_clip_uids)
+    changed = []
+    for clip in track.clips:
+        if clip.uid in skipped:
+            continue
+        previous = initial.get(clip.uid)
+        if previous is None or (
+            previous.start == clip.start and previous.end == clip.end
+        ):
+            continue
+        take = takes.current_take(clip)
+        if take is not None:
+            changed.append((clip, take, previous))
+    if not changed:
+        return False
+
+    working_action, working_slot = _working_binding(track, track.object)
+    bindings = []
+    for clip, take, previous in changed:
+        action, slot = _take_binding(take)
+        if action == working_action:
+            raise ValueError("A Take Action cannot also be the Working Action.")
+        previous_offsets = dict(previous.take_offsets)
+        if take.uid not in previous_offsets:
+            raise ValueError("Active Take is missing from the drag snapshot.")
+        bindings.append((
+            clip,
+            action,
+            slot,
+            previous.start,
+            previous.end,
+            previous.start + previous_offsets[take.uid],
+        ))
+
+    for clip, action, slot, old_start, old_end, origin in bindings:
+        actions.apply_resize_delta(
+            working_action,
+            working_slot,
+            action,
+            slot,
+            old_start,
+            old_end,
+            clip.start,
+            clip.end,
+            origin,
+        )
+    return True
 
 
-def resize_end(track, clip, requested_end):
-    """Resize a Clip's right edge while preserving its active Take data."""
-    return _resize(track, clip, tracks.resize_end, requested_end)
+def create_clip(track, frame, default_length):
+    """Create a Clip and apply automatic binding resizes to Working Actions."""
+    initial = edit_track(track, tracks.snapshot)
+    clip = edit_track(track, tracks.create_clip_at, frame, default_length)
+    if clip is not None:
+        _apply_resize_deltas(track, initial)
+    return clip
 
 
-def set_duration(track, clip, duration):
-    """Set a Clip duration while preserving its active Take data."""
-    return _resize(track, clip, tracks.set_duration, duration)
+def resize_clip(track, clip_uid, operation, value):
+    """Resize from a panel command and immediately update the Working Action."""
+    initial = edit_track(track, tracks.snapshot)
+    if not edit_track(track, operation, clip_uid, value):
+        return False
+    return _apply_resize_deltas(track, initial)
+
+
+def move_clip(track, clip_uid, requested_start):
+    """Move one Clip and its active-Take keys from a panel Start edit."""
+    clip = tracks.find_clip(track.clips, clip_uid)
+    if clip is None:
+        return False
+    initial = edit_track(track, tracks.snapshot)
+    old_start, old_end = clip.start, clip.end
+    if not edit_track(track, tracks.move_clip, clip_uid, requested_start):
+        return False
+
+    delta = clip.start - old_start
+    take = takes.current_take(clip)
+    if take is not None and delta:
+        working_action, working_slot = _working_binding(track, track.object)
+        take_action, take_slot = _take_binding(take)
+        if take_action == working_action:
+            raise ValueError("A Take Action cannot also be the Working Action.")
+        actions.translate_take_window(
+            working_action,
+            working_slot,
+            take_action,
+            take_slot,
+            old_start,
+            old_end,
+            delta,
+        )
+    _apply_resize_deltas(track, initial, skip_clip_uids=(clip.uid,))
+    return True
+
+
+def finalize_resize_drag(track, session):
+    """Apply Action changes caused by one completed Timeline drag."""
+    if session.kind == 'BODY':
+        return _apply_resize_deltas(
+            track, session.initial, skip_clip_uids=(session.uid,),
+        )
+    if session.kind not in {'LEFT', 'RIGHT', 'SYNC'}:
+        return False
+    return _apply_resize_deltas(track, session.initial)
 
 
 def set_take_offset(track, clip, requested_offset):
@@ -311,86 +408,6 @@ def paste_clip(track, clipboard, start):
         raise
 
 
-def _resize(track, clip, metadata_operation, value):
-    """Apply one core resize and keep every affected active Take recoverable."""
-    if not any(candidate == clip for candidate in track.clips):
-        raise ValueError("Clip does not belong to this Track.")
-
-    initial = edit_track(track, tracks.snapshot)
-    if not edit_track(track, metadata_operation, clip.uid, value):
-        raise ValueError("Could not resize Clip.")
-    changed = [
-        candidate for candidate in track.clips
-        if _range_changed(initial[candidate.uid], candidate)
-    ]
-    if not changed:
-        return False
-
-    active_clips = [
-        candidate for candidate in changed
-        if takes.current_take(candidate) is not None
-    ]
-    # An empty Clip owns no animation window.  Its resize must not alter keys
-    # that may have been authored independently in the Working Action.
-    if not active_clips:
-        return True
-
-    try:
-        working_action, working_slot = _working_binding(track, track.object)
-        active = _active_take_bindings(active_clips, working_action)
-        actions.read_slot_curves(working_action, working_slot)
-        for _clip, _take, action, slot in active:
-            actions.read_slot_curves(action, slot)
-
-        working_start = min(
-            min(initial[candidate.uid].start, candidate.start)
-            for candidate in active_clips
-        )
-        working_end = max(
-            max(initial[candidate.uid].end, candidate.end)
-            for candidate in active_clips
-        )
-        working_snapshot = actions.snapshot_range(
-            working_action, working_slot, working_start, working_end,
-        )
-        for candidate, take, action, slot in active:
-            actions.materialize_take(
-                working_action, working_slot, action, slot,
-                candidate.start, candidate.end, take.offset,
-            )
-
-        for start, end in _released_ranges(initial, active_clips, track.clips):
-            actions.clear_range(working_action, working_slot, start, end)
-    except Exception:
-        try:
-            if 'working_snapshot' in locals():
-                actions.restore_range(
-                    working_action, working_slot, working_snapshot, working_start, working_end,
-                )
-            edit_track(track, tracks.restore_snapshot, initial)
-        except Exception as rollback_error:
-            raise RuntimeError("Could not restore Actions after resizing Clip.") from rollback_error
-        raise
-    return True
-
-
-def _active_take_bindings(clips, working_action):
-    bindings = []
-    seen_actions = set()
-    for clip in clips:
-        take = takes.current_take(clip)
-        if take is None:
-            continue
-        action, slot = _take_binding(take)
-        if action == working_action:
-            raise ValueError("A Take Action cannot also be the Working Action.")
-        if action.as_pointer() in seen_actions:
-            raise ValueError("Different Takes cannot share one Take Action.")
-        seen_actions.add(action.as_pointer())
-        bindings.append((clip, take, action, slot))
-    return bindings
-
-
 def _set_take_offset(store, clip_uid, take_uid, offset):
     clip = tracks.find_clip(store.clips, clip_uid)
     take = takes.find_take(clip, take_uid) if clip is not None else None
@@ -469,36 +486,6 @@ def _copy_take_resource(action, slot, source_text, label):
         _remove_if_unused(bpy.data.actions, copied_action)
         _remove_if_unused(bpy.data.texts, copied_text)
         raise
-
-
-def _range_changed(initial, clip):
-    return initial.start != clip.start or initial.end != clip.end
-
-
-def _released_ranges(initial, changed, clips):
-    occupied = sorted((clip.start, clip.end) for clip in clips)
-    ranges = []
-    for clip in changed:
-        old = initial[clip.uid]
-        ranges.extend(_subtract_range(old.start, old.end, clip.start, clip.end))
-    for start, end in ranges:
-        for occupied_start, occupied_end in occupied:
-            if end <= occupied_start or start >= occupied_end:
-                continue
-            if start < occupied_start:
-                yield start, occupied_start
-            start = max(start, occupied_end)
-            if start >= end:
-                break
-        if start < end:
-            yield start, end
-
-
-def _subtract_range(start, end, keep_start, keep_end):
-    if start < keep_start:
-        yield start, min(end, keep_start)
-    if keep_end < end:
-        yield max(start, keep_end), end
 
 
 def _take_binding(take):

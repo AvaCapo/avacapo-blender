@@ -8,6 +8,7 @@ from bpy.types import Operator
 from ..animation import blender_actions
 from ..core import takes, tracks
 from .drawing import ClipDrawing
+from . import operations
 from .properties import edit_track, ensure_track, find_track
 from .runtime import (
     HoverTarget, MenuTarget, in_timeline, runtime, select_mouse_button, tag_redraw,
@@ -175,7 +176,7 @@ class CLIPS_OT_mouse(Operator):
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
-        clip = edit_track(track, tracks.create_clip_at, hit.frame, scene.clip_data.default_length)
+        clip = operations.create_clip(track, hit.frame, scene.clip_data.default_length)
         if clip is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
@@ -229,6 +230,9 @@ class CLIPS_OT_mouse(Operator):
             tag_redraw()
             return {'RUNNING_MODAL'}
         if event.type == self._mouse_button and event.value == 'RELEASE':
+            if not self._finish_resize_drag():
+                self._finish(context)
+                return {'CANCELLED'}
             self._finish(context)
             return {'FINISHED'}
         if event.value == 'PRESS' and (
@@ -298,6 +302,9 @@ class CLIPS_OT_mouse(Operator):
         if event.type == self._mouse_button and event.value == 'RELEASE':
             self._restore_animation_snapping()
             self._native_drag = False
+            if not self._finish_resize_drag():
+                self._finish(context)
+                return {'CANCELLED', 'PASS_THROUGH'}
             self._finish(context)
             return {'FINISHED', 'PASS_THROUGH'}
         if event.value == 'PRESS' and (
@@ -310,6 +317,14 @@ class CLIPS_OT_mouse(Operator):
             self._finish(context)
             return {'CANCELLED', 'PASS_THROUGH'}
         return {'RUNNING_MODAL', 'PASS_THROUGH'}
+
+    def _finish_resize_drag(self):
+        try:
+            operations.finalize_resize_drag(self._track, self._session)
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not apply Clip resize: {exc}")
+            return False
+        return True
 
     def cancel(self, context):
         if self._native_drag:
