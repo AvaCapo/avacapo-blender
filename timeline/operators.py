@@ -31,6 +31,19 @@ class _ClipOp:
     def _generate_take(self, context, track, clip, *, command=None):
         # TODO(test-generation): replace the bundled BVH result with the server
         # response, preserving the same Take-Action materialize contract.
+        if command is None:
+            command = GenerationCommand(
+                prompt=clip.prompt,
+                model=clip.generation_model,
+                in_place=clip.generation_in_place,
+                parameters=TextParameters(
+                    duration=(clip.end - clip.start) / Config.DEFAULT_FPS,
+                    fps=Config.DEFAULT_FPS,
+                    temperature=clip.generation_temperature,
+                    cycled=clip.generation_cycled,
+                    seed=clip.seed,
+                ),
+            )
         try:
             source_motion, source_text = test_take_generation.load_test_motion()
             take = operations.apply_generated_motion(
@@ -133,8 +146,10 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
     bl_label = "Generate Take"
     bl_options = {'UNDO'}
     prompt: StringProperty(name="Prompt", options={'SKIP_SAVE'})
+    seed: IntProperty(name="Seed", min=-1, default=-1, options={'SKIP_SAVE'})
     model: StringProperty(
-        name="Model", default=Config.DEFAULT_MODEL_TYPE, options={'SKIP_SAVE'},
+        name="Model", description="Generation model", default=Config.DEFAULT_MODEL_TYPE,
+        options={'SKIP_SAVE'},
     )
     temperature: FloatProperty(name="Temperature", min=0.001, options={'SKIP_SAVE'})
     cycled: BoolProperty(name="Cycled", options={'SKIP_SAVE'})
@@ -144,7 +159,12 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         _, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        self.temperature = Config.DEFAULT_TEMPERATURE
+        self.prompt = clip.prompt
+        self.seed = clip.seed
+        self.model = clip.generation_model
+        self.temperature = clip.generation_temperature
+        self.cycled = clip.generation_cycled
+        self.in_place = clip.generation_in_place
         return context.window_manager.invoke_props_dialog(self, width=STYLE.prompt_dialog_width)
 
     def draw(self, context):
@@ -152,6 +172,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         row = col.row()
         row.activate_init = True
         row.prop(self, "prompt", text="")
+        col.prop(self, "seed")
         row = col.row(align=True)
         row.prop(self, "model")
         row.prop(self, "temperature")
@@ -163,6 +184,12 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
+        clip.prompt = self.prompt
+        clip.seed = self.seed
+        clip.generation_model = self.model
+        clip.generation_temperature = self.temperature
+        clip.generation_cycled = self.cycled
+        clip.generation_in_place = self.in_place
         if not self._generate_take(
             context, track, clip,
             command=GenerationCommand(
@@ -175,6 +202,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
                     fps=Config.DEFAULT_FPS,
                     temperature=self.temperature,
                     cycled=self.cycled,
+                    seed=self.seed,
                 ),
             ),
         ):
@@ -184,9 +212,10 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
 
 
 class CLIPS_OT_new_take(_ClipOp, Operator):
-    """Generate a new Take with empty UI settings."""
+    """Generate a new Take from this Clip's editable generation defaults."""
     bl_idname = "clips.new_take"
     bl_label = "New Take"
+    bl_description = ""
     bl_options = {'UNDO'}
 
     def execute(self, context):
@@ -213,6 +242,27 @@ class CLIPS_OT_delete_takes(_ClipOp, Operator):
             operations.delete_takes(track, clip)
         except (RuntimeError, ValueError, ReferenceError) as exc:
             self.report({'WARNING'}, f"Could not delete Takes: {exc}")
+            return {'CANCELLED'}
+        tag_redraw()
+        return {'FINISHED'}
+
+
+class CLIPS_OT_delete_take(_ClipOp, Operator):
+    """Delete one Take from this Clip."""
+    bl_idname = "clips.delete_take"
+    bl_label = "Delete Take"
+    bl_description = "Delete this Take from the Clip"
+    bl_options = {'UNDO'}
+    take_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        track, clip = self._get_clip(context)
+        if clip is None:
+            return {'CANCELLED'}
+        try:
+            operations.delete_take(track, clip, self.take_uid)
+        except (RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not delete Take: {exc}")
             return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}

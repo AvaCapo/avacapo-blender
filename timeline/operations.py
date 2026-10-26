@@ -117,6 +117,12 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False):
         raise
 
     clip.active_take_uid = target_take.uid
+    clip.prompt = target_take.prompt
+    clip.seed = target_take.seed
+    clip.generation_model = target_take.generation_model
+    clip.generation_temperature = target_take.temperature
+    clip.generation_cycled = target_take.cycled
+    clip.generation_in_place = target_take.generation_in_place
     return target_take
 
 
@@ -276,6 +282,35 @@ def delete_takes(track, clip):
         _restore_cleared_window(cleared, clip)
         raise
     _remove_take_resources(track.working_action, resources)
+
+
+def delete_take(track, clip, take_uid):
+    """Delete one Take and keep the Clip's visible Action window valid."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    target = takes.find_take(clip, take_uid)
+    if target is None:
+        raise ValueError(f"Take {take_uid} does not belong to this Clip.")
+
+    resource = (target.take_action, target.source_motion_text)
+    active_take = takes.current_take(clip)
+    if active_take is not None and active_take.uid == target.uid:
+        replacement = next((take for take in clip.takes if take.uid != target.uid), None)
+        if replacement is not None:
+            switch_take(track, clip, replacement.uid)
+        else:
+            cleared = _clear_clip_window(track, clip)
+            try:
+                edit_track(track, takes.delete_takes, clip)
+            except Exception:
+                _restore_cleared_window(cleared, clip)
+                raise
+            _remove_take_resources(track.working_action, (resource,))
+            return
+
+    if not edit_track(track, takes.remove_take, clip, target.uid):
+        raise RuntimeError("Could not remove Take metadata.")
+    _remove_take_resources(track.working_action, (resource,))
 
 
 def delete_clip(track, clip):

@@ -49,6 +49,12 @@ def select_take(clip, take_uid: int) -> bool:
 def delete_takes(store, clip) -> None:
     store.clear_take_records(clip)
     clip.active_take_uid = 0
+    clip.prompt = ""
+    clip.seed = -1
+    clip.generation_model = Config.DEFAULT_MODEL_TYPE
+    clip.generation_temperature = Config.DEFAULT_TEMPERATURE
+    clip.generation_cycled = False
+    clip.generation_in_place = False
 
 
 def remove_take(store, clip, take_uid: int) -> bool:
@@ -99,6 +105,7 @@ def _set_generation_request(take, command: GenerationCommand) -> None:
         take.fps = parameters.fps
         take.temperature = parameters.temperature
         take.cycled = parameters.cycled
+        take.seed = parameters.seed
         return
     if isinstance(command.parameters, InbetweenParameters):
         parameters = command.parameters

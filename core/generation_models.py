@@ -33,6 +33,7 @@ class TextParameters:
     fps: float = Config.DEFAULT_FPS
     temperature: float = Config.DEFAULT_TEMPERATURE
     cycled: bool = False
+    seed: int = -1
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class PoseConstraint:
 class ConstraintsParameters:
     num_frames: int = 150
     constraints: tuple[PoseConstraint, ...] = ()
-    seed: int = 42
+    seed: int = -1
     text_weight: float = 2.0
     constraint_weight: float = 2.5
     first_heading: float = 0.0
@@ -73,7 +74,7 @@ class InbetweenParameters:
     left_context_frames: int = 1
     right_context_frames: int = 1
     gap_frames: int = 150
-    seed: int = 42
+    seed: int = -1
     end_offset_x: float = 0.0
     end_offset_z: float = 0.0
     align_heading: bool = True
@@ -98,8 +99,8 @@ class GenerationCommand:
         }[type(self.parameters)]
 
     def resolve_seed(self) -> "GenerationCommand":
-        """Resolve zero/random once before the command enters the queue."""
-        if not isinstance(self.parameters, TextParameters) and self.parameters.seed == 0:
+        """Resolve the random-seed marker once before the command enters the queue."""
+        if self.parameters.seed == -1:
             return replace(
                 self, parameters=replace(self.parameters, seed=secrets.randbelow(2**31 - 1) + 1)
             )

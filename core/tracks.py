@@ -188,6 +188,12 @@ def serialize_clip(clip) -> ClipData:
     return ClipData(
         name=clip.name,
         length=clip.end - clip.start,
+        prompt=clip.prompt,
+        seed=clip.seed,
+        generation_model=clip.generation_model,
+        generation_temperature=clip.generation_temperature,
+        generation_cycled=clip.generation_cycled,
+        generation_in_place=clip.generation_in_place,
         active_take_uid=clip.active_take_uid,
         takes=tuple(
             TakeData(
@@ -222,6 +228,12 @@ def serialize_clip(clip) -> ClipData:
 
 def restore_clip(store, payload: ClipData, start: int):
     clip = add_clip(store, start, start + payload.length, name=payload.name)
+    clip.prompt = payload.prompt
+    clip.seed = payload.seed
+    clip.generation_model = payload.generation_model
+    clip.generation_temperature = payload.generation_temperature
+    clip.generation_cycled = payload.generation_cycled
+    clip.generation_in_place = payload.generation_in_place
     for take_payload in payload.takes:
         takes.restore_take(store, clip, take_payload)
     if payload.active_take_uid:

@@ -34,6 +34,12 @@ class TakeData:
 class ClipData:
     name: str
     length: int
+    prompt: str
+    seed: int
+    generation_model: str
+    generation_temperature: float
+    generation_cycled: bool
+    generation_in_place: bool
     active_take_uid: int
     takes: tuple[TakeData, ...]
 

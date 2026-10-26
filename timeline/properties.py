@@ -175,7 +175,9 @@ class CT_Take(PropertyGroup):
     fps: FloatProperty(default=Config.DEFAULT_FPS, options={'HIDDEN'})
     temperature: FloatProperty(default=Config.DEFAULT_TEMPERATURE, options={'HIDDEN'})
     cycled: BoolProperty(options={'HIDDEN'})
-    seed: IntProperty(name="Seed", min=0, description="0 = random")
+    seed: IntProperty(
+        name="Seed", min=-1, default=-1, description="-1 = random", options={'HIDDEN'},
+    )
     left_frame: IntProperty(min=0, options={'HIDDEN'})
     right_frame: IntProperty(min=0, options={'HIDDEN'})
     left_context_frames: IntProperty(default=1, min=1, options={'HIDDEN'})
@@ -206,8 +208,8 @@ class CT_Take(PropertyGroup):
                     return
 
     offset: IntProperty(
-        name="Offset", description="Frames from the clip start to the take start. "
-        "Moving the clip does not change it", get=_get_offset, set=_set_offset)
+        name="Offset", description="Frames from the clip start to the take start.",
+        get=_get_offset, set=_set_offset)
     length: IntProperty(
         name="Length", min=TimelineConfig.MIN_TAKE_LENGTH,
         default=TimelineConfig.MIN_TAKE_LENGTH, options={'HIDDEN'})
@@ -218,6 +220,20 @@ class CT_Take(PropertyGroup):
 class CT_Clip(PropertyGroup):
     uid: IntProperty()
     name: StringProperty(name="Name", default="Clip")
+    # Editable defaults for the next generation. Take fields are immutable
+    # history; switching Takes copies their values here.
+    prompt: StringProperty(name="Prompt")
+    seed: IntProperty(name="Seed", min=-1, default=-1, description="-1 = random")
+    generation_model: StringProperty(
+        name="Model", description="Generation model", default=Config.DEFAULT_MODEL_TYPE,
+    )
+    generation_temperature: FloatProperty(
+        name="Temperature", min=0.001, default=Config.DEFAULT_TEMPERATURE,
+    )
+    generation_cycled: BoolProperty(name="Cycled")
+    generation_in_place: BoolProperty(name="In Place")
+    show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
+    show_takes: BoolProperty(default=True, options={'HIDDEN'})
 
     def _get_start(self):
         return self.get("_start", 0)
@@ -273,25 +289,9 @@ class CT_Clip(PropertyGroup):
     bind_end: BoolProperty(
         name="Stick to Next Clip", update=_on_bind_changed,
         description="Keep the end glued to the start of the next clip")
-    def _get_active_take_index(self):
-        return next(
-            (index for index, take in enumerate(self.takes)
-             if take.uid == self.active_take_uid),
-            0,
-        )
-
-    def _set_active_take_index(self, value):
-        # Selection is an explicit `clips.set_take` command. template_list
-        # still needs a setter for its derived active index.
-        return None
 
     takes: CollectionProperty(type=CT_Take)
     active_take_uid: IntProperty(options={'HIDDEN'})
-    # Blender's template_list requires an index. It is derived from the UID
-    # each time and is never saved as another active-Take state.
-    active_take_index: IntProperty(
-        get=_get_active_take_index, set=_set_active_take_index, min=0,
-    )
     take_counter: IntProperty(default=0, options={'HIDDEN'})
 
 

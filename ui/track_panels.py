@@ -2,12 +2,11 @@
 
 import math
 
-from bpy.types import Menu, Panel, UIList
+from bpy.types import Menu, Panel
 
 from ..core import takes, tracks
 from ..timeline.properties import find_track
 from ..timeline.runtime import runtime
-from ..timeline.track_style import STYLE
 
 
 class CLIPS_MT_empty(Menu):
@@ -40,7 +39,7 @@ class CLIPS_MT_takes(Menu):
             return
         for take in clip.takes:
             op = self.layout.operator(
-                "clips.set_take", text=f"{take.name}   {round(take.progress * 100)}%",
+                "clips.set_take", text=take.name,
                 icon='CHECKMARK' if take.uid == clip.active_take_uid else 'BLANK1')
             op.clip_uid, op.take_uid = clip.uid, take.uid
 
@@ -73,7 +72,7 @@ class CLIPS_MT_clip(Menu):
         uid = runtime.menu_target.clip_uid
         layout.operator("clips.new_take", text="New Take").clip_uid = uid
         op = layout.operator("clips.edit_prompt", text="Change Prompt / Settings...")
-        # op.clip_uid, op.make_take = uid, True
+        op.clip_uid = uid
         layout.menu("CLIPS_MT_takes", text="Change Take")
         layout.menu("CLIPS_MT_stick", text="Stick to Neighbors")
         layout.separator()
@@ -85,19 +84,6 @@ class CLIPS_MT_clip(Menu):
         layout.operator("clips.delete_takes", text="Delete All Takes").clip_uid = uid
         layout.operator("clips.delete_clip", text="Delete Clip",
                         icon='TRASH').clip_uid = uid
-
-
-class CLIPS_UL_takes(UIList):
-    def draw_item(self, context, layout, data, item, icon, active_data,
-                  active_propname, index):
-        row = layout.row(align=True)
-        op = row.operator(
-            "clips.set_take",
-            text=item.name,
-            depress=item.uid == data.active_take_uid,
-        )
-        op.clip_uid, op.take_uid = data.uid, item.uid
-        row.label(text=f"{round(item.progress * 100)}%")
 
 
 class CLIPS_PT_panel(Panel):
@@ -126,6 +112,29 @@ class CLIPS_PT_panel(Panel):
             layout.label(text="Select a clip in the Timeline")
             return
 
+        generation_box = layout.box()
+        generation_box.label(text="Prompt")
+        generation_box.prop(clip, "prompt", text="")
+        generation_box.operator(
+            "clips.new_take", text="Generate Take", icon='SHADERFX', depress=True,
+        ).clip_uid = clip.uid
+        row = generation_box.row()
+        row.prop(
+            clip,
+            "show_advanced_generation",
+            text="Advanced Generation Settings",
+            emboss=False,
+            icon='TRIA_DOWN' if clip.show_advanced_generation else 'TRIA_RIGHT',
+        )
+        if clip.show_advanced_generation:
+            col = generation_box.column(align=True)
+            col.prop(clip, "generation_model")
+            col.prop(clip, "seed")
+            col.prop(clip, "generation_temperature")
+            row = col.row(align=True)
+            row.prop(clip, "generation_cycled")
+            row.prop(clip, "generation_in_place")
+
         box = layout.box()
         box.prop(clip, "name")
 
@@ -143,18 +152,34 @@ class CLIPS_PT_panel(Panel):
         row.prop(clip, "bind_end", text="", toggle=True,
                  icon='LINKED' if clip.bind_end else 'UNLINKED')
         col.prop(clip, "duration")
-
-        box = layout.box()
-        box.label(text="Takes")
-        box.template_list("CLIPS_UL_takes", "", clip, "takes", clip, "active_take_index",
-                          rows=STYLE.take_list_rows)
         take = takes.current_take(clip)
         if take is not None:
-            col = box.column(align=True)
             col.prop(take, "offset")
-        row = box.row(align=True)
-        row.operator("clips.new_take", text="New Take").clip_uid = clip.uid
-        row.operator("clips.edit_prompt", text="Generate Take...").clip_uid = clip.uid
-        box.operator("clips.delete_takes").clip_uid = clip.uid
+
+        box = layout.box()
+        row = box.row()
+        row.prop(
+            clip,
+            "show_takes",
+            text="Takes",
+            emboss=False,
+            icon='TRIA_DOWN' if clip.show_takes else 'TRIA_RIGHT',
+        )
+        if clip.show_takes:
+            for take in clip.takes:
+                row = box.row(align=True)
+                columns = row.split(factor=0.9, align=True)
+                name_column = columns.column()
+                delete_column = columns.column()
+                name_column.alignment = 'LEFT'
+                op = name_column.operator(
+                    "clips.set_take",
+                    text=take.name,
+                    depress=take.uid == clip.active_take_uid,
+                )
+                op.clip_uid, op.take_uid = clip.uid, take.uid
+                op = delete_column.operator("clips.delete_take", text="", icon='TRASH')
+                op.clip_uid, op.take_uid = clip.uid, take.uid
+            box.operator("clips.delete_takes").clip_uid = clip.uid
 
         layout.operator("clips.delete_clip", icon='TRASH').clip_uid = clip.uid
