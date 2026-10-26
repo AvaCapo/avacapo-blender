@@ -2,13 +2,14 @@
 
 import bpy
 from bpy.props import (
-    BoolProperty, CollectionProperty, FloatProperty, IntProperty, PointerProperty,
+    BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty,
     StringProperty,
 )
 from bpy.types import PropertyGroup
 
 from ..common.config import Config, TimelineConfig
 from ..core import tracks
+from ..server import models
 from .runtime import tag_redraw
 
 
@@ -224,8 +225,10 @@ class CT_Clip(PropertyGroup):
     # history; switching Takes copies their values here.
     prompt: StringProperty(name="Prompt")
     seed: IntProperty(name="Seed", min=-1, default=-1, description="-1 = random")
-    generation_model: StringProperty(
-        name="Model", description="Generation model", default=Config.DEFAULT_MODEL_TYPE,
+    # This is the editable choice for the next generation. CT_Take.generation_model
+    # is immutable history of the model that created that Take.
+    generation_model: EnumProperty(
+        name="Model", description="Generation model", items=models.get_model_enum_items,
     )
     generation_temperature: FloatProperty(
         name="Temperature", min=0.001, default=Config.DEFAULT_TEMPERATURE,
@@ -323,6 +326,10 @@ class CT_Scene(PropertyGroup):
     next_track_uid: IntProperty(default=1, options={'HIDDEN'})
     show_retargeting: BoolProperty(
         default=False, options={'HIDDEN'}, update=_show_retargeting_changed,
+    )
+    token_input: StringProperty(
+        name="Token", description="Paste your API token here", subtype='PASSWORD',
+        options={'SKIP_SAVE'},
     )
     tracks: CollectionProperty(type=CT_Track)
     default_length: IntProperty(

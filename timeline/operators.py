@@ -8,6 +8,7 @@ from ..animation import test_take_generation
 from ..common.config import Config
 from ..core import takes, tracks
 from ..core.generation_models import GenerationCommand, TextParameters
+from ..server import models
 from . import operations
 from .properties import edit_track, ensure_track, find_track
 from .runtime import runtime, tag_redraw
@@ -29,8 +30,6 @@ class _ClipOp:
         return track, clip
 
     def _generate_take(self, context, track, clip, *, command=None):
-        # TODO(test-generation): replace the bundled BVH result with the server
-        # response, preserving the same Take-Action materialize contract.
         if command is None:
             command = GenerationCommand(
                 prompt=clip.prompt,
@@ -45,19 +44,36 @@ class _ClipOp:
                 ),
             )
         try:
-            source_motion, source_text = test_take_generation.load_test_motion()
-            take = operations.apply_generated_motion(
-                track,
-                clip,
-                command=command,
-                source_motion=source_motion,
-                source_text=source_text,
-                scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
-            )
+            # TODO(server-jobs): re-enable operations.submit_generation() when
+            # the production server supports the server-jobs protocol: operations.submit_generation(...)
+            
+            # Generation through server jobs:
+            # operations.submit_generation(
+            #     context.scene,
+            #     track,
+            #     clip,
+            #     command,
+            #     scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
+            # )
+            
+            #NOTE: use file read for fast prototyping
+            # Generation from the bundled test BVH:
+            # source_motion, source_text = test_take_generation.load_test_motion()
+            # operations.apply_generated_motion(
+            #     track,
+            #     clip,
+            #     command=command,
+            #     source_motion=source_motion,
+            #     source_text=source_text,
+            #     scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
+            # )
+
+            # Direct production POST -> BVH:
+            test_take_generation.start_direct_generation(context, track, clip, command)
         except (OSError, RuntimeError, ValueError, ReferenceError) as exc:
             self.report({'WARNING'}, f"Could not generate Take: {exc}")
             return False
-        self.report({'INFO'}, f"Generated {take.name} from the temporary test BVH")
+        self.report({'INFO'}, "Production generation started")
         return True
 
 
@@ -147,8 +163,8 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
     bl_options = {'UNDO'}
     prompt: StringProperty(name="Prompt", options={'SKIP_SAVE'})
     seed: IntProperty(name="Seed", min=-1, default=-1, options={'SKIP_SAVE'})
-    model: StringProperty(
-        name="Model", description="Generation model", default=Config.DEFAULT_MODEL_TYPE,
+    model: EnumProperty(
+        name="Model", description="Generation model", items=models.get_model_enum_items,
         options={'SKIP_SAVE'},
     )
     temperature: FloatProperty(name="Temperature", min=0.001, options={'SKIP_SAVE'})

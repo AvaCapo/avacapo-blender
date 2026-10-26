@@ -10,7 +10,7 @@ class Config:
     FRONTEND_URL = "https://app.avacapo.com/"
     ADDON_DOWNLOAD_URL = "https://github.com/AvaCapo/avacapo-blender"
     SERVER_URL = os.getenv("AVACAPO_BASE_URL", PLATFORM_URL).rstrip("/")
-    PUBLIC_BASE_URL = f"{SERVER_URL}/api/v1/public"
+    PUBLIC_BASE_URL = f"{SERVER_URL}/api/v1"
     GENERATION_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt/"
     GENERATION_CONSTRAINTS_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt-with-constraints/"
     INBETWEENING_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt-inbetween/"

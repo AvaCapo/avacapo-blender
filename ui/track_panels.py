@@ -6,6 +6,7 @@ from bpy.types import Menu, Panel
 
 from ..animation.retargeting import blender_retarget_service
 from ..core import takes, tracks
+from ..core.storage import Storage
 from ..timeline.properties import find_track
 from ..timeline.runtime import runtime
 from . import ui_retargeting
@@ -98,12 +99,31 @@ class CLIPS_PT_panel(Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        data = scene.clip_data
+
+        if Storage.api_token:
+            row = layout.row(align=True)
+            row.label(text="Connected", icon="CHECKMARK")
+            row.operator("avacapo.disconnect", text="", icon="X")
+        else:
+            box_auth = layout.box()
+            box_auth.label(text="Not Connected", icon="ERROR")
+            box_auth.operator(
+                "avacapo.login_browser",
+                text="Login via Browser",
+                icon="URL",
+            )
+            box_auth.separator()
+            box_auth.label(text="Or paste token manually:")
+            row = box_auth.row(align=True)
+            row.prop(data, "token_input", text="")
+            row.operator("avacapo.paste_token", text="Connect", icon="CHECKMARK")
+
         armature = context.active_object
         if armature is None or armature.type != 'ARMATURE' or not armature.select_get():
             layout.label(text="Select an armature", icon='INFO')
             return
 
-        data = scene.clip_data
         retarget_box = layout.box()
         retarget_ready = (
             hasattr(armature, "avacapo_retarget_mapping")

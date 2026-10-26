@@ -16,8 +16,7 @@ from .generation_models import (
 
 
 class GenerationQueue:
-    def __init__(self, *, base_url=None, max_concurrent=1, max_tasks=100):
-        self.base_url = base_url
+    def __init__(self, *, max_concurrent=1, max_tasks=100):
         self.max_concurrent = max_concurrent
         self.max_tasks = max_tasks
         self.runtime_id = uuid.uuid4().hex
@@ -165,7 +164,7 @@ class GenerationQueue:
         }[command.mode]
         return generate(
             name=command.name, prompt=command.prompt, model=command.model,
-            in_place=command.in_place, api_token=api_token, base_url=self.base_url,
+            in_place=command.in_place, api_token=api_token,
             cancel_event=cancel_event, on_progress=on_progress, **parameters,
         )
 

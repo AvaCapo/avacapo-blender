@@ -32,11 +32,9 @@ def _json_string(response, key: str) -> str:
 class AnimationJobs:
     """Submit, poll and download jobs using the configured AvaCapo API."""
 
-    def __init__(self, *, base_url=None):
-        self.base_url = (base_url or Config.SERVER_URL).rstrip("/")
-        public_url = f"{self.base_url}/api/v1/public"
-        self.status_url = f"{public_url}/api-avacapo-status/"
-        self.download_url = f"{public_url}/api-avacapo-download/"
+    def __init__(self):
+        self.status_url = Config.STATUS_URL
+        self.download_url = Config.DOWNLOAD_URL
 
     def _remaining(self, deadline, stage):
         remaining = deadline - time.monotonic()

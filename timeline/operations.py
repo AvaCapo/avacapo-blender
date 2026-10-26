@@ -1,14 +1,149 @@
 """Compound Timeline commands that keep Track metadata and Action windows consistent."""
 
 import math
+from dataclasses import dataclass, replace
 
 import bpy
 
+from ..common.logger import log
 from ..core import takes, tracks
+from ..core.generation_models import GenerationCommand, TaskStatus
+from ..core.generation_service import GenerationService
+from ..core.storage import Storage
 from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
 from . import actions
 from .properties import edit_track
-from .runtime import ClipboardClip, ClipboardTake
+from .runtime import ClipboardClip, ClipboardTake, tag_redraw
+
+
+GENERATION_TIMER_CALLBACKS = set()
+_generation_service = None
+_generation_service_token = ""
+_pending_generations = {}
+
+
+@dataclass
+class _PendingGeneration:
+    scene: object
+    track_uid: int
+    clip_uid: int
+    command: GenerationCommand
+    scene_fps: float
+    status: TaskStatus = TaskStatus.QUEUED
+
+
+def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_fps: float) -> str:
+    """Queue one server request and publish its result as a Take when it is ready."""
+    global _generation_service
+    global _generation_service_token
+
+    if not Storage.api_token:
+        raise ValueError("Connect to AvaCapo before generating a Take.")
+    if _generation_service is None:
+        _generation_service = GenerationService(
+            api_token=Storage.api_token,
+            max_concurrent=1,
+        )
+        _generation_service.start()
+        _generation_service_token = Storage.api_token
+    elif _generation_service_token != Storage.api_token:
+        _generation_service.set_api_token(Storage.api_token)
+        _generation_service_token = Storage.api_token
+
+    task_id = _generation_service.submit(command)
+    _pending_generations[task_id] = _PendingGeneration(
+        scene=scene,
+        track_uid=track.uid,
+        clip_uid=clip.uid,
+        command=command,
+        scene_fps=scene_fps,
+    )
+    log.info("Queued server generation %s for Clip %s.", task_id[:8], clip.uid)
+    if not bpy.app.timers.is_registered(_finish_generation):
+        bpy.app.timers.register(_finish_generation, first_interval=0.1)
+        GENERATION_TIMER_CALLBACKS.add(_finish_generation)
+    return task_id
+
+
+def _finish_generation() -> float | None:
+    if _generation_service is None:
+        _pending_generations.clear()
+        GENERATION_TIMER_CALLBACKS.discard(_finish_generation)
+        return None
+
+    changed = False
+    for task_id, pending in tuple(_pending_generations.items()):
+        task = _generation_service.get_task(task_id)
+        if task.status != pending.status:
+            log.info("Generation %s: %s", task_id[:8], task.status.value)
+            pending.status = task.status
+        if task.status not in {TaskStatus.SUCCEEDED, TaskStatus.CANCELLED, TaskStatus.FAILED}:
+            continue
+
+        _pending_generations.pop(task_id)
+        changed = True
+        if task.status == TaskStatus.SUCCEEDED:
+            result = _generation_service.get_result(task_id)
+            try:
+                if result is None:
+                    raise RuntimeError("Generation completed without an animation result.")
+                _publish_generation(pending, result.bvh_bytes, result.resolved_seed)
+            except Exception as exc:
+                log.error("Could not create Take from generated animation: %s", exc)
+            finally:
+                _generation_service.release_result(task_id)
+        elif task.status == TaskStatus.FAILED:
+            log.error("Animation generation failed: %s", task.error or "unknown error")
+
+    if changed:
+        tag_redraw()
+    if _pending_generations:
+        return 0.1
+    GENERATION_TIMER_CALLBACKS.discard(_finish_generation)
+    return None
+
+
+def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_seed: int | None) -> None:
+    """Retarget one completed server result on Blender's main thread."""
+    from broom.io import load_bvh_from_bytes
+
+    track = next(
+        (item for item in pending.scene.clip_data.tracks if item.uid == pending.track_uid),
+        None,
+    )
+    if track is None:
+        raise ValueError("The Track was deleted while the animation was generating.")
+    clip = tracks.find_clip(track.clips, pending.clip_uid)
+    if clip is None:
+        raise ValueError("The Clip was deleted while the animation was generating.")
+
+    command = pending.command
+    if resolved_seed is not None and hasattr(command.parameters, "seed"):
+        command = replace(command, parameters=replace(command.parameters, seed=resolved_seed))
+    apply_generated_motion(
+        track,
+        clip,
+        command=command,
+        source_motion=load_bvh_from_bytes(bvh_bytes),
+        source_text=bvh_bytes.decode("utf-8"),
+        scene_fps=pending.scene_fps,
+    )
+
+
+def cancel_generation() -> None:
+    """Cancel server work without waiting for a network request to return."""
+    global _generation_service
+    global _generation_service_token
+
+    for callback in tuple(GENERATION_TIMER_CALLBACKS):
+        if bpy.app.timers.is_registered(callback):
+            bpy.app.timers.unregister(callback)
+    GENERATION_TIMER_CALLBACKS.clear()
+    _pending_generations.clear()
+    if _generation_service is not None:
+        _generation_service.stop(wait=False)
+        _generation_service = None
+    _generation_service_token = ""
 
 
 def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps):
