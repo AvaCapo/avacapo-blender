@@ -20,7 +20,7 @@ def find_clip(clips, uid: int):
 
 
 def active_clip(data):
-    return find_clip(data.clips, data.active_uid) if data.active_uid else None
+    return find_clip(data.clips, data.active_clip_uid) if data.active_clip_uid else None
 
 
 def neighbors(clips, uid: int) -> tuple:
@@ -162,8 +162,8 @@ def add_clip(store, start: int, end: int, name: str | None = None):
     if end - start < TimelineConfig.MIN_CLIP_LENGTH:
         raise ValueError("A clip must span at least one frame")
     clip = store.allocate_clip()
-    clip.uid = store.data.next_uid
-    store.data.next_uid += 1
+    clip.uid = store.data.next_clip_uid
+    store.data.next_clip_uid += 1
     clip.name = name or f"Clip {clip.uid}"
     clip.start, clip.end = start, end
     return clip
@@ -178,8 +178,8 @@ def remove_clip(store, uid: int) -> bool:
     if following is not None and following.bind_start:
         following.bind_start = False
     store.remove_clip_record(uid)
-    if store.data.active_uid == uid:
-        store.data.active_uid = 0
+    if store.data.active_clip_uid == uid:
+        store.data.active_clip_uid = 0
     return True
 
 
@@ -187,17 +187,38 @@ def serialize_clip(clip) -> ClipData:
     """Copy clip values without retaining references to Blender records."""
     return ClipData(
         name=clip.name,
+        length=clip.end - clip.start,
         prompt=clip.prompt,
         seed=clip.seed,
-        length=clip.end - clip.start,
-        active_take=clip.active_take,
+        generation_model=clip.generation_model,
+        generation_temperature=clip.generation_temperature,
+        generation_cycled=clip.generation_cycled,
+        generation_in_place=clip.generation_in_place,
+        active_take_uid=clip.active_take_uid,
         takes=tuple(
             TakeData(
+                uid=take.uid,
                 name=take.name,
                 prompt=take.prompt,
+                generation_mode=take.generation_mode,
+                generation_name=take.generation_name,
+                generation_model=take.generation_model,
+                generation_in_place=take.generation_in_place,
+                duration_seconds=take.duration_seconds,
+                fps=take.fps,
+                temperature=take.temperature,
+                cycled=take.cycled,
                 seed=take.seed,
-                offset=take.offset,
-                length=take.length,
+                left_frame=take.left_frame,
+                right_frame=take.right_frame,
+                left_context_frames=take.left_context_frames,
+                right_context_frames=take.right_context_frames,
+                gap_frames=take.gap_frames,
+                end_offset_x=take.end_offset_x,
+                end_offset_z=take.end_offset_z,
+                align_heading=take.align_heading,
+                length=int(take.length),
+                offset=int(take.offset),
                 progress=take.progress,
             )
             for take in clip.takes
@@ -207,10 +228,16 @@ def serialize_clip(clip) -> ClipData:
 
 def restore_clip(store, payload: ClipData, start: int):
     clip = add_clip(store, start, start + payload.length, name=payload.name)
-    clip.prompt, clip.seed = payload.prompt, payload.seed
+    clip.prompt = payload.prompt
+    clip.seed = payload.seed
+    clip.generation_model = payload.generation_model
+    clip.generation_temperature = payload.generation_temperature
+    clip.generation_cycled = payload.generation_cycled
+    clip.generation_in_place = payload.generation_in_place
     for take_payload in payload.takes:
         takes.restore_take(store, clip, take_payload)
-    clip.active_take = payload.active_take
+    if payload.active_take_uid:
+        takes.select_take(clip, payload.active_take_uid)
     return clip
 
 
@@ -219,7 +246,8 @@ def create_clip_at(store, frame: float, default_length: int):
     if interval is None:
         return None
     clip = add_clip(store, *interval)
-    store.data.active_uid = clip.uid
+    store.data.active_clip_uid = clip.uid
+    apply_bindings(store)
     return clip
 
 
@@ -340,12 +368,12 @@ def paste_clip(store, payload: ClipData, frame: int):
     if not is_free(store.clips, frame, frame + payload.length):
         return None
     clip = restore_clip(store, payload, frame)
-    store.data.active_uid = clip.uid
+    store.data.active_clip_uid = clip.uid
     return clip
 
 
 def begin_drag(store, kind: str, uid: int, other_uid: int = 0) -> DragSession:
-    store.data.active_uid = uid
+    store.data.active_clip_uid = uid
     return DragSession(kind, uid, other_uid, snapshot(store))
 
 

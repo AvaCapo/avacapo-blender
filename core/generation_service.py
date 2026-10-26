@@ -4,13 +4,11 @@ from .task_queue import GenerationQueue
 
 
 class GenerationService(GenerationQueue):
-    def __init__(self, *, api_token: str, base_url=None, max_concurrent=5, max_tasks=100):
+    def __init__(self, *, api_token: str, max_concurrent=5, max_tasks=100):
         if not isinstance(api_token, str) or not api_token.strip():
             raise ValueError("An API token is required.")
         self._api_token = api_token
-        super().__init__(
-            base_url=base_url, max_concurrent=max_concurrent, max_tasks=max_tasks
-        )
+        super().__init__(max_concurrent=max_concurrent, max_tasks=max_tasks)
 
     def submit(self, command) -> str:
         """Capture one token per task; later credential changes affect only new submissions."""

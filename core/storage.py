@@ -11,7 +11,6 @@ config = Config()
 
 class Storage:
     api_token: str = ""
-    base_url: str = ""
 
     @classmethod
     def load(cls, path: str | os.PathLike | None = None) -> bool:
@@ -25,10 +24,10 @@ class Storage:
             if any(not isinstance(value, str) for value in values.values()):
                 raise ValueError("Settings fields must be strings.")
         except FileNotFoundError:
-            cls.api_token = cls.base_url = ""
+            cls.api_token = ""
             return False
         except (OSError, ValueError):
-            cls.api_token = cls.base_url = ""
+            cls.api_token = ""
             log.error("Could not load settings: unreadable or invalid settings file.")
             return False
         for key, value in values.items():

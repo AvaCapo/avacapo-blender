@@ -278,9 +278,11 @@ def retarget_into_action(
     )
     staging_action = bpy.data.actions.new(name=f"__AvaCapo Retarget Stage - {action.name}")
     try:
+        staging_slot = blender_motion_writer.action_slot_for_object(staging_action, armature)
         blender_motion_writer.apply_prepared_motion(
             armature,
             staging_action,
+            staging_slot,
             prepared,
             assign_to_skeleton=False,
         )
@@ -327,9 +329,11 @@ def create_retargeted_action(
     previous_action = None if animation_data is None else animation_data.action
     previous_slot = None if animation_data is None else getattr(animation_data, "action_slot", None)
     try:
+        action_slot = blender_motion_writer.action_slot_for_object(action, armature)
         blender_motion_writer.apply_prepared_motion(
             armature,
             action,
+            action_slot,
             prepared,
             assign_to_skeleton=False,
         )
@@ -337,7 +341,7 @@ def create_retargeted_action(
         blender_motion_writer.assign_action(
             armature,
             action,
-            blender_motion_writer.action_slot_for_object(action, armature),
+            action_slot,
         )
     except Exception:
         animation_data = armature.animation_data

@@ -10,7 +10,6 @@ import bpy.utils
 import bpy_extras.anim_utils
 from mathutils import Euler, Matrix, Vector
 
-
 @dataclass(frozen=True)
 class _PreparedCurve:
     data_path: str
@@ -33,12 +32,21 @@ class _CurveSnapshot:
     points: tuple[tuple[float, float, str], ...]
 
 
-def prepare_retargeted_motion(skeleton, motion, *, canonical_from_armature) -> _PreparedMotion:
+def prepare_retargeted_motion(
+    skeleton,
+    motion,
+    *,
+    canonical_from_armature,
+    frame_start: float = 1.0,
+    frame_step: float = 1.0,
+) -> _PreparedMotion:
     """Validate and calculate every Blender curve without mutating an Action."""
     if skeleton.type != "ARMATURE" or skeleton.pose is None:
         raise ValueError("Retarget target must be an armature with a pose.")
     if motion.frame_count < 1:
         raise ValueError("Retargeted motion must contain at least one frame.")
+    if not math.isfinite(frame_start) or not math.isfinite(frame_step) or frame_step <= 0.0:
+        raise ValueError("Frame start and frame step must be finite; frame step must be positive.")
 
     hierarchy = motion.hierarchy
     bases = _current_retarget_bases(skeleton)
@@ -49,7 +57,7 @@ def prepare_retargeted_motion(skeleton, motion, *, canonical_from_armature) -> _
     if missing_bases:
         raise ValueError("Confirmed rest basis is missing motion bones: " + ", ".join(missing_bases))
 
-    frame_times = tuple(float(index + 1) for index in range(motion.frame_count))
+    frame_times = tuple(float(frame_start + index * frame_step) for index in range(motion.frame_count))
     armature_from_canonical = Matrix(canonical_from_armature).inverted()
     armature_from_canonical.resize_4x4()
     curves = []
@@ -89,17 +97,24 @@ def prepare_retargeted_motion(skeleton, motion, *, canonical_from_armature) -> _
     return _PreparedMotion(frame_times=frame_times, curves=tuple(curves))
 
 
-def apply_prepared_motion(skeleton, action, prepared, *, assign_to_skeleton: bool) -> None:
+def apply_prepared_motion(
+    skeleton,
+    action,
+    action_slot,
+    prepared,
+    *,
+    assign_to_skeleton: bool,
+    keyframe_type: str = "KEYFRAME",
+) -> None:
     """Write already validated curves to one Action.
 
     Callers that replace an existing Action should use a staging Action first,
     then :func:`replace_action_slot_from_staging` below.
     """
-    action_slot = action_slot_for_object(action, skeleton)
     channelbag = bpy_extras.anim_utils.action_ensure_channelbag_for_slot(action, action_slot)
     for fcurve in list(channelbag.fcurves):
         channelbag.fcurves.remove(fcurve)
-    _write_prepared_curves(channelbag, prepared)
+    _write_prepared_curves(channelbag, prepared, keyframe_type=keyframe_type)
     if assign_to_skeleton:
         assign_action(skeleton, action, action_slot)
 
@@ -203,7 +218,7 @@ def _rotation_samples(motion, joint_index, rotation_columns, rotation_mode):
     return samples, data_path
 
 
-def _write_prepared_curves(channelbag, prepared) -> None:
+def _write_prepared_curves(channelbag, prepared, *, keyframe_type: str) -> None:
     for prepared_curve in prepared.curves:
         for axis in range(len(prepared_curve.samples[0])):
             curve = channelbag.fcurves.new(
@@ -216,6 +231,7 @@ def _write_prepared_curves(channelbag, prepared) -> None:
                 point = curve.keyframe_points[index]
                 point.co = (frame, float(prepared_curve.samples[index][axis]))
                 point.interpolation = "LINEAR"
+                point.type = keyframe_type
             curve.update()
 
 

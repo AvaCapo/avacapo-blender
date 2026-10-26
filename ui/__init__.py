@@ -4,33 +4,46 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import PointerProperty
 
-from .track_drawing import ClipDrawing, draw_callback
-from .track_generation import TIMER_CALLBACKS, cancel_generation
-from .track_operators import (
-    CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap,
+from .track_generation import (
+    MODEL_CATALOG_TIMER_CALLBACKS, cancel_model_catalog_refresh, refresh_model_catalog,
+)
+from .connection import (
+    AVACAPO_OT_disconnect, AVACAPO_OT_login_browser,
+    AVACAPO_OT_paste_token,
+)
+from ..timeline.drawing import draw_callback
+from ..timeline.interaction import CLIPS_OT_hover, CLIPS_OT_mouse
+from ..timeline.operators import (
+    CLIPS_OT_create, CLIPS_OT_fill_gap,
     CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take,
-    CLIPS_OT_delete_takes, CLIPS_OT_delete_clip, CLIPS_OT_copy_clip, CLIPS_OT_paste_clip,
+    CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
+    CLIPS_OT_copy_clip,
+    CLIPS_OT_paste_clip,
     CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
 )
+from ..timeline.operations import cancel_generation
 from .track_panels import (
-    CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip,
-    CLIPS_UL_takes, CLIPS_PT_panel,
+    CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )
-from .track_properties import CT_Take, CT_Clip, CT_Scene
-from .track_runtime import runtime
+from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene
+from ..timeline.runtime import runtime
+from ..core.storage import Storage
 from .update_notice import TIMER_CALLBACKS as UPDATE_TIMER_CALLBACKS, stop_update_notice
 from . import ui_retargeting
 from ..animation.retargeting import blender_retarget_watcher
 
 
 CLASSES = (
-    CT_Take, CT_Clip, CT_Scene,
+    CT_Take, CT_Clip, CT_Track, CT_Scene,
+    AVACAPO_OT_login_browser, AVACAPO_OT_paste_token,
+    AVACAPO_OT_disconnect,
     CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap,
     CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take,
-    CLIPS_OT_delete_takes, CLIPS_OT_delete_clip, CLIPS_OT_copy_clip, CLIPS_OT_paste_clip,
+    CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
+    CLIPS_OT_copy_clip,
+    CLIPS_OT_paste_clip,
     CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
-    CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip,
-    CLIPS_UL_takes, CLIPS_PT_panel,
+    CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )
 
 
@@ -46,7 +59,8 @@ def _state():
         _registration_state = namespace[_STATE_KEY]
     elif _registration_state is None:
         _registration_state = {
-            "handle": None, "keymaps": [], "classes": [], "timers": TIMER_CALLBACKS,
+            "handle": None, "keymaps": [], "classes": [],
+            "timers": MODEL_CATALOG_TIMER_CALLBACKS,
             "reset_runtime": runtime.reset,
             "update_timers": UPDATE_TIMER_CALLBACKS,
         }
@@ -57,7 +71,8 @@ def _state():
 
 @persistent
 def _on_load_pre(_):
-    cancel_generation(_state().get("timers", set()))
+    cancel_generation()
+    cancel_model_catalog_refresh(_state().get("timers", set()))
     stop_update_notice(_state().get("update_timers", set()))
 
 
@@ -72,6 +87,22 @@ def _unregister_retargeting():
     ui_retargeting.unregister()
 
 
+def _register_class(cls):
+    """Replace a stale RNA class left behind by an extension hot-reload."""
+    for base_class in (bpy.types.PropertyGroup, bpy.types.Operator, bpy.types.Menu, bpy.types.Panel):
+        lookup = getattr(base_class, "bl_rna_get_subclass_py", None)
+        if lookup is None:
+            continue
+        stale = lookup(cls.__name__, None)
+        if stale is None:
+            continue
+        try:
+            bpy.utils.unregister_class(stale)
+        except (RuntimeError, ValueError):
+            pass
+    bpy.utils.register_class(cls)
+
+
 def unregister():
     _unregister_retargeting()
     states = [_state()]
@@ -79,7 +110,8 @@ def unregister():
     if legacy is not None and legacy is not states[0]:
         states.append(legacy)
     for state in states:
-        cancel_generation(state.get("timers", set()))
+        cancel_generation()
+        cancel_model_catalog_refresh(state.get("timers", set()))
         stop_update_notice(state.get("update_timers", set()))
         for handler_list, callback in state.get("handlers", []):
             if callback in handler_list:
@@ -117,14 +149,15 @@ def unregister():
 
 def register():
     unregister()
+    Storage.load()
     state = _state()
     state.update(
-        timers=TIMER_CALLBACKS,  reset_runtime=runtime.reset,
+        timers=MODEL_CATALOG_TIMER_CALLBACKS,  reset_runtime=runtime.reset,
         update_timers=UPDATE_TIMER_CALLBACKS,
     )
     try:
         for cls in CLASSES:
-            bpy.utils.register_class(cls)
+            _register_class(cls)
             state["classes"].append(cls)
         bpy.types.Scene.clip_data = PointerProperty(type=CT_Scene)
         state.setdefault("handlers", [])
@@ -153,6 +186,7 @@ def register():
         ui_retargeting.register()
         blender_retarget_watcher.register()
         blender_retarget_watcher.schedule_target_initialization()
+        refresh_model_catalog()
     except Exception:
         unregister()
         raise

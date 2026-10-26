@@ -1,39 +1,70 @@
-"""Blender generation adapter. Currently completes a take using a demo timer."""
+"""Background refresh of generation-model choices shown by the UI."""
+
+import threading
 
 import bpy
 
-from ..core import takes, tracks
-from .track_runtime import tag_redraw
+from ..core.storage import Storage
+from ..server import models
 
 
-TIMER_CALLBACKS = set()
-_DEMO_DELAY = 0.5
+MODEL_CATALOG_TIMER_CALLBACKS = set()
+_model_enum_items_thread = None
+_model_enum_items_result = None
+_model_enum_items_token = ""
 
 
-def request_generation(scene, clip_uid: int, take_uid: int) -> None:
-    """Demo backend: complete the take after half a second."""
-    def tick():
-        TIMER_CALLBACKS.discard(tick)
-        try:
-            # A live scene reference survives renaming; deletion/load invalidates it.
-            if bpy.data.scenes.get(scene.name) != scene:
-                return None
-            data = getattr(scene, "clip_data", None)
-            clip = tracks.find_clip(data.clips, clip_uid) if data is not None else None
-            take = takes.find_take(clip, take_uid) if clip is not None else None
-            if take is not None:
-                take.progress = 1.0
-                tag_redraw()
-        except ReferenceError:
-            pass
-        return None
-
-    bpy.app.timers.register(tick, first_interval=_DEMO_DELAY)
-    TIMER_CALLBACKS.add(tick)
+def _tag_redraw() -> None:
+    screen = getattr(bpy.context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type in {'VIEW_3D', 'DOPESHEET_EDITOR'}:
+            area.tag_redraw()
 
 
-def cancel_generation(callbacks=None) -> None:
-    callbacks = TIMER_CALLBACKS if callbacks is None else callbacks
+def _finish_model_enum_items_refresh() -> float | None:
+    global _model_enum_items_result
+
+    if _model_enum_items_thread is not None and _model_enum_items_thread.is_alive():
+        return 0.1
+    if _model_enum_items_result is not None and _model_enum_items_token == Storage.api_token:
+        models.set_model_enum_items(_model_enum_items_result)
+    _model_enum_items_result = None
+    MODEL_CATALOG_TIMER_CALLBACKS.discard(_finish_model_enum_items_refresh)
+    _tag_redraw()
+    return None
+
+
+def refresh_model_catalog() -> None:
+    """Refresh server models without blocking Blender's UI thread."""
+    global _model_enum_items_thread
+    global _model_enum_items_result
+    global _model_enum_items_token
+
+    if not Storage.api_token or (
+        _model_enum_items_thread is not None and _model_enum_items_thread.is_alive()
+    ):
+        return
+
+    _model_enum_items_result = None
+    _model_enum_items_token = Storage.api_token
+
+    def fetch():
+        global _model_enum_items_result
+        _model_enum_items_result = models.fetch_model_enum_items(_model_enum_items_token)
+
+    _model_enum_items_thread = threading.Thread(
+        target=fetch, name="avacapo-model-catalog", daemon=True,
+    )
+    _model_enum_items_thread.start()
+    if not bpy.app.timers.is_registered(_finish_model_enum_items_refresh):
+        bpy.app.timers.register(_finish_model_enum_items_refresh, first_interval=0.1)
+        MODEL_CATALOG_TIMER_CALLBACKS.add(_finish_model_enum_items_refresh)
+
+
+def cancel_model_catalog_refresh(callbacks=None) -> None:
+    callbacks = MODEL_CATALOG_TIMER_CALLBACKS if callbacks is None else callbacks
     for callback in tuple(callbacks):
         if bpy.app.timers.is_registered(callback):
             bpy.app.timers.unregister(callback)

@@ -32,12 +32,10 @@ def _json_string(response, key: str) -> str:
 class AnimationJobs:
     """Submit, poll and download jobs using the configured AvaCapo API."""
 
-    def __init__(self, *, base_url=None):
-        self.base_url = (base_url or Config.SERVER_URL).rstrip("/")
-        public_url = f"{self.base_url}/api/v1/public"
-        self.status_url = f"{public_url}/api-avacapo-status/"
-        self.download_url = f"{public_url}/api-avacapo-download/"
-        self.cancel_url = f"{public_url}/api-avacapo-cancel/"
+    def __init__(self):
+        #TODO: check self URLs? Could be broken during merge
+        self.status_url = Config.STATUS_URL
+        self.download_url = Config.DOWNLOAD_URL
 
     def _remaining(self, deadline, stage):
         remaining = deadline - time.monotonic()
@@ -126,7 +124,7 @@ class AnimationJobs:
         self._validate_identity(api_token, hashed_id)
         try:
             with requests.post(
-                self.cancel_url, params={"api_token": api_token, "hashed_id": hashed_id},
+                Config.CANCEL_URL, params={"api_token": api_token, "hashed_id": hashed_id},
                 timeout=(Config.CONNECT_TIMEOUT, Config.REQUEST_TIMEOUT),
             ) as response:
                 if response.status_code not in {200, 202}:

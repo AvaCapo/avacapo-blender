@@ -307,67 +307,71 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
     bl_category = "AvaCapo Retarget"
 
     def draw(self, context):
-        layout = self.layout
-        scene = context.scene
-        # A failed or incomplete extension registration can leave the panel
-        # visible before its Scene properties exist. Do not access them here.
-        required_scene_properties = (
-            "avacapo_retarget_target",
-            "avacapo_retarget_source_armature",
-            "avacapo_retarget_source_action",
-        )
-        if (
-            not all(hasattr(scene, name) for name in required_scene_properties)
-            or not hasattr(bpy.types.Object, "avacapo_retarget_mapping")
-        ):
-            layout.label(text="Retarget properties are unavailable; re-enable the extension.", icon="ERROR")
-            return
-        layout.prop(scene, "avacapo_retarget_target", text="Target Armature")
-        # DEBUG ONLY: fixture setup for strict direct-compatibility checks.
-        layout.operator("avacapo.append_avacapo_reference_armature", icon="ARMATURE_DATA")
-        armature = scene.avacapo_retarget_target
-        if armature is None:
-            layout.label(text="Choose a custom armature to create a draft.", icon="INFO")
-            return
-        state = armature.avacapo_retarget_mapping
-        structural_errors = blender_retarget_service.mapping_status_errors(armature)
-        invalid_sources = blender_retarget_service.cached_invalid_source_joints(state)
-        visible_structural_errors = _visible_mapping_errors(structural_errors, state.confirmed)
-        errors = list(visible_structural_errors)
-        if state.draft_error and state.draft_error not in errors:
-            errors.append(state.draft_error)
+        draw_retarget_mapping(self.layout, context)
 
-        _draw_mapping_status(layout, state, errors)
-        mapping_buttons = layout.row(align=True)
-        mapping_split = mapping_buttons.split(factor=0.5, align=True)
-        mapping_split.operator("avacapo.suggest_retarget_mapping", icon="VIEWZOOM")
-        mapping_split.operator("avacapo.clear_retarget_mapping", icon="TRASH")
-        if state.entries:
-            _draw_mapping_entries(
-                layout,
-                armature,
-                state.entries,
-                invalid_sources,
-                show_missing_required_errors=state.confirmed,
-            )
-        else:
-            layout.label(text="Mapping rows are not initialized. Reselect the target armature.", icon="INFO")
-        if errors:
-            box = layout.box()
-            box.alert = True
-            for error in errors:
-                box.label(text=error, icon="ERROR")
-        elif structural_errors:
-            layout.label(text="Complete required mappings before saving.", icon="INFO")
-        else:
-            layout.label(text="Required mappings are complete.", icon="CHECKMARK")
-        actions = layout.row(align=True)
-        actions.enabled = blender_retarget_service.can_confirm_mapping(armature)
-        actions.operator("avacapo.confirm_retarget_mapping", icon="CHECKMARK")
-        test_action = layout.row()
-        test_action.enabled = blender_retarget_service.is_valid_mapping(armature)
-        test_action.operator("avacapo.retarget_test_bvh", icon="PLAY")
-        _draw_source_action_retarget(layout, scene, armature)
+
+def draw_retarget_mapping(layout, context):
+    """Draw the Retarget controls in either AvaCapo sidebar location."""
+    scene = context.scene
+    # A failed or incomplete extension registration can leave the panel
+    # visible before its Scene properties exist. Do not access them here.
+    required_scene_properties = (
+        "avacapo_retarget_target",
+        "avacapo_retarget_source_armature",
+        "avacapo_retarget_source_action",
+    )
+    if (
+        not all(hasattr(scene, name) for name in required_scene_properties)
+        or not hasattr(bpy.types.Object, "avacapo_retarget_mapping")
+    ):
+        layout.label(text="Retarget properties are unavailable; re-enable the extension.", icon="ERROR")
+        return
+    layout.prop(scene, "avacapo_retarget_target", text="Target Armature")
+    # DEBUG ONLY: fixture setup for strict direct-compatibility checks.
+    layout.operator("avacapo.append_avacapo_reference_armature", icon="ARMATURE_DATA")
+    armature = scene.avacapo_retarget_target
+    if armature is None:
+        layout.label(text="Choose a custom armature to create a draft.", icon="INFO")
+        return
+    state = armature.avacapo_retarget_mapping
+    structural_errors = blender_retarget_service.mapping_status_errors(armature)
+    invalid_sources = blender_retarget_service.cached_invalid_source_joints(state)
+    visible_structural_errors = _visible_mapping_errors(structural_errors, state.confirmed)
+    errors = list(visible_structural_errors)
+    if state.draft_error and state.draft_error not in errors:
+        errors.append(state.draft_error)
+
+    _draw_mapping_status(layout, state, errors)
+    mapping_buttons = layout.row(align=True)
+    mapping_split = mapping_buttons.split(factor=0.5, align=True)
+    mapping_split.operator("avacapo.suggest_retarget_mapping", icon="VIEWZOOM")
+    mapping_split.operator("avacapo.clear_retarget_mapping", icon="TRASH")
+    if state.entries:
+        _draw_mapping_entries(
+            layout,
+            armature,
+            state.entries,
+            invalid_sources,
+            show_missing_required_errors=state.confirmed,
+        )
+    else:
+        layout.label(text="Mapping rows are not initialized. Reselect the target armature.", icon="INFO")
+    if errors:
+        box = layout.box()
+        box.alert = True
+        for error in errors:
+            box.label(text=error, icon="ERROR")
+    elif structural_errors:
+        layout.label(text="Complete required mappings before saving.", icon="INFO")
+    else:
+        layout.label(text="Required mappings are complete.", icon="CHECKMARK")
+    actions = layout.row(align=True)
+    actions.enabled = blender_retarget_service.can_confirm_mapping(armature)
+    actions.operator("avacapo.confirm_retarget_mapping", icon="CHECKMARK")
+    test_action = layout.row()
+    test_action.enabled = blender_retarget_service.is_valid_mapping(armature)
+    test_action.operator("avacapo.retarget_test_bvh", icon="PLAY")
+    _draw_source_action_retarget(layout, scene, armature)
 
 
 def _visible_mapping_errors(errors, confirmed):
