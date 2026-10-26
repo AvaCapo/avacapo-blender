@@ -6,12 +6,11 @@ from collections.abc import Iterable
 
 import bpy
 import numpy as np
-from mathutils import Matrix, Vector
+from mathutils import Vector
 
-from ..common.config import Config
 from . import bvh_npz
-from .retarget_maps import NPZ_BVH_MAP, canonical_bone_name
-from . import rig_utils
+from .retargeting import blender_pose_adapter
+from .retarget_maps import NPZ_BVH_MAP
 
 
 CONSTRAINT_TYPE_ITEMS = (
@@ -52,12 +51,6 @@ _OBJECT_TARGET_IK_CHAINS = {
     "RightHand": ("RightForeArm", 2),
     "LeftFoot": ("LeftLeg", 2),
     "RightFoot": ("RightLeg", 2),
-}
-
-# The generated BVH uses LeftToe/RightToe while Mixamo normally uses *ToeBase.
-_BONE_ALIASES = {
-    "LeftToe": ("LeftToe", "LeftToeBase"),
-    "RightToe": ("RightToe", "RightToeBase"),
 }
 
 _constraint_payloads: dict[str, bytes] = {}
@@ -179,8 +172,10 @@ def validate_constraint_settings(context: bpy.types.Context, settings) -> str | 
     armature = source_armature(context, settings)
     if armature is None:
         return "Select a source armature"
-    if rig_utils.infer_rig_type(armature) == "unknown":
-        return "Constraint source must use an AvaCapo or Mixamo rig"
+    try:
+        _resolved_pose_bone_names(armature)
+    except ValueError as exc:
+        return str(exc)
 
     if input_type == "OBJECT_TARGET":
         if settings.constraint_target_object == armature:
@@ -259,28 +254,6 @@ def validate_saved_constraints(settings) -> str | None:
     return None
 
 
-def _pose_bone_lookup(armature: bpy.types.Object) -> dict[str, bpy.types.PoseBone]:
-    return {canonical_bone_name(pose_bone.name): pose_bone for pose_bone in armature.pose.bones}
-
-
-def _find_pose_bone(
-    lookup: dict[str, bpy.types.PoseBone], source_name: str
-) -> bpy.types.PoseBone | None:
-    for candidate in _BONE_ALIASES.get(source_name, (source_name,)):
-        pose_bone = lookup.get(canonical_bone_name(candidate))
-        if pose_bone is not None:
-            return pose_bone
-    return None
-
-
-def _axis_angle(rotation: Matrix) -> np.ndarray:
-    quaternion = rotation.to_quaternion().normalized()
-    if quaternion.w < 0.0:
-        quaternion = type(quaternion)((-quaternion.w, -quaternion.x, -quaternion.y, -quaternion.z))
-    axis, angle = quaternion.to_axis_angle()
-    return np.asarray(tuple(axis), dtype=np.float64) * float(angle)
-
-
 def create_object_target_constraint_npz(
     context: bpy.types.Context,
     armature: bpy.types.Object,
@@ -291,12 +264,11 @@ def create_object_target_constraint_npz(
     """Solve a temporary Blender IK pose toward an object and serialize it.
 
     The source armature is never keyed or permanently modified. A temporary IK
-    constraint is evaluated, sampled through the existing SMPL-X path, and then
+    constraint is evaluated, sampled through Broom's body-model adapter, and then
     removed even if conversion fails.
     """
 
-    if armature.type != "ARMATURE" or armature.pose is None:
-        raise ValueError("Constraint source is not an armature")
+    _resolved_pose_bone_names(armature)
     if target_object is None:
         raise ValueError("Select a target object or Empty")
     if target_object == armature:
@@ -308,11 +280,8 @@ def create_object_target_constraint_npz(
     if len(offset) != 3 or not all(np.isfinite(value) for value in offset):
         raise ValueError("Target Offset must contain three finite values")
 
-    lookup = _pose_bone_lookup(armature)
     owner_name, chain_count = _OBJECT_TARGET_IK_CHAINS[joint_name]
-    owner_bone = _find_pose_bone(lookup, owner_name)
-    if owner_bone is None:
-        raise ValueError(f"Constraint rig is missing IK bone: {owner_name}")
+    owner_bone = armature.pose.bones[owner_name]
 
     # A target may have just been moved or created from the constraint UI.
     # Flush that transform before reading its evaluated (animated) matrix.
@@ -363,119 +332,59 @@ def create_object_target_constraint_npz(
         context.view_layer.update()
 
 
-def _sample_pose(
+def _resolved_pose_bone_names(
     armature: bpy.types.Object,
-    pose_bones: Iterable[bpy.types.PoseBone],
-) -> tuple[np.ndarray, np.ndarray]:
-    local_rotations: list[Matrix] = []
-    root_translation = None
-
-    for index, pose_bone in enumerate(pose_bones):
-        try:
-            basis = armature.convert_space(
-                pose_bone=pose_bone,
-                matrix=pose_bone.matrix,
-                from_space="POSE",
-                to_space="LOCAL",
-            )
-        except (RuntimeError, TypeError, ValueError):
-            # ``matrix_basis`` is the same space for unconstrained bones and is
-            # available as a fallback for rigs Blender cannot convert directly.
-            basis = pose_bone.matrix_basis.copy()
-
-        rest_rotation = pose_bone.bone.matrix_local.to_quaternion().to_matrix()
-        source_rotation = (
-            rest_rotation @ basis.to_quaternion().to_matrix() @ rest_rotation.transposed()
-        )
-        local_rotations.append(source_rotation)
-
-        if index == 0:
-            root_translation = rest_rotation @ basis.to_translation()
-
-    if root_translation is None:
-        raise ValueError("The constraint rig has no root bone")
-
-    if not Config.KEEP_Y_UP:
-        coordinate_transform = Matrix(tuple(map(tuple, bvh_npz.Y_UP_TO_AMASS_Z_UP)))
-        local_rotations[0] = coordinate_transform @ local_rotations[0]
-        root_translation = coordinate_transform @ root_translation
-
-    body_pose = np.concatenate([_axis_angle(rotation) for rotation in local_rotations])
-    if body_pose.shape != (66,):
-        raise ValueError(f"Unexpected SMPL-X body pose shape: {body_pose.shape}")
-    return body_pose, np.asarray(tuple(root_translation), dtype=np.float32)
-
-
-def _resolved_smpl_pose_bones(
-    armature: bpy.types.Object,
-) -> list[bpy.types.PoseBone]:
+) -> dict[str, str]:
+    """Require exact AvaCapo body names and their ancestor relationships."""
     if armature.type != "ARMATURE" or armature.pose is None:
         raise ValueError("Constraint source is not an armature")
-    if rig_utils.infer_rig_type(armature) == "unknown":
-        raise ValueError("Constraint source must use an AvaCapo or Mixamo rig")
-
-    lookup = _pose_bone_lookup(armature)
-    pose_bones = [
-        _find_pose_bone(lookup, source_name)
-        for _target_name, source_name, _parent in NPZ_BVH_MAP
-    ]
+    bones = armature.pose.bones
     missing = [
-        source_name
-        for pose_bone, (_target_name, source_name, _parent) in zip(pose_bones, NPZ_BVH_MAP)
-        if pose_bone is None
+        source_name for _, source_name, _ in NPZ_BVH_MAP if bones.get(source_name) is None
     ]
     if missing:
-        raise ValueError("Constraint rig is missing bones: " + ", ".join(missing))
-    return [pose_bone for pose_bone in pose_bones if pose_bone is not None]
+        raise ValueError(
+            "Constraint source must use an AvaCapo rig; missing bones: " + ", ".join(missing)
+        )
+    for _, source_name, parent_index in NPZ_BVH_MAP:
+        if parent_index < 0:
+            continue
+        expected_parent = NPZ_BVH_MAP[parent_index][1]
+        ancestor = bones[source_name].parent
+        while ancestor is not None and ancestor.name != expected_parent:
+            ancestor = ancestor.parent
+        if ancestor is None:
+            raise ValueError(
+                "Constraint source must use an AvaCapo rig: "
+                f"{source_name} must descend from {expected_parent}"
+            )
+    return {source_name: source_name for _, source_name, _ in NPZ_BVH_MAP}
 
 
 def _serialize_pose_samples(
     context: bpy.types.Context,
     armature: bpy.types.Object,
-    resolved_pose_bones: Iterable[bpy.types.PoseBone],
+    source_to_bone: dict[str, str],
     frames: Iterable[int],
     *,
     use_current_evaluation: bool = False,
 ) -> tuple[bytes, int]:
-    sample_frames = [int(frame) for frame in frames]
-    if not sample_frames:
-        raise ValueError("At least one timeline frame is required")
-
-    previous_frame = int(context.scene.frame_current)
-    poses: list[np.ndarray] = []
-    translations: list[np.ndarray] = []
-
-    if use_current_evaluation:
-        # Do not call ``frame_set`` here: re-evaluating the same frame can
-        # discard an artist's unkeyed pose edits.
-        context.view_layer.update()
-        pose, translation = _sample_pose(armature, resolved_pose_bones)
-        poses.append(pose)
-        translations.append(translation)
-    else:
-        try:
-            for frame in sample_frames:
-                context.scene.frame_set(frame)
-                context.view_layer.update()
-                pose, translation = _sample_pose(armature, resolved_pose_bones)
-                poses.append(pose)
-                translations.append(translation)
-        finally:
-            context.scene.frame_set(previous_frame)
-            context.view_layer.update()
-
-    frame_count = len(sample_frames)
-    body_poses = np.stack(poses, axis=0)
-    result = {
-        "poses": np.concatenate(
-            (body_poses, np.zeros((frame_count, 99), dtype=np.float64)), axis=1
+    motion, rotation_offsets = blender_pose_adapter.sample_pose_motion(
+        context,
+        armature,
+        source_to_bone,
+        frames,
+        use_current_evaluation=use_current_evaluation,
+    )
+    result = bvh_npz.convert_motion_npz(
+        motion,
+        body_to_source=tuple(
+            (target, source_to_bone[source], parent)
+            for target, source, parent in NPZ_BVH_MAP
         ),
-        "trans": np.stack(translations, axis=0).astype(np.float32, copy=False),
-        "gender": np.asarray(Config.GENDER),
-        "mocap_framerate": np.asarray(float(context.scene.render.fps), dtype=np.float64),
-        "betas": np.zeros(16, dtype=np.float32),
-    }
-    return bvh_npz.create_npz_bytes(result), frame_count
+        source_global_rotation_offsets=rotation_offsets,
+    )
+    return bvh_npz.create_npz_bytes(result), motion.frame_count
 
 
 def create_pose_constraint_npz_at_frames(
@@ -485,11 +394,11 @@ def create_pose_constraint_npz_at_frames(
 ) -> tuple[bytes, int]:
     """Sample explicit evaluated timeline frames into an in-memory SMPL-X NPZ."""
 
-    resolved_pose_bones = _resolved_smpl_pose_bones(armature)
+    source_to_bone = _resolved_pose_bone_names(armature)
     return _serialize_pose_samples(
         context,
         armature,
-        resolved_pose_bones,
+        source_to_bone,
         frames,
     )
 
@@ -501,12 +410,12 @@ def create_pose_constraint_npz(
 ) -> tuple[bytes, int]:
     """Sample an evaluated Blender pose/range and return an in-memory SMPL-X NPZ."""
 
-    resolved_pose_bones = _resolved_smpl_pose_bones(armature)
+    source_to_bone = _resolved_pose_bone_names(armature)
     frames = source_timeline_frames(context.scene, source_mode)
     return _serialize_pose_samples(
         context,
         armature,
-        resolved_pose_bones,
+        source_to_bone,
         frames,
         use_current_evaluation=source_mode == "CURRENT_POSE",
     )
