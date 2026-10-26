@@ -187,9 +187,27 @@ class CT_Take(PropertyGroup):
     take_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
     take_slot_handle: IntProperty(options={'HIDDEN'})
     source_motion_text: PointerProperty(type=bpy.types.Text, options={'HIDDEN'})
+
+    def _get_offset(self):
+        return self.get("_offset", 0)
+
+    def _set_offset(self, value):
+        if _writing_properties:
+            self["_offset"] = int(value)
+            return
+
+        scene = self.id_data
+        for track in scene.clip_data.tracks:
+            for clip in track.clips:
+                if any(candidate == self for candidate in clip.takes):
+                    from . import operations
+                    operations.set_take_offset(track, clip, value)
+                    tag_redraw()
+                    return
+
     offset: IntProperty(
         name="Offset", description="Frames from the clip start to the take start. "
-        "Moving the clip does not change it")
+        "Moving the clip does not change it", get=_get_offset, set=_set_offset)
     length: IntProperty(
         name="Length", min=TimelineConfig.MIN_TAKE_LENGTH,
         default=TimelineConfig.MIN_TAKE_LENGTH, options={'HIDDEN'})

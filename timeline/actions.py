@@ -362,6 +362,90 @@ def translate_take_window(
     return changed
 
 
+def apply_offset_delta(
+    working_action,
+    working_slot,
+    take_action,
+    take_slot,
+    clip_start,
+    clip_end,
+    old_offset,
+    new_offset,
+    *,
+    keyframe_type="GENERATED",
+):
+    """Move a Take window inside one fixed Clip range."""
+    if old_offset == new_offset or clip_end <= clip_start:
+        return False
+
+    working = _slot_curves(working_action, working_slot)
+    take = _slot_curves(take_action, take_slot)
+    old_origin = clip_start + old_offset
+    new_origin = clip_start + new_offset
+    delta = new_origin - old_origin
+    old_local_start, old_local_end = clip_start - old_origin, clip_end - old_origin
+    new_local_start, new_local_end = clip_start - new_origin, clip_end - new_origin
+    added_local_ranges = _range_difference(
+        new_local_start, new_local_end, old_local_start, old_local_end,
+    )
+    changed = False
+
+    for identity in sorted(working.keys() | take.keys()):
+        target = working.get(identity)
+        source = take.get(identity)
+        if target is None:
+            if source is None:
+                continue
+            target = _create_curve(working_action, working_slot, identity, source)
+
+        points = target.keyframe_points
+        curve_changed = False
+        left = _lower_bound(points, clip_start)
+        right = _lower_bound(points, clip_end)
+
+        # The full materialize contract owns the whole Clip window. Remove
+        # user keys and generated keys that will leave the window before a
+        # shifted generated key can collide with an outer boundary key.
+        for index in range(right - 1, left - 1, -1):
+            point = points[index]
+            if (
+                source is None
+                or point.type != keyframe_type
+                or not clip_start <= point.co.x + delta < clip_end
+            ):
+                points.remove(point, fast=True)
+                curve_changed = True
+
+        if source is not None:
+            left = _lower_bound(points, clip_start)
+            right = _lower_bound(points, clip_end)
+            for index in range(left, right):
+                point = points[index]
+                point.co.x += delta
+                point.handle_left.x += delta
+                point.handle_right.x += delta
+                curve_changed = True
+
+            source_points = source.keyframe_points
+            for start, end in added_local_ranges:
+                source_left = _lower_bound(source_points, start)
+                source_right = _lower_bound(source_points, end)
+                for index in range(source_left, source_right):
+                    point = points.insert(
+                        float(source_points[index].co.x + new_origin),
+                        float(source_points[index].co.y),
+                        options={'FAST'},
+                    )
+                    _copy_key(point, source_points[index], new_origin, keyframe_type)
+                    curve_changed = True
+
+        if curve_changed:
+            points.sort()
+            target.update()
+            changed = True
+    return changed
+
+
 def _range_difference(start, end, other_start, other_end):
     ranges = []
     if start < other_start:

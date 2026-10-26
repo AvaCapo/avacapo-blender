@@ -233,7 +233,7 @@ def finalize_resize_drag(track, session):
 
 
 def set_take_offset(track, clip, requested_offset):
-    """Move the active Take's local window without losing Working Action edits."""
+    """Move the active Take window without rebuilding the whole Clip range."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
     take = takes.current_take(clip)
@@ -245,33 +245,22 @@ def set_take_offset(track, clip, requested_offset):
     if new_offset == old_offset:
         return False
 
-    working_action = working_slot = take_action = take_slot = None
-    try:
-        working_action, working_slot = _working_binding(track, track.object)
-        take_action, take_slot = _take_binding(take)
-        if take_action == working_action:
-            raise ValueError("A Take Action cannot also be the Working Action.")
-        actions.read_slot_curves(working_action, working_slot)
-        actions.read_slot_curves(take_action, take_slot)
+    working_action, working_slot = _working_binding(track, track.object)
+    take_action, take_slot = _take_binding(take)
+    if take_action == working_action:
+        raise ValueError("A Take Action cannot also be the Working Action.")
 
-        working_snapshot = actions.snapshot_range(
-            working_action, working_slot, clip.start, clip.end,
-        )
-        edit_track(track, _set_take_offset, clip.uid, take.uid, new_offset)
-        actions.materialize_take(
-            working_action, working_slot, take_action, take_slot,
-            clip.start, clip.end, new_offset,
-        )
-    except Exception:
-        try:
-            if working_action is not None and 'working_snapshot' in locals():
-                actions.restore_range(
-                    working_action, working_slot, working_snapshot, clip.start, clip.end,
-                )
-            edit_track(track, _set_take_offset, clip.uid, take.uid, old_offset)
-        except Exception as rollback_error:
-            raise RuntimeError("Could not restore Actions after changing Take offset.") from rollback_error
-        raise
+    actions.apply_offset_delta(
+        working_action,
+        working_slot,
+        take_action,
+        take_slot,
+        clip.start,
+        clip.end,
+        old_offset,
+        new_offset,
+    )
+    edit_track(track, _set_take_offset, clip.uid, take.uid, new_offset)
     return True
 
 
