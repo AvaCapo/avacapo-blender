@@ -306,9 +306,24 @@ class CT_Track(PropertyGroup):
     clips: CollectionProperty(type=CT_Clip)
 
 
+def _show_retargeting_changed(data, context):
+    if not data.show_retargeting or context is None:
+        return
+    armature = context.active_object
+    if (
+        armature is not None
+        and armature.type == 'ARMATURE'
+        and hasattr(context.scene, "avacapo_retarget_target")
+    ):
+        context.scene.avacapo_retarget_target = armature
+
+
 class CT_Scene(PropertyGroup):
     active_track_uid: IntProperty(default=0, options={'HIDDEN'})
     next_track_uid: IntProperty(default=1, options={'HIDDEN'})
+    show_retargeting: BoolProperty(
+        default=False, options={'HIDDEN'}, update=_show_retargeting_changed,
+    )
     tracks: CollectionProperty(type=CT_Track)
     default_length: IntProperty(
         name="Default Length", min=TimelineConfig.MIN_CLIP_LENGTH,

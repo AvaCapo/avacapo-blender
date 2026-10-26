@@ -4,9 +4,11 @@ import math
 
 from bpy.types import Menu, Panel
 
+from ..animation.retargeting import blender_retarget_service
 from ..core import takes, tracks
 from ..timeline.properties import find_track
 from ..timeline.runtime import runtime
+from . import ui_retargeting
 
 
 class CLIPS_MT_empty(Menu):
@@ -102,6 +104,23 @@ class CLIPS_PT_panel(Panel):
             return
 
         data = scene.clip_data
+        retarget_box = layout.box()
+        retarget_ready = (
+            hasattr(armature, "avacapo_retarget_mapping")
+            and blender_retarget_service.is_valid_mapping(armature)
+        )
+        retarget_button = retarget_box.row()
+        retarget_button.alert = not retarget_ready
+        retarget_button.prop(
+            data,
+            "show_retargeting",
+            text="Set up retargeting",
+            toggle=True,
+            icon='TRIA_DOWN' if data.show_retargeting else 'TRIA_RIGHT',
+        )
+        if data.show_retargeting:
+            ui_retargeting.draw_retarget_mapping(retarget_box, context)
+
         layout.prop(data, "default_length")
         layout.operator("clips.create", text="New Clip at Current Frame",
                         icon='ADD').frame = scene.frame_current
