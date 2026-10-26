@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from . import mapping
 
+from broom.ops.motion_editing import repeat_pose, trim_frames
+from broom.ops.resample import resample_fps
 
 def load_bvh_motion(path) -> object:
     """Load an external BVH into a portable ``Motion`` representation."""
@@ -16,6 +19,27 @@ def load_bvh_motion(path) -> object:
     if not source_path.is_file():
         raise ValueError(f"BVH file does not exist: {source_path}")
     return broom.io.load_bvh(source_path)
+
+
+def resample_motion(motion, target_fps: float, *, duration_seconds: float):
+    """Fit the requested duration to whole scene frames using Broom interpolation.
+
+    Duration uses the clip convention (frame count / FPS). Broom resamples
+    the interval between the first and last poses, so retime that interval
+    to cover exactly the requested number of scene samples.
+    """
+    
+    target_count = max(1, int(round(duration_seconds * target_fps)))
+    if target_count == 1:
+        return replace(trim_frames(motion, stop=1), frame_time=1.0 / target_fps)
+    if motion.frame_count == 1:
+        return repeat_pose(motion.hierarchy, motion.values[0], target_count, 1.0 / target_fps)
+
+    motion = replace(
+        motion,
+        frame_time=(target_count - 1) / (target_fps * (motion.frame_count - 1)),
+    )
+    return resample_fps(motion, target_fps=target_fps)
 
 
 def retarget_mapped_motion(

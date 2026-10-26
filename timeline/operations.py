@@ -7,7 +7,7 @@ import bpy
 
 from ..common.logger import log
 from ..core import takes, tracks
-from ..core.generation_models import GenerationCommand, TaskStatus
+from ..core.generation_models import GenerationCommand, TaskStatus, TextParameters
 from ..core.generation_service import GenerationService
 from ..core.storage import Storage
 from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
@@ -154,6 +154,13 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
     if not math.isfinite(scene_fps) or scene_fps <= 0.0:
         raise ValueError("Scene FPS must be positive and finite.")
 
+    frame_step = scene_fps * source_motion.frame_time
+    if isinstance(command.parameters, TextParameters):
+        source_motion = workflow.resample_motion(
+            source_motion, scene_fps, duration_seconds=command.parameters.duration,
+        )
+        frame_step = 1.0
+
     target, joint_map, canonical_from_armature = blender_retarget_service.current_retarget_build(
         armature,
         blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
@@ -164,7 +171,7 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         retargeted_motion,
         canonical_from_armature=canonical_from_armature,
         frame_start=0.0,
-        frame_step=scene_fps * source_motion.frame_time,
+        frame_step=frame_step,
     )
 
     # Resolve this before creating any resource owned by the new Take.

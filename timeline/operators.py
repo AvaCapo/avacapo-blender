@@ -4,7 +4,6 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 
-from ..animation import test_take_generation
 from ..common.config import Config
 from ..core import takes, tracks
 from ..core.generation_models import GenerationCommand, TextParameters
@@ -44,36 +43,17 @@ class _ClipOp:
                 ),
             )
         try:
-            # TODO(server-jobs): re-enable operations.submit_generation() when
-            # the production server supports the server-jobs protocol: operations.submit_generation(...)
-            
-            # Generation through server jobs:
-            # operations.submit_generation(
-            #     context.scene,
-            #     track,
-            #     clip,
-            #     command,
-            #     scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
-            # )
-            
-            #NOTE: use file read for fast prototyping
-            # Generation from the bundled test BVH:
-            # source_motion, source_text = test_take_generation.load_test_motion()
-            # operations.apply_generated_motion(
-            #     track,
-            #     clip,
-            #     command=command,
-            #     source_motion=source_motion,
-            #     source_text=source_text,
-            #     scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
-            # )
-
-            # Direct production POST -> BVH:
-            test_take_generation.start_direct_generation(context, track, clip, command)
+            operations.submit_generation(
+                context.scene,
+                track,
+                clip,
+                command,
+                scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
+            )
         except (OSError, RuntimeError, ValueError, ReferenceError) as exc:
             self.report({'WARNING'}, f"Could not generate Take: {exc}")
             return False
-        self.report({'INFO'}, "Production generation started")
+        self.report({'INFO'}, "Generation queued")
         return True
 
 
