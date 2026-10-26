@@ -1,10 +1,24 @@
-"""Install packages with pip into Blender's."""
+"""Check dependencies and install missing packages into Blender's Python."""
 
 import importlib
 import subprocess
 import sys
 
 import bpy
+
+from .common.logger import log
+
+
+def ensure_package(package_name: str):
+    """Install a package only when it is missing, before importing the add-on UI."""
+    try:
+        importlib.import_module(package_name)
+    except ModuleNotFoundError as exc:
+        if exc.name != package_name:
+            raise
+        install(package_name)
+        importlib.import_module(package_name)
+    log.info("Package %s is installed.", package_name)
 
 
 def install(package=None, *, requirements=None):

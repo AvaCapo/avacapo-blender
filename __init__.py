@@ -2,6 +2,10 @@
 
 
 def register():
+    from . import installer
+
+    installer.ensure_package("scipy")
+
     from . import ui
 
     ui.register()
