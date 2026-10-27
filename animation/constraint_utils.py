@@ -334,31 +334,39 @@ def create_object_target_constraint_npz(
 
 def _resolved_pose_bone_names(
     armature: bpy.types.Object,
+    source_to_bone: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Require exact AvaCapo body names and their ancestor relationships."""
+    """Require mapped body bones and their ancestor relationships."""
     if armature.type != "ARMATURE" or armature.pose is None:
         raise ValueError("Constraint source is not an armature")
     bones = armature.pose.bones
+    resolved = {
+        source: source if source_to_bone is None else source_to_bone.get(source, '')
+        for _, source, _ in NPZ_BVH_MAP
+    }
     missing = [
-        source_name for _, source_name, _ in NPZ_BVH_MAP if bones.get(source_name) is None
+        source for source, name in resolved.items() if not name or bones.get(name) is None
     ]
     if missing:
         raise ValueError(
-            "Constraint source must use an AvaCapo rig; missing bones: " + ", ".join(missing)
+            ("Constraint source must use an AvaCapo rig; missing bones: "
+             if source_to_bone is None else "Constraint source is missing bones: ")
+            + ", ".join(missing)
         )
+    if len(set(resolved.values())) != len(resolved):
+        raise ValueError("Constraint body joints must map to different bones")
     for _, source_name, parent_index in NPZ_BVH_MAP:
         if parent_index < 0:
             continue
-        expected_parent = NPZ_BVH_MAP[parent_index][1]
-        ancestor = bones[source_name].parent
+        expected_parent = resolved[NPZ_BVH_MAP[parent_index][1]]
+        ancestor = bones[resolved[source_name]].parent
         while ancestor is not None and ancestor.name != expected_parent:
             ancestor = ancestor.parent
         if ancestor is None:
             raise ValueError(
-                "Constraint source must use an AvaCapo rig: "
-                f"{source_name} must descend from {expected_parent}"
+                f"Constraint source: {resolved[source_name]} must descend from {expected_parent}"
             )
-    return {source_name: source_name for _, source_name, _ in NPZ_BVH_MAP}
+    return resolved
 
 
 def _serialize_pose_samples(
@@ -391,10 +399,12 @@ def create_pose_constraint_npz_at_frames(
     context: bpy.types.Context,
     armature: bpy.types.Object,
     frames: Iterable[int],
+    *,
+    source_to_bone: dict[str, str] | None = None,
 ) -> tuple[bytes, int]:
     """Sample explicit evaluated timeline frames into an in-memory SMPL-X NPZ."""
 
-    source_to_bone = _resolved_pose_bone_names(armature)
+    source_to_bone = _resolved_pose_bone_names(armature, source_to_bone)
     return _serialize_pose_samples(
         context,
         armature,

@@ -28,6 +28,7 @@ class TakeData:
     offset: int
     length: int
     progress: float
+    constraint_frames: str = "[]"
 
 
 @dataclass(frozen=True)

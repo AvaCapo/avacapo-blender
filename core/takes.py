@@ -1,7 +1,11 @@
 """Take operations on records supplied by a storage adapter; no Blender API."""
 
+import json
+
 from ..common.config import Config
-from .generation_models import GenerationCommand, GenerationMode, InbetweenParameters, TextParameters
+from .generation_models import (
+    ConstraintsParameters, GenerationCommand, InbetweenParameters, TextParameters,
+)
 from .schemas import TakeData
 
 
@@ -81,7 +85,7 @@ def restore_take(store, clip, payload: TakeData):
         "generation_in_place", "duration_seconds", "fps", "temperature", "cycled",
         "seed", "left_frame", "right_frame", "left_context_frames",
         "right_context_frames", "gap_frames", "end_offset_x", "end_offset_z",
-        "align_heading", "length",
+        "align_heading", "length", "constraint_frames",
     ):
         setattr(take, field, getattr(payload, field))
     take.offset = int(payload.offset)
@@ -119,7 +123,12 @@ def _set_generation_request(take, command: GenerationCommand) -> None:
         take.end_offset_z = parameters.end_offset_z
         take.align_heading = parameters.align_heading
         return
-    if command.mode == GenerationMode.CONSTRAINTS:
-        # TODO: add this only with the constraints UI and its explicit history contract.
-        raise ValueError("Constraints generation history is not part of this stage.")
+    if isinstance(command.parameters, ConstraintsParameters):
+        parameters = command.parameters
+        take.duration_seconds = parameters.num_frames / Config.DEFAULT_FPS
+        take.fps = Config.DEFAULT_FPS
+        take.seed = parameters.seed
+        take.cycled = parameters.cycled
+        take.constraint_frames = json.dumps([item.target_frame for item in parameters.constraints])
+        return
     raise ValueError("Unsupported generation command.")

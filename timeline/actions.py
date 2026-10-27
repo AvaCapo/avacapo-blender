@@ -93,6 +93,40 @@ def curve_times(curve):
     return co.reshape(-1, 2)[:, 0]
 
 
+def manual_pose_frames(working_action, working_slot, start, end, *,
+                       take_action=None, take_slot=None, take_origin=0):
+    """Find authored pose keys and promote edited generated values to ordinary keys."""
+    working = read_slot_curves(working_action, working_slot)
+    original = {} if take_action is None else read_slot_curves(take_action, take_slot)
+    frames = set()
+    for identity, curve in working.items():
+        path, _ = identity
+        if not (path.startswith('pose.bones[') or path in {
+            'location', 'rotation_euler', 'rotation_quaternion', 'rotation_axis_angle', 'scale',
+        }):
+            continue
+        source = original.get(identity)
+        source_times = curve_times(source) if source is not None else np.empty(0)
+        times = curve_times(curve)
+        changed = False
+        for index in range(int(np.searchsorted(times, start)), int(np.searchsorted(times, end))):
+            point = curve.keyframe_points[index]
+            if point.type == 'GENERATED' and take_action is not None:
+                local_frame = float(point.co.x) - take_origin
+                source_index = int(np.searchsorted(source_times, local_frame - 1e-4))
+                if (source_index == len(source_times)
+                    or abs(source_times[source_index] - local_frame) > 1e-4
+                    or not np.isclose(point.co.y, source.keyframe_points[source_index].co.y,
+                                      rtol=1e-6, atol=1e-6)):
+                    point.type = 'KEYFRAME'
+                    changed = True
+            if point.type != 'GENERATED':
+                frames.add(float(point.co.x))
+        if changed:
+            curve.update()
+    return sorted(frames)
+
+
 def _empty_keys():
     return {
         **{field: np.empty((0, 2), dtype=np.float32) for field in COORD_FIELDS},
@@ -177,10 +211,8 @@ def _restore_one(point, state):
         setattr(point, field, state[field])
 
 
-def replace_range(curve, incoming, start, end, *, keyframe_type=None):
+def replace_range(curve, incoming, start, end, *, keyframe_type=None, preserve_manual=False):
     """Replace [start, end), preserving complete states of its outer keys."""
-    # TODO(generated-key-ownership): Timeline materialize must preserve keys
-    # whose type is not GENERATED instead of clearing the entire window.
     points = curve.keyframe_points
     times = curve_times(curve)
     if not np.all(np.diff(times) > 0):
@@ -193,6 +225,10 @@ def replace_range(curve, incoming, start, end, *, keyframe_type=None):
         raise ValueError("Incoming keyframes must be sorted, unique, and inside the target range.")
     left = int(np.searchsorted(times, start))
     right = int(np.searchsorted(times, end))
+    manual = [
+        _read_one(points[index]) for index in range(left, right)
+        if preserve_manual and points[index].type != 'GENERATED'
+    ]
     guards = []
     if left:
         guards.append((float(times[left - 1]), _read_one(points[left - 1])))
@@ -220,6 +256,10 @@ def replace_range(curve, incoming, start, end, *, keyframe_type=None):
                 points[insert_start + index], incoming, index,
                 keyframe_type=keyframe_type,
             )
+    # Inserting at an existing time replaces the generated value on that channel.
+    for state in manual:
+        point = points.insert(*state['co'], options={'FAST'})
+        _restore_one(point, state)
     curve.update()
     for frame, state in guards:
         times = curve_times(curve)
@@ -261,6 +301,7 @@ def materialize_take(
             clip_start,
             clip_end,
             keyframe_type=keyframe_type,
+            preserve_manual=True,
         )
 
 

@@ -187,6 +187,7 @@ class CT_Take(PropertyGroup):
     end_offset_x: FloatProperty(options={'HIDDEN'})
     end_offset_z: FloatProperty(options={'HIDDEN'})
     align_heading: BoolProperty(default=True, options={'HIDDEN'})
+    constraint_frames: StringProperty(default="[]", options={'HIDDEN'})
     take_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
     take_slot_handle: IntProperty(options={'HIDDEN'})
     source_motion_text: PointerProperty(type=bpy.types.Text, options={'HIDDEN'})

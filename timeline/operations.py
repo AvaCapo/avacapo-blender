@@ -7,7 +7,9 @@ import bpy
 
 from ..common.logger import log
 from ..core import takes, tracks
-from ..core.generation_models import GenerationCommand, TaskStatus, TextParameters
+from ..core.generation_models import (
+    ConstraintsParameters, GenerationCommand, PoseConstraint, TaskStatus, TextParameters,
+)
 from ..core.generation_service import GenerationService
 from ..core.storage import Storage
 from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
@@ -39,6 +41,49 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
 
     if not Storage.api_token:
         raise ValueError("Connect to AvaCapo before generating a Take.")
+    if isinstance(command.parameters, TextParameters):
+        armature = _working_armature(track)
+        working_action, working_slot = _working_binding(track, armature)
+        active_take = takes.current_take(clip)
+        take_action, take_slot = (None, None) if active_take is None else _take_binding(active_take)
+        frames = actions.manual_pose_frames(
+            working_action, working_slot, clip.start, clip.end,
+            take_action=take_action, take_slot=take_slot,
+            take_origin=clip.start + (active_take.offset if active_take is not None else 0),
+        )
+        if frames:
+            from ..animation.constraint_utils import create_pose_constraint_npz_at_frames
+
+            if any(abs(frame - round(frame)) > 1e-4 for frame in frames):
+                raise ValueError("Move manual pose keys to whole frames before generating a Take.")
+            frames = sorted({int(round(frame)) for frame in frames})
+            joint_map = blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping)
+            blender_retarget_service.current_retarget_build(armature, joint_map)
+            constraints = []
+            # Sampling uses the actual Working Action, including evaluated IK.
+            # The immutable byte payload is captured before the background job starts.
+            with bpy.context.temp_override(scene=scene, object=armature, active_object=armature):
+                animation_data = armature.animation_data
+                previous_action, previous_slot = animation_data.action, animation_data.action_slot
+                try:
+                    animation_data.action = working_action
+                    animation_data.action_slot = working_slot
+                    for frame in frames:
+                        payload, _ = create_pose_constraint_npz_at_frames(
+                            bpy.context, armature, [frame], source_to_bone=joint_map,
+                        )
+                        constraints.append(PoseConstraint(
+                            motion_file=payload, source_frame=0,
+                            target_frame=frame - clip.start,
+                        ))
+                finally:
+                    animation_data.action = previous_action
+                    animation_data.action_slot = previous_slot
+                    bpy.context.view_layer.update()
+            command = replace(command, parameters=ConstraintsParameters(
+                num_frames=clip.end - clip.start, constraints=tuple(constraints),
+                seed=command.parameters.seed, cycled=command.parameters.cycled,
+            ))
     if _generation_service is None:
         _generation_service = GenerationService(
             api_token=Storage.api_token,
@@ -160,6 +205,14 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
             source_motion, scene_fps, duration_seconds=command.parameters.duration,
         )
         frame_step = 1.0
+    elif isinstance(command.parameters, ConstraintsParameters):
+        # Constraint targets are clip-relative frame indices. Keep those indices
+        # on the scene grid even when the returned BVH uses a different FPS.
+        source_motion = workflow.resample_motion(
+            source_motion, scene_fps,
+            duration_seconds=command.parameters.num_frames / scene_fps,
+        )
+        frame_step = 1.0
 
     target, joint_map, canonical_from_armature = blender_retarget_service.current_retarget_build(
         armature,
@@ -236,6 +289,13 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False):
     actions.read_slot_curves(target_action, target_slot)
     if active_take is not None and active_take.take_action == target_action:
         raise ValueError("Different Takes cannot share one Take Action.")
+    if active_take is not None:
+        active_action, active_slot = _take_binding(active_take)
+        actions.manual_pose_frames(
+            working_action, working_slot, clip.start, clip.end,
+            take_action=active_action, take_slot=active_slot,
+            take_origin=clip.start + active_take.offset,
+        )
 
     working_snapshot = None
     if backup_working_area:

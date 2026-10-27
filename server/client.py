@@ -102,13 +102,14 @@ def get_animation_constraints(
     normalized = []
     for index, (constraint, payload) in enumerate(zip(constraints, payloads)):
         kind = constraint.get("constraint_type", "")
-        source, target = constraint.get("source_frame", 0), constraint.get("target_frame", 0)
+        source_frame = constraint.get("source_frame", 0)
+        target_frame = constraint.get("target_frame", 0)
         joints = constraint.get("joint_names") or []
         if kind not in Config.CONSTRAINT_TYPES:
             raise GenerationError("Unknown constraint type.")
-        if type(source) is not int or source < 0 or type(target) is not int:
+        if type(source_frame) is not int or source_frame < 0 or type(target_frame) is not int:
             raise GenerationError("Constraint frame indices must be non-negative integers.")
-        if not 0 <= target < num_frames:
+        if not 0 <= target_frame < num_frames:
             raise GenerationError("Constraint target frame exceeds num_frames.")
         if not isinstance(payload, bytes) or not payload:
             raise GenerationError("Constraint motion files must contain non-empty NPZ bytes.")
@@ -117,7 +118,7 @@ def get_animation_constraints(
         ):
             raise GenerationError("end-effector requires supported joint names.")
         item = {
-            "motion_file_index": index, "source_frame": source, "target_frame": target,
+            "motion_file_index": index, "source_frame": source_frame, "target_frame": target_frame,
             "constraint_type": kind,
         }
         if kind == "end-effector":
