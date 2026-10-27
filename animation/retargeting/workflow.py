@@ -54,9 +54,9 @@ def retarget_mapped_motion(
 
     The source is AvaCapo's canonical hierarchy, whose root offset is zero.
     Its standing height is therefore measured from its actual rest geometry,
-    including End Sites, before root translation is transferred. Target
-    standing height is the global rest height of the target joint explicitly
-    mapped from the source root.
+    including End Sites, before root translation is transferred. The mapped
+    target joint's standing height is measured above its rest-pose floor too:
+    a rig may have its pelvis at the origin and its feet below zero in rest pose.
 
     No floor alignment or contact solving is enabled here.
     """
@@ -84,6 +84,17 @@ def retarget_mapped_motion(
         floor_height=None,
         include_end_sites=True,
     )
+    target_root_name = joint_map.get(source_motion.hierarchy.root_name)
+    target_root_height = (
+        broom.ops.skeleton_geometry.estimate_joint_height(
+            target_hierarchy,
+            target_hierarchy.joint_index(target_root_name),
+            up_axis="Y",
+            floor_height=None,
+            include_end_sites=True,
+        )
+        if target_root_name is not None else None
+    )
     return broom.retargeting.retarget.retarget_mapped_motion(
         source_motion,
         target_hierarchy,
@@ -94,6 +105,5 @@ def retarget_mapped_motion(
         floor_height=None,
         up_axis="Y",
         source_root_height=source_root_height,
-        # Leave target_mapped_root_height unset so it is taken from the mapped
-        # target joint's global rest height.
+        target_mapped_root_height=target_root_height,
     )
