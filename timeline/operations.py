@@ -32,6 +32,7 @@ class _PendingGeneration:
     command: GenerationCommand
     scene_fps: float
     status: TaskStatus = TaskStatus.QUEUED
+    root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_fps: float) -> str:
@@ -41,6 +42,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
 
     if not Storage.api_token:
         raise ValueError("Connect to AvaCapo before generating a Take.")
+    root_offset = (0.0, 0.0, 0.0)
     if isinstance(command.parameters, TextParameters):
         armature = _working_armature(track)
         working_action, working_slot = _working_binding(track, armature)
@@ -52,7 +54,10 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
             take_origin=clip.start + (active_take.offset if active_take is not None else 0),
         )
         if frames:
-            from ..animation.constraint_utils import create_pose_constraint_npz_at_frames
+            from ..animation.constraint_utils import (
+                create_pose_constraint_npz_at_frames, pose_heading_at_frame,
+                rebase_constraint_payloads,
+            )
 
             if any(abs(frame - round(frame)) > 1e-4 for frame in frames):
                 raise ValueError("Move manual pose keys to whole frames before generating a Take.")
@@ -68,6 +73,9 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
                 try:
                     animation_data.action = working_action
                     animation_data.action_slot = working_slot
+                    first_heading = pose_heading_at_frame(
+                        bpy.context, armature, clip.start, source_to_bone=joint_map,
+                    )
                     for frame in frames:
                         payload, _ = create_pose_constraint_npz_at_frames(
                             bpy.context, armature, [frame], source_to_bone=joint_map,
@@ -80,9 +88,13 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
                     animation_data.action = previous_action
                     animation_data.action_slot = previous_slot
                     bpy.context.view_layer.update()
+            payloads, root_offset = rebase_constraint_payloads(item.motion_file for item in constraints)
             command = replace(command, parameters=ConstraintsParameters(
-                num_frames=clip.end - clip.start, constraints=tuple(constraints),
+                num_frames=clip.end - clip.start,
+                constraints=tuple(replace(item, motion_file=payload)
+                                  for item, payload in zip(constraints, payloads)),
                 seed=command.parameters.seed, cycled=command.parameters.cycled,
+                first_heading=first_heading,
             ))
     if _generation_service is None:
         _generation_service = GenerationService(
@@ -102,6 +114,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         clip_uid=clip.uid,
         command=command,
         scene_fps=scene_fps,
+        root_offset=root_offset,
     )
     log.info("Queued server generation %s for Clip %s.", task_id[:8], clip.uid)
     if not bpy.app.timers.is_registered(_finish_generation):
@@ -172,6 +185,7 @@ def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_
         source_motion=load_bvh_from_bytes(bvh_bytes),
         source_text=bvh_bytes.decode("utf-8"),
         scene_fps=pending.scene_fps,
+        root_offset=pending.root_offset,
     )
 
 
@@ -191,13 +205,25 @@ def cancel_generation() -> None:
     _generation_service_token = ""
 
 
-def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps):
+def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
+                           root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)):
     """Retarget one source Motion and publish its Take only after it is usable."""
     armature = _working_armature(track)
     if not isinstance(source_text, str) or not source_text:
         raise ValueError("Generated source text is missing.")
     if not math.isfinite(scene_fps) or scene_fps <= 0.0:
         raise ValueError("Scene FPS must be positive and finite.")
+    if any(root_offset):
+        # Undo request normalization before retargeting so its scale conversion
+        # also applies to the restored translation. Keep the raw server BVH intact.
+        values = source_motion.values.copy()
+        for axis, offset in zip("XYZ", root_offset):
+            if offset:
+                column = source_motion.hierarchy.channel_index(
+                    source_motion.hierarchy.root_name, f"{axis}position",
+                )
+                values[:, column] += offset
+        source_motion = replace(source_motion, values=values)
 
     frame_step = scene_fps * source_motion.frame_time
     if isinstance(command.parameters, TextParameters):
