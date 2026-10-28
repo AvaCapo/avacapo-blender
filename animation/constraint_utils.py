@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from io import BytesIO
+import math
 
 import bpy
 import numpy as np
 from mathutils import Vector
 
 from . import bvh_npz
-from .retargeting import blender_pose_adapter
+from .retargeting import blender_adapter, blender_pose_adapter
 from .retarget_maps import NPZ_BVH_MAP
 
 
@@ -367,6 +369,49 @@ def _resolved_pose_bone_names(
                 f"Constraint source: {resolved[source_name]} must descend from {expected_parent}"
             )
     return resolved
+
+
+def rebase_constraint_payloads(payloads: Iterable[bytes]) -> tuple[list[bytes], tuple[float, float, float]]:
+    """Subtract one shared ground-plane origin; return its canonical Y-up offset."""
+    origin = None
+    rebased = []
+    for payload in payloads:
+        with np.load(BytesIO(payload), allow_pickle=False) as arrays:
+            data = {name: arrays[name] for name in arrays.files}
+        if origin is None:
+            origin = data["trans"][0].copy()
+            # AMASS is Z-up; the standalone Y-up export keeps Y as height.
+            origin[1 if bvh_npz.config.KEEP_Y_UP else 2] = 0.0
+        data["trans"] = data["trans"] - origin
+        rebased.append(bvh_npz.create_npz_bytes(data))
+    if origin is None:
+        return rebased, (0.0, 0.0, 0.0)
+    canonical = origin if bvh_npz.config.KEEP_Y_UP else origin @ bvh_npz.Y_UP_TO_AMASS_Z_UP
+    return rebased, tuple(float(value) for value in canonical)
+
+
+def pose_heading_at_frame(
+    context: bpy.types.Context,
+    armature: bpy.types.Object,
+    frame: int,
+    *,
+    source_to_bone: dict[str, str] | None = None,
+) -> float:
+    """Return the Y-up heading in radians from the evaluated hip vector."""
+    source_to_bone = _resolved_pose_bone_names(armature, source_to_bone)
+    canonical = blender_adapter.canonical_from_armature_mapping(armature, source_to_bone)
+    previous_frame, previous_subframe = context.scene.frame_current, context.scene.frame_subframe
+    try:
+        context.scene.frame_set(frame)
+        context.view_layer.update()
+        evaluated = armature.evaluated_get(context.evaluated_depsgraph_get())
+        right = evaluated.pose.bones[source_to_bone["RightUpLeg"]].head
+        left = evaluated.pose.bones[source_to_bone["LeftUpLeg"]].head
+        diff = canonical @ np.asarray(right - left)
+        return math.atan2(float(diff[2]), -float(diff[0]))
+    finally:
+        context.scene.frame_set(previous_frame, subframe=previous_subframe)
+        context.view_layer.update()
 
 
 def _serialize_pose_samples(
