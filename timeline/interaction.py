@@ -51,15 +51,41 @@ def _visible_working_curves(data, clip):
     return working_action, curves
 
 
-def _select_clip_keys(data, clip):
-    """Select only the active Take's visible keys and return one key as an anchor."""
-    _clear_working_key_selection(data)
-    action, visible_curves = _visible_working_curves(data, clip)
-    if action is None:
-        return None
+def _clear_selected_armature_key_selection(context):
+    """Deselect keys in every selected armature Action through Blender's operator."""
+    armatures = []
+    seen_actions = set()
+    for armature in context.selected_objects:
+        if armature.type != 'ARMATURE':
+            continue
+        animation_data = armature.animation_data
+        if animation_data is None or animation_data.action is None:
+            continue
+        action = animation_data.action
+        if action in seen_actions:
+            continue
+        seen_actions.add(action)
+        armatures.append(armature)
+
+    for armature in armatures:
+        try:
+            with context.temp_override(active_object=armature, object=armature):
+                bpy.ops.action.select_all(action='DESELECT')
+        except RuntimeError as exc:
+            raise ValueError("Could not clear selected animation keys.") from exc
+
+
+def _select_clip_keys(context, data, clip, *, clear_selection):
+    """Select every Working-Action Slot key in the Clip range."""
+    if clear_selection:
+        _clear_selected_armature_key_selection(context)
+    action = data.working_action
+    slot = blender_actions.find_action_slot_by_handle(action, int(data.working_slot_handle))
+    if slot is None:
+        raise ValueError("Working Action binding is incomplete.")
 
     anchor = None
-    for curve in visible_curves:
+    for curve in blender_actions.iter_slot_fcurves(action, slot):
         for key in curve.keyframe_points:
             if clip.start <= key.co.x < clip.end:
                 key.select_control_point = True
@@ -147,7 +173,9 @@ class CLIPS_OT_mouse(Operator):
                 return self._create_with_prompt(context, hit)
             if hit.kind == 'BODY':
                 track.active_clip_uid = hit.clip.uid
-                _select_clip_keys(track, hit.clip)
+                _select_clip_keys(
+                    context, track, hit.clip, clear_selection=not event.shift,
+                )
                 bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=hit.clip.uid)
                 return {'FINISHED'}
             return {'PASS_THROUGH'}
@@ -197,7 +225,9 @@ class CLIPS_OT_mouse(Operator):
         self._native_drag = False
         self._animation_snap_settings = None
         try:
-            selected = _select_clip_keys(track, hit.clip)
+            selected = _select_clip_keys(
+                context, track, hit.clip, clear_selection=not event.shift,
+            )
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
