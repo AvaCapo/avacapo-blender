@@ -7,7 +7,9 @@ import bpy
 
 from ..common.logger import log
 from ..core import takes, tracks
-from ..core.generation_models import GenerationCommand, TaskStatus, TextParameters
+from ..core.generation_models import (
+    ConstraintsParameters, GenerationCommand, PoseConstraint, TaskStatus, TextParameters,
+)
 from ..core.generation_service import GenerationService
 from ..core.storage import Storage
 from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
@@ -30,6 +32,7 @@ class _PendingGeneration:
     command: GenerationCommand
     scene_fps: float
     status: TaskStatus = TaskStatus.QUEUED
+    root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_fps: float) -> str:
@@ -39,6 +42,81 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
 
     if not Storage.api_token:
         raise ValueError("Connect to AvaCapo before generating a Take.")
+    root_offset = (0.0, 0.0, 0.0)
+    if isinstance(command.parameters, TextParameters):
+        armature = _working_armature(track)
+        working_action, working_slot = _working_binding(track, armature)
+        active_take = takes.current_take(clip)
+        take_action, take_slot = (None, None) if active_take is None else _take_binding(active_take)
+        frames = actions.manual_pose_frames(
+            working_action, working_slot, clip.start, clip.end,
+            take_action=take_action, take_slot=take_slot,
+            take_origin=clip.start + (active_take.offset if active_take is not None else 0),
+        )
+        # Store source and target separately: neighbour poses belong to other
+        # Clips, but constrain the first or last frame of this request.
+        samples = [(frame, frame - clip.start) for frame in frames]
+        heading_frame = clip.start
+        previous, following = tracks.neighbors(track.clips, clip.uid)
+        if not samples:
+            if (previous is not None and previous.end == clip.start
+                    and actions.has_pose_keys(
+                        working_action, working_slot, previous.start, previous.end,
+                    )):
+                heading_frame = previous.end - 1
+                samples = [(heading_frame, 0)]
+        # Keep an authored ending pose (or the start pose of a one-frame Clip).
+        last_target = clip.end - clip.start - 1
+        if (following is not None and following.start == clip.end
+                and not any(target == last_target for _, target in samples)
+                and actions.has_pose_keys(
+                    working_action, working_slot, following.start, following.end,
+                )):
+            samples.append((following.start, last_target))
+        if samples:
+            from ..animation.constraint_utils import (
+                create_pose_constraint_npz_at_frames, pose_heading_at_frame,
+                rebase_constraint_payloads,
+            )
+
+            if any(abs(frame - round(frame)) > 1e-4 for frame, _ in samples):
+                raise ValueError("Move manual pose keys to whole frames before generating a Take.")
+            samples = sorted({(int(round(frame)), int(round(target)))
+                              for frame, target in samples})
+            joint_map = blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping)
+            blender_retarget_service.current_retarget_build(armature, joint_map)
+            constraints = []
+            # Sampling uses the actual Working Action, including evaluated IK.
+            # The immutable byte payload is captured before the background job starts.
+            with bpy.context.temp_override(scene=scene, object=armature, active_object=armature):
+                animation_data = armature.animation_data
+                previous_action, previous_slot = animation_data.action, animation_data.action_slot
+                try:
+                    animation_data.action = working_action
+                    animation_data.action_slot = working_slot
+                    first_heading = pose_heading_at_frame(
+                        bpy.context, armature, heading_frame, source_to_bone=joint_map,
+                    )
+                    for frame, target_frame in samples:
+                        payload, _ = create_pose_constraint_npz_at_frames(
+                            bpy.context, armature, [frame], source_to_bone=joint_map,
+                        )
+                        constraints.append(PoseConstraint(
+                            motion_file=payload, source_frame=0,
+                            target_frame=target_frame,
+                        ))
+                finally:
+                    animation_data.action = previous_action
+                    animation_data.action_slot = previous_slot
+                    bpy.context.view_layer.update()
+            payloads, root_offset = rebase_constraint_payloads(item.motion_file for item in constraints)
+            command = replace(command, parameters=ConstraintsParameters(
+                num_frames=clip.end - clip.start,
+                constraints=tuple(replace(item, motion_file=payload)
+                                  for item, payload in zip(constraints, payloads)),
+                seed=command.parameters.seed, cycled=command.parameters.cycled,
+                first_heading=first_heading,
+            ))
     if _generation_service is None:
         _generation_service = GenerationService(
             api_token=Storage.api_token,
@@ -57,6 +135,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         clip_uid=clip.uid,
         command=command,
         scene_fps=scene_fps,
+        root_offset=root_offset,
     )
     log.info("Queued server generation %s for Clip %s.", task_id[:8], clip.uid)
     if not bpy.app.timers.is_registered(_finish_generation):
@@ -127,6 +206,7 @@ def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_
         source_motion=load_bvh_from_bytes(bvh_bytes),
         source_text=bvh_bytes.decode("utf-8"),
         scene_fps=pending.scene_fps,
+        root_offset=pending.root_offset,
     )
 
 
@@ -146,18 +226,38 @@ def cancel_generation() -> None:
     _generation_service_token = ""
 
 
-def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps):
+def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
+                           root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)):
     """Retarget one source Motion and publish its Take only after it is usable."""
     armature = _working_armature(track)
     if not isinstance(source_text, str) or not source_text:
         raise ValueError("Generated source text is missing.")
     if not math.isfinite(scene_fps) or scene_fps <= 0.0:
         raise ValueError("Scene FPS must be positive and finite.")
+    if any(root_offset):
+        # Undo request normalization before retargeting so its scale conversion
+        # also applies to the restored translation. Keep the raw server BVH intact.
+        values = source_motion.values.copy()
+        for axis, offset in zip("XYZ", root_offset):
+            if offset:
+                column = source_motion.hierarchy.channel_index(
+                    source_motion.hierarchy.root_name, f"{axis}position",
+                )
+                values[:, column] += offset
+        source_motion = replace(source_motion, values=values)
 
     frame_step = scene_fps * source_motion.frame_time
     if isinstance(command.parameters, TextParameters):
         source_motion = workflow.resample_motion(
             source_motion, scene_fps, duration_seconds=command.parameters.duration,
+        )
+        frame_step = 1.0
+    elif isinstance(command.parameters, ConstraintsParameters):
+        # Constraint targets are clip-relative frame indices. Keep those indices
+        # on the scene grid even when the returned BVH uses a different FPS.
+        source_motion = workflow.resample_motion(
+            source_motion, scene_fps,
+            duration_seconds=command.parameters.num_frames / scene_fps,
         )
         frame_step = 1.0
 
@@ -236,6 +336,13 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False):
     actions.read_slot_curves(target_action, target_slot)
     if active_take is not None and active_take.take_action == target_action:
         raise ValueError("Different Takes cannot share one Take Action.")
+    if active_take is not None:
+        active_action, active_slot = _take_binding(active_take)
+        actions.manual_pose_frames(
+            working_action, working_slot, clip.start, clip.end,
+            take_action=active_action, take_slot=active_slot,
+            take_origin=clip.start + active_take.offset,
+        )
 
     working_snapshot = None
     if backup_working_area:

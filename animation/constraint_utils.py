@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from io import BytesIO
+import math
 
 import bpy
 import numpy as np
 from mathutils import Vector
 
 from . import bvh_npz
-from .retargeting import blender_pose_adapter
+from .retargeting import blender_adapter, blender_pose_adapter
 from .retarget_maps import NPZ_BVH_MAP
 
 
@@ -334,31 +336,82 @@ def create_object_target_constraint_npz(
 
 def _resolved_pose_bone_names(
     armature: bpy.types.Object,
+    source_to_bone: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Require exact AvaCapo body names and their ancestor relationships."""
+    """Require mapped body bones and their ancestor relationships."""
     if armature.type != "ARMATURE" or armature.pose is None:
         raise ValueError("Constraint source is not an armature")
     bones = armature.pose.bones
+    resolved = {
+        source: source if source_to_bone is None else source_to_bone.get(source, '')
+        for _, source, _ in NPZ_BVH_MAP
+    }
     missing = [
-        source_name for _, source_name, _ in NPZ_BVH_MAP if bones.get(source_name) is None
+        source for source, name in resolved.items() if not name or bones.get(name) is None
     ]
     if missing:
         raise ValueError(
-            "Constraint source must use an AvaCapo rig; missing bones: " + ", ".join(missing)
+            ("Constraint source must use an AvaCapo rig; missing bones: "
+             if source_to_bone is None else "Constraint source is missing bones: ")
+            + ", ".join(missing)
         )
+    if len(set(resolved.values())) != len(resolved):
+        raise ValueError("Constraint body joints must map to different bones")
     for _, source_name, parent_index in NPZ_BVH_MAP:
         if parent_index < 0:
             continue
-        expected_parent = NPZ_BVH_MAP[parent_index][1]
-        ancestor = bones[source_name].parent
+        expected_parent = resolved[NPZ_BVH_MAP[parent_index][1]]
+        ancestor = bones[resolved[source_name]].parent
         while ancestor is not None and ancestor.name != expected_parent:
             ancestor = ancestor.parent
         if ancestor is None:
             raise ValueError(
-                "Constraint source must use an AvaCapo rig: "
-                f"{source_name} must descend from {expected_parent}"
+                f"Constraint source: {resolved[source_name]} must descend from {expected_parent}"
             )
-    return {source_name: source_name for _, source_name, _ in NPZ_BVH_MAP}
+    return resolved
+
+
+def rebase_constraint_payloads(payloads: Iterable[bytes]) -> tuple[list[bytes], tuple[float, float, float]]:
+    """Subtract one shared ground-plane origin; return its canonical Y-up offset."""
+    origin = None
+    rebased = []
+    for payload in payloads:
+        with np.load(BytesIO(payload), allow_pickle=False) as arrays:
+            data = {name: arrays[name] for name in arrays.files}
+        if origin is None:
+            origin = data["trans"][0].copy()
+            # AMASS is Z-up; the standalone Y-up export keeps Y as height.
+            origin[1 if bvh_npz.config.KEEP_Y_UP else 2] = 0.0
+        data["trans"] = data["trans"] - origin
+        rebased.append(bvh_npz.create_npz_bytes(data))
+    if origin is None:
+        return rebased, (0.0, 0.0, 0.0)
+    canonical = origin if bvh_npz.config.KEEP_Y_UP else origin @ bvh_npz.Y_UP_TO_AMASS_Z_UP
+    return rebased, tuple(float(value) for value in canonical)
+
+
+def pose_heading_at_frame(
+    context: bpy.types.Context,
+    armature: bpy.types.Object,
+    frame: int,
+    *,
+    source_to_bone: dict[str, str] | None = None,
+) -> float:
+    """Return the Y-up heading in radians from the evaluated hip vector."""
+    source_to_bone = _resolved_pose_bone_names(armature, source_to_bone)
+    canonical = blender_adapter.canonical_from_armature_mapping(armature, source_to_bone)
+    previous_frame, previous_subframe = context.scene.frame_current, context.scene.frame_subframe
+    try:
+        context.scene.frame_set(frame)
+        context.view_layer.update()
+        evaluated = armature.evaluated_get(context.evaluated_depsgraph_get())
+        right = evaluated.pose.bones[source_to_bone["RightUpLeg"]].head
+        left = evaluated.pose.bones[source_to_bone["LeftUpLeg"]].head
+        diff = canonical @ np.asarray(right - left)
+        return math.atan2(float(diff[2]), -float(diff[0]))
+    finally:
+        context.scene.frame_set(previous_frame, subframe=previous_subframe)
+        context.view_layer.update()
 
 
 def _serialize_pose_samples(
@@ -391,10 +444,12 @@ def create_pose_constraint_npz_at_frames(
     context: bpy.types.Context,
     armature: bpy.types.Object,
     frames: Iterable[int],
+    *,
+    source_to_bone: dict[str, str] | None = None,
 ) -> tuple[bytes, int]:
     """Sample explicit evaluated timeline frames into an in-memory SMPL-X NPZ."""
 
-    source_to_bone = _resolved_pose_bone_names(armature)
+    source_to_bone = _resolved_pose_bone_names(armature, source_to_bone)
     return _serialize_pose_samples(
         context,
         armature,
