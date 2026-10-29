@@ -53,15 +53,36 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
             take_action=take_action, take_slot=take_slot,
             take_origin=clip.start + (active_take.offset if active_take is not None else 0),
         )
-        if frames:
+        # Store source and target separately: neighbour poses belong to other
+        # Clips, but constrain the first or last frame of this request.
+        samples = [(frame, frame - clip.start) for frame in frames]
+        heading_frame = clip.start
+        previous, following = tracks.neighbors(track.clips, clip.uid)
+        if not samples:
+            if (previous is not None and previous.end == clip.start
+                    and actions.has_pose_keys(
+                        working_action, working_slot, previous.start, previous.end,
+                    )):
+                heading_frame = previous.end - 1
+                samples = [(heading_frame, 0)]
+        # Keep an authored ending pose (or the start pose of a one-frame Clip).
+        last_target = clip.end - clip.start - 1
+        if (following is not None and following.start == clip.end
+                and not any(target == last_target for _, target in samples)
+                and actions.has_pose_keys(
+                    working_action, working_slot, following.start, following.end,
+                )):
+            samples.append((following.start, last_target))
+        if samples:
             from ..animation.constraint_utils import (
                 create_pose_constraint_npz_at_frames, pose_heading_at_frame,
                 rebase_constraint_payloads,
             )
 
-            if any(abs(frame - round(frame)) > 1e-4 for frame in frames):
+            if any(abs(frame - round(frame)) > 1e-4 for frame, _ in samples):
                 raise ValueError("Move manual pose keys to whole frames before generating a Take.")
-            frames = sorted({int(round(frame)) for frame in frames})
+            samples = sorted({(int(round(frame)), int(round(target)))
+                              for frame, target in samples})
             joint_map = blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping)
             blender_retarget_service.current_retarget_build(armature, joint_map)
             constraints = []
@@ -74,15 +95,15 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
                     animation_data.action = working_action
                     animation_data.action_slot = working_slot
                     first_heading = pose_heading_at_frame(
-                        bpy.context, armature, clip.start, source_to_bone=joint_map,
+                        bpy.context, armature, heading_frame, source_to_bone=joint_map,
                     )
-                    for frame in frames:
+                    for frame, target_frame in samples:
                         payload, _ = create_pose_constraint_npz_at_frames(
                             bpy.context, armature, [frame], source_to_bone=joint_map,
                         )
                         constraints.append(PoseConstraint(
                             motion_file=payload, source_frame=0,
-                            target_frame=frame - clip.start,
+                            target_frame=target_frame,
                         ))
                 finally:
                     animation_data.action = previous_action

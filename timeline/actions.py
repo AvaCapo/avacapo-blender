@@ -93,6 +93,19 @@ def curve_times(curve):
     return co.reshape(-1, 2)[:, 0]
 
 
+def has_pose_keys(action, slot, start, end):
+    """Return whether a range contains authored or generated pose keys."""
+    for (path, _), curve in read_slot_curves(action, slot).items():
+        if not (path.startswith('pose.bones[') or path in {
+            'location', 'rotation_euler', 'rotation_quaternion', 'rotation_axis_angle', 'scale',
+        }):
+            continue
+        times = curve_times(curve)
+        if int(np.searchsorted(times, start)) < int(np.searchsorted(times, end)):
+            return True
+    return False
+
+
 def manual_pose_frames(working_action, working_slot, start, end, *,
                        take_action=None, take_slot=None, take_origin=0):
     """Find authored pose keys and promote edited generated values to ordinary keys."""
