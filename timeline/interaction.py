@@ -75,6 +75,37 @@ def _clear_selected_armature_key_selection(context):
             raise ValueError("Could not clear selected animation keys.") from exc
 
 
+def _select_all_pose_bones(armature):
+    """Select all pose bones and save the user's previous selection."""
+    bones = armature.pose.bones
+    selected = {bone.name: bool(bone.select) for bone in bones}
+
+    active_bone = armature.data.bones.active
+    active = active_bone.name if active_bone is not None else None
+
+    for bone in bones:
+        bone.select = True
+
+    return selected, active
+
+
+def _restore_pose_bone_selection(armature, selection):
+    """Restore the user's bone selection after native Clip drag."""
+    if selection is None:
+        return
+
+    selected, active_name = selection
+    bones = armature.pose.bones
+
+    for bone in bones:
+        bone.select = selected.get(bone.name, False)
+
+    armature.data.bones.active = (
+        armature.data.bones.get(active_name)
+        if active_name is not None else None
+    )
+
+
 def _select_clip_keys(context, data, clip, *, clear_selection):
     """Select every Working-Action Slot key in the Clip range."""
     if clear_selection:
@@ -224,17 +255,24 @@ class CLIPS_OT_mouse(Operator):
         self._pixels_per_frame = view.pixels_per_frame
         self._native_drag = False
         self._animation_snap_settings = None
+        self._bone_selection = None
+        if self._session.kind == 'BODY':
+            self._bone_selection = _select_all_pose_bones(track.object)
         try:
             selected = _select_clip_keys(
                 context, track, hit.clip, clear_selection=not event.shift,
             )
         except ValueError as exc:
+            _restore_pose_bone_selection(track.object, self._bone_selection)
+            self._bone_selection = None
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
         if self._session.kind == 'BODY' and selected is not None:
             try:
                 self._start_native_drag(context, selected)
             except ValueError as exc:
+                _restore_pose_bone_selection(track.object, self._bone_selection)
+                self._bone_selection = None
                 self.report({'WARNING'}, str(exc))
                 return {'CANCELLED'}
         runtime.hover = HoverTarget(hit.kind, track.uid, self._session.uid, self._session.other_uid)
@@ -374,6 +412,8 @@ class CLIPS_OT_mouse(Operator):
             self._finish(context)
 
     def _finish(self, context):
+        _restore_pose_bone_selection(self._track.object, self._bone_selection)
+        self._bone_selection = None
         context.window.cursor_modal_restore()
         runtime.hover = HoverTarget()
         tag_redraw()

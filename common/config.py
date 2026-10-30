@@ -35,10 +35,6 @@ class Config:
     DEFAULT_MODEL_TYPE = "gen2"
     DEFAULT_MODELS = ["gen2", "asm", "gen1"]
     DEFAULT_MODEL_DETAILS = {
-        "gen1": {
-            "name": "Standard",
-            "description": "Simple motion generation for quick results.",
-        },
         "gen2": {
             "name": "Advanced",
             "description": "Fast, high-quality motion generation.",
