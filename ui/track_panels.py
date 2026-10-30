@@ -18,7 +18,8 @@ class CLIPS_MT_empty(Menu):
     def draw(self, context):
         layout = self.layout
         frame = math.floor(runtime.menu_target.frame)
-        layout.operator("clips.create", text="Create Clip", icon='ADD').frame = frame
+        layout.operator("clips.create", text="Create Clip",
+                        icon='ADD').frame = frame
         layout.operator("clips.fill_gap", text="Fill In").frame = frame
         layout.operator("clips.shrink_neighbors",
                         text="Shrink Neighbors to Current Frame").frame = frame
@@ -54,7 +55,8 @@ class CLIPS_MT_stick(Menu):
         track = find_track(context)
         if track is None or track.uid != runtime.menu_target.track_uid:
             return
-        previous, following = tracks.neighbors(track.clips, runtime.menu_target.clip_uid)
+        previous, following = tracks.neighbors(
+            track.clips, runtime.menu_target.clip_uid)
         has_previous, has_next = previous is not None, following is not None
         for label, mode, enabled in (
             ("Both", 'BOTH', has_previous and has_next),
@@ -74,7 +76,8 @@ class CLIPS_MT_clip(Menu):
         layout = self.layout
         uid = runtime.menu_target.clip_uid
         layout.operator("clips.new_take", text="New Take").clip_uid = uid
-        op = layout.operator("clips.edit_prompt", text="Change Prompt / Settings...")
+        op = layout.operator("clips.edit_prompt",
+                             text="Change Prompt / Settings...")
         op.clip_uid = uid
         layout.menu("CLIPS_MT_takes", text="Change Take")
         layout.menu("CLIPS_MT_stick", text="Stick to Neighbors")
@@ -83,8 +86,8 @@ class CLIPS_MT_clip(Menu):
                         icon='COPYDOWN').clip_uid = uid
         layout.operator("clips.bake_clip", text="Bake Clip",
                         icon='ACTION').clip_uid = uid
-        layout.separator()
-        layout.operator("clips.delete_takes", text="Delete All Takes").clip_uid = uid
+        layout.operator("clips.delete_takes",
+                        text="Delete All Takes").clip_uid = uid
         layout.operator("clips.delete_clip", text="Delete Clip",
                         icon='TRASH').clip_uid = uid
 
@@ -117,14 +120,29 @@ class CLIPS_PT_panel(Panel):
             box_auth.label(text="Or paste token manually:")
             row = box_auth.row(align=True)
             row.prop(data, "token_input", text="")
-            row.operator("avacapo.paste_token", text="Connect", icon="CHECKMARK")
+            row.operator("avacapo.paste_token",
+                         text="Connect", icon="CHECKMARK")
+
+        # Armature
+        armature_col = layout.column(align=True)
+        armature_box = armature_col.box()
+        armature_box.label(text="Armature:")
 
         armature = context.active_object
-        if armature is None or armature.type != 'ARMATURE' or not armature.select_get():
-            layout.label(text="Select an armature", icon='INFO')
+        if armature is None or armature.type != "ARMATURE" or not armature.select_get():
+            armature_box.label(text="Select an armature", icon="INFO")
+            armature_box.operator(
+                "avacapo.append_avacapo_reference_armature",
+                text="New Armature",
+                icon="OUTLINER_OB_ARMATURE",
+            )
             return
 
-        retarget_box = layout.box()
+        armature_box.label(
+            text=armature.name,
+            icon="OUTLINER_OB_ARMATURE",
+        )
+        retarget_box = armature_col.box()
         retarget_ready = (
             hasattr(armature, "avacapo_retarget_mapping")
             and blender_retarget_service.is_valid_mapping(armature)
@@ -141,18 +159,24 @@ class CLIPS_PT_panel(Panel):
         if data.show_retargeting:
             ui_retargeting.draw_retarget_mapping(retarget_box, context)
 
-        layout.prop(data, "default_length")
-        layout.operator("clips.create", text="New Clip at Current Frame",
-                        icon='ADD').frame = scene.frame_current
+        new_clip_box = layout.box()
+        new_clip_box.label(text="New clip")
+        new_clip_box.prop(data, "default_length")
+        new_clip_box.operator("clips.create", text="New Clip at Current Frame",
+                              icon='ADD').frame = scene.frame_current
 
         track = find_track(context)
         clip = tracks.active_clip(track) if track is not None else None
+
+        clip_col = layout.column(align=True)
+
         if clip is None:
-            layout.label(text="Select a clip in the Timeline")
+            clip_col.label(text="Select a clip in the Timeline")
+
             return
 
-        generation_box = layout.box()
-        generation_box.label(text="Prompt")
+        generation_box = clip_col.box()
+        generation_box.label(text="Current Clip:")
         generation_box.prop(clip, "prompt", text="")
         generation_box.operator(
             "clips.new_take", text="Generate Take", icon='SHADERFX', depress=True,
@@ -166,7 +190,7 @@ class CLIPS_PT_panel(Panel):
             icon='TRIA_DOWN' if clip.show_advanced_generation else 'TRIA_RIGHT',
         )
         if clip.show_advanced_generation:
-            col = generation_box.column(align=True)
+            col = generation_box.column()
             col.prop(clip, "generation_model")
             col.prop(clip, "seed")
             col.prop(clip, "generation_temperature")
@@ -174,10 +198,45 @@ class CLIPS_PT_panel(Panel):
             row.prop(clip, "generation_cycled")
             row.prop(clip, "generation_in_place")
 
-        box = layout.box()
-        box.prop(clip, "name")
+        # Takes
+        take = takes.current_take(clip)
+        takes_box = clip_col.box()
+        row = takes_box.row()
+        row.prop(
+            clip,
+            "show_takes",
+            text="Takes",
+            emboss=False,
+            icon='TRIA_DOWN' if clip.show_takes else 'TRIA_RIGHT',
+        )
+        if clip.show_takes:
+            for take in clip.takes:
+                row = takes_box.row(align=True)
+                columns = row.split(factor=0.9, align=True)
+                name_column = columns.column()
+                delete_column = columns.column()
+                name_column.alignment = 'LEFT'
+                op = name_column.operator(
+                    "clips.set_take",
+                    text=take.name,
+                    depress=take.uid == clip.active_take_uid,
+                )
+                op.clip_uid, op.take_uid = clip.uid, take.uid
+                op = delete_column.operator(
+                    "clips.delete_take", text="", icon='TRASH')
+                op.clip_uid, op.take_uid = clip.uid, take.uid
+                if take is not None:
+                    takes_box.prop(take, "Take offset")
+            if len(clip.takes) > 0:
+                takes_box.operator("clips.delete_takes").clip_uid = clip.uid
+            else:
+                takes_box.label(text="No Takes Yet, Generate Take")
 
-        col = box.column(align=True)
+        # Clip Props
+        clip_prop_box = clip_col.box()
+        clip_prop_box.prop(clip, "name")
+
+        col = clip_prop_box.column(align=True)
         row = col.row(align=True)
         row.prop(clip, "start")
         op = row.operator("clips.set_frame", text="", icon='TIME')
@@ -191,34 +250,6 @@ class CLIPS_PT_panel(Panel):
         row.prop(clip, "bind_end", text="", toggle=True,
                  icon='LINKED' if clip.bind_end else 'UNLINKED')
         col.prop(clip, "duration")
-        take = takes.current_take(clip)
-        if take is not None:
-            col.prop(take, "offset")
 
-        box = layout.box()
-        row = box.row()
-        row.prop(
-            clip,
-            "show_takes",
-            text="Takes",
-            emboss=False,
-            icon='TRIA_DOWN' if clip.show_takes else 'TRIA_RIGHT',
-        )
-        if clip.show_takes:
-            for take in clip.takes:
-                row = box.row(align=True)
-                columns = row.split(factor=0.9, align=True)
-                name_column = columns.column()
-                delete_column = columns.column()
-                name_column.alignment = 'LEFT'
-                op = name_column.operator(
-                    "clips.set_take",
-                    text=take.name,
-                    depress=take.uid == clip.active_take_uid,
-                )
-                op.clip_uid, op.take_uid = clip.uid, take.uid
-                op = delete_column.operator("clips.delete_take", text="", icon='TRASH')
-                op.clip_uid, op.take_uid = clip.uid, take.uid
-            box.operator("clips.delete_takes").clip_uid = clip.uid
-
-        layout.operator("clips.delete_clip", icon='TRASH').clip_uid = clip.uid
+        clip_prop_box.operator("clips.delete_clip",
+                               icon='TRASH').clip_uid = clip.uid
