@@ -161,7 +161,9 @@ class CLIPS_PT_panel(Panel):
 
         new_clip_box = layout.box()
         new_clip_box.label(text="New clip")
-        new_clip_box.prop(data, "default_length")
+        # TODO: prompt prop here, auto-name clip on creation
+        # ? clip_name_from_prompt(prompt:str) -> str
+        new_clip_box.prop(data, "default_length", text="duration")
         new_clip_box.operator("clips.create", text="New Clip at Current Frame",
                               icon='ADD').frame = scene.frame_current
 
@@ -225,10 +227,10 @@ class CLIPS_PT_panel(Panel):
                 op = delete_column.operator(
                     "clips.delete_take", text="", icon='TRASH')
                 op.clip_uid, op.take_uid = clip.uid, take.uid
-                if take is not None:
-                    takes_box.prop(take, "Take offset")
             if len(clip.takes) > 0:
                 takes_box.operator("clips.delete_takes").clip_uid = clip.uid
+                # if take is not None:
+                #     takes_box.prop(take, "offset")
             else:
                 takes_box.label(text="No Takes Yet, Generate Take")
 
