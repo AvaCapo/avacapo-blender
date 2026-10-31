@@ -15,7 +15,7 @@ from ..timeline.drawing import draw_callback
 from ..timeline.interaction import CLIPS_OT_hover, CLIPS_OT_mouse
 from ..timeline.operators import (
     CLIPS_OT_create, CLIPS_OT_fill_gap,
-    CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take,
+    CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take, CLIPS_OT_cancel_take,
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
@@ -27,7 +27,9 @@ from .track_panels import (
 )
 from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene
 from ..timeline.runtime import runtime
+from ..timeline.generation_status import is_pending
 from ..core.storage import Storage
+from ..core.generation_models import TaskStatus
 from .update_notice import TIMER_CALLBACKS as UPDATE_TIMER_CALLBACKS, stop_update_notice
 from . import ui_retargeting
 from ..animation.retargeting import blender_retarget_watcher
@@ -38,7 +40,7 @@ CLASSES = (
     AVACAPO_OT_login_browser, AVACAPO_OT_paste_token,
     AVACAPO_OT_disconnect,
     CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap,
-    CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take,
+    CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take, CLIPS_OT_cancel_take,
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
@@ -79,6 +81,19 @@ def _on_load_pre(_):
 @persistent
 def _on_load_post(_):
     _state()
+    # Saved pending requests cannot resume after loading a file or re-enabling.
+    for scene in bpy.data.scenes:
+        for track in scene.clip_data.tracks:
+            for clip in track.clips:
+                for take in clip.takes:
+                    if is_pending(take):
+                        take.generation_status = TaskStatus.CANCELLED.value
+                        take.progress = 0.0
+
+
+def _initialize_scene_state():
+    _on_load_post(None)
+    return None
 
 
 def _unregister_retargeting():
@@ -110,6 +125,9 @@ def unregister():
     if legacy is not None and legacy is not states[0]:
         states.append(legacy)
     for state in states:
+        callback = state.pop("initialization_timer", None)
+        if callback is not None and bpy.app.timers.is_registered(callback):
+            bpy.app.timers.unregister(callback)
         cancel_generation()
         cancel_model_catalog_refresh(state.get("timers", set()))
         stop_update_notice(state.get("update_timers", set()))
@@ -160,6 +178,8 @@ def register():
             _register_class(cls)
             state["classes"].append(cls)
         bpy.types.Scene.clip_data = PointerProperty(type=CT_Scene)
+        state["initialization_timer"] = _initialize_scene_state
+        bpy.app.timers.register(_initialize_scene_state, first_interval=0.0)
         state.setdefault("handlers", [])
         for handler_list, callback in (
             (bpy.app.handlers.load_pre, _on_load_pre),

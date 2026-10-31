@@ -2,10 +2,12 @@
 
 import math
 
+from ..timeline.generation_status import is_pending, STATUS_LABELS
 from bpy.types import Menu, Panel
 
 from ..animation.retargeting import blender_retarget_service
 from ..core import takes, tracks
+from ..core.generation_models import TaskStatus
 from ..core.storage import Storage
 from ..timeline.properties import find_track
 from ..timeline.runtime import runtime
@@ -42,7 +44,9 @@ class CLIPS_MT_takes(Menu):
             self.layout.label(text="No takes")
             return
         for take in clip.takes:
-            op = self.layout.operator(
+            row = self.layout.row()
+            row.enabled = take.take_action is not None
+            op = row.operator(
                 "clips.set_take", text=take.name,
                 icon='CHECKMARK' if take.uid == clip.active_take_uid else 'BLANK1')
             op.clip_uid, op.take_uid = clip.uid, take.uid
@@ -181,7 +185,7 @@ class CLIPS_PT_panel(Panel):
         generation_box.label(text="Current Clip:")
         generation_box.prop(clip, "prompt", text="")
         generation_box.operator(
-            "clips.new_take", text="Generate Take", icon='SHADERFX', depress=True,
+            "clips.new_take", text="Generate Take", icon='SHADERFX',
         ).clip_uid = clip.uid
         row = generation_box.row()
         row.prop(
@@ -218,15 +222,22 @@ class CLIPS_PT_panel(Panel):
                 name_column = columns.column()
                 delete_column = columns.column()
                 name_column.alignment = 'LEFT'
+                status = TaskStatus(take.generation_status)
+                name_column.enabled = take.take_action is not None
                 op = name_column.operator(
                     "clips.set_take",
-                    text=take.name,
+                    text=(take.name if status == TaskStatus.SUCCEEDED
+                          else f"{take.name} - {STATUS_LABELS[status]}"),
                     depress=take.uid == clip.active_take_uid,
                 )
                 op.clip_uid, op.take_uid = clip.uid, take.uid
+                pending = is_pending(take)
                 op = delete_column.operator(
-                    "clips.delete_take", text="", icon='TRASH')
+                    "clips.cancel_take" if pending else "clips.delete_take",
+                    text="", icon='CANCEL' if pending else 'TRASH')
                 op.clip_uid, op.take_uid = clip.uid, take.uid
+                if take.generation_error:
+                    takes_box.label(text=take.generation_error, icon='ERROR')
             if len(clip.takes) > 0:
                 takes_box.operator("clips.delete_takes").clip_uid = clip.uid
                 # if take is not None:

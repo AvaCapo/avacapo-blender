@@ -2,6 +2,7 @@
 
 import math
 from dataclasses import dataclass, replace
+from time import monotonic
 
 import bpy
 
@@ -13,9 +14,10 @@ from ..core.generation_models import (
 from ..core.generation_service import GenerationService
 from ..core.storage import Storage
 from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
+from .generation_status import is_pending, STATUS_PROGRESS
 from . import actions
 from .properties import edit_track
-from .runtime import ClipboardClip, ClipboardTake, tag_redraw
+from .runtime import ClipboardClip, ClipboardTake, runtime, tag_redraw
 
 
 GENERATION_TIMER_CALLBACKS = set()
@@ -29,6 +31,7 @@ class _PendingGeneration:
     scene: object
     track_uid: int
     clip_uid: int
+    take_uid: int
     command: GenerationCommand
     scene_fps: float
     status: TaskStatus = TaskStatus.QUEUED
@@ -42,6 +45,8 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
 
     if not Storage.api_token:
         raise ValueError("Connect to AvaCapo before generating a Take.")
+    if not runtime.generation_ready():
+        raise ValueError("Wait one second before generating another Take.")
     root_offset = (0.0, 0.0, 0.0)
     if isinstance(command.parameters, TextParameters):
         armature = _working_armature(track)
@@ -128,20 +133,60 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         _generation_service.set_api_token(Storage.api_token)
         _generation_service_token = Storage.api_token
 
-    task_id = _generation_service.submit(command)
+    command = command.resolve_seed()
+    take = edit_track(track, takes.add_take, clip, command=command, activate=False)
+    take.generation_status = TaskStatus.QUEUED.value
+    try:
+        task_id = _generation_service.submit(command)
+    except Exception:
+        edit_track(track, takes.remove_take, clip, take.uid)
+        raise
     _pending_generations[task_id] = _PendingGeneration(
         scene=scene,
         track_uid=track.uid,
         clip_uid=clip.uid,
+        take_uid=take.uid,
         command=command,
         scene_fps=scene_fps,
         root_offset=root_offset,
     )
+    clip.show_takes = True
+    runtime.generation_cooldown_until = monotonic() + 1.0
+    tag_redraw()
     log.info("Queued server generation %s for Clip %s.", task_id[:8], clip.uid)
     if not bpy.app.timers.is_registered(_finish_generation):
         bpy.app.timers.register(_finish_generation, first_interval=0.1)
         GENERATION_TIMER_CALLBACKS.add(_finish_generation)
     return task_id
+
+
+def _pending_take(pending):
+    track = next((item for item in pending.scene.clip_data.tracks
+                  if item.uid == pending.track_uid), None)
+    clip = None if track is None else tracks.find_clip(track.clips, pending.clip_uid)
+    return None if clip is None else takes.find_take(clip, pending.take_uid)
+
+
+def cancel_take_generation(track, clip, take_uid) -> bool:
+    """Stop observing this Take and request cancellation of its server job."""
+    for task_id, pending in _pending_generations.items():
+        if (pending.scene == track.id_data and pending.track_uid == track.uid
+                and pending.clip_uid == clip.uid and pending.take_uid == take_uid):
+            if not _generation_service.cancel(task_id):
+                return False
+            take = takes.find_take(clip, take_uid)
+            if take is not None:
+                take.generation_status = TaskStatus.CANCELLED.value
+                take.progress = 0.0
+            tag_redraw()
+            return True
+    return False
+
+
+def _cancel_clip_generations(track, clip):
+    for take in clip.takes:
+        if is_pending(take):
+            cancel_take_generation(track, clip, take.uid)
 
 
 def _finish_generation() -> float | None:
@@ -151,17 +196,28 @@ def _finish_generation() -> float | None:
         return None
 
     changed = False
+    if runtime.generation_cooldown_until and runtime.generation_ready():
+        runtime.generation_cooldown_until = 0.0
+        changed = True
     for task_id, pending in tuple(_pending_generations.items()):
+        take = _pending_take(pending)
+        if take is None:
+            _generation_service.cancel(task_id)
         task = _generation_service.get_task(task_id)
         if task.status != pending.status:
             log.info("Generation %s: %s", task_id[:8], task.status.value)
             pending.status = task.status
+            if take is not None:
+                take.generation_status = task.status.value
+                take.generation_error = task.error or ""
+                take.progress = STATUS_PROGRESS[task.status]
+            changed = True
         if task.status not in {TaskStatus.SUCCEEDED, TaskStatus.CANCELLED, TaskStatus.FAILED}:
             continue
 
         _pending_generations.pop(task_id)
         changed = True
-        if task.status == TaskStatus.SUCCEEDED:
+        if task.status == TaskStatus.SUCCEEDED and take is not None:
             result = _generation_service.get_result(task_id)
             try:
                 if result is None:
@@ -169,14 +225,19 @@ def _finish_generation() -> float | None:
                 _publish_generation(pending, result.bvh_bytes, result.resolved_seed)
             except Exception as exc:
                 log.error("Could not create Take from generated animation: %s", exc)
+                take.generation_status = TaskStatus.FAILED.value
+                take.generation_error = str(exc)
+                take.progress = 0.0
             finally:
                 _generation_service.release_result(task_id)
         elif task.status == TaskStatus.FAILED:
             log.error("Animation generation failed: %s", task.error or "unknown error")
+        elif task.status == TaskStatus.SUCCEEDED:
+            _generation_service.release_result(task_id)
 
     if changed:
         tag_redraw()
-    if _pending_generations:
+    if _pending_generations or runtime.generation_cooldown_until:
         return 0.1
     GENERATION_TIMER_CALLBACKS.discard(_finish_generation)
     return None
@@ -207,6 +268,7 @@ def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_
         source_text=bvh_bytes.decode("utf-8"),
         scene_fps=pending.scene_fps,
         root_offset=pending.root_offset,
+        take_uid=pending.take_uid,
     )
 
 
@@ -219,7 +281,13 @@ def cancel_generation() -> None:
         if bpy.app.timers.is_registered(callback):
             bpy.app.timers.unregister(callback)
     GENERATION_TIMER_CALLBACKS.clear()
+    for pending in _pending_generations.values():
+        take = _pending_take(pending)
+        if take is not None:
+            take.generation_status = TaskStatus.CANCELLED.value
+            take.progress = 0.0
     _pending_generations.clear()
+    runtime.generation_cooldown_until = 0.0
     if _generation_service is not None:
         _generation_service.stop(wait=False)
         _generation_service = None
@@ -227,7 +295,8 @@ def cancel_generation() -> None:
 
 
 def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
-                           root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)):
+                           root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                           take_uid: int | None = None):
     """Retarget one source Motion and publish its Take only after it is usable."""
     armature = _working_armature(track)
     if not isinstance(source_text, str) or not source_text:
@@ -277,8 +346,12 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
     # Resolve this before creating any resource owned by the new Take.
     _working_binding(track, armature)
 
-    take_uid = clip.take_counter + 1
-    action = source_record = take = None
+    existing_take = None if take_uid is None else takes.find_take(clip, take_uid)
+    if take_uid is not None and existing_take is None:
+        raise ValueError("The pending Take was deleted.")
+    take_uid = clip.take_counter + 1 if take_uid is None else take_uid
+    action = source_record = None
+    take = existing_take
     try:
         action, slot = _new_take_action(armature, clip.uid, take_uid)
         blender_motion_writer.apply_prepared_motion(
@@ -291,19 +364,25 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         )
         source_record = _new_source_text(clip.uid, take_uid, source_text)
 
-        take = edit_track(
-            track, takes.add_take, clip, command=command, activate=False,
-        )
+        if take is None:
+            take = edit_track(track, takes.add_take, clip, command=command, activate=False)
         take.take_action = action
         take.take_slot_handle = int(slot.handle)
         take.source_motion_text = source_record
 
         switch_take(track, clip, take.uid)
+        take.generation_status = TaskStatus.SUCCEEDED.value
+        take.generation_error = ""
         take.progress = 1.0
         return take
     except Exception:
         if take is not None:
-            edit_track(track, takes.remove_take, clip, take.uid)
+            if existing_take is None:
+                edit_track(track, takes.remove_take, clip, take.uid)
+            else:
+                take.take_action = None
+                take.take_slot_handle = 0
+                take.source_motion_text = None
         _remove_if_unused(bpy.data.actions, action)
         _remove_if_unused(bpy.data.texts, source_record)
         raise
@@ -523,6 +602,7 @@ def delete_takes(track, clip):
     """Remove all Take-owned resources and clear this Clip's Working window."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
+    _cancel_clip_generations(track, clip)
     resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
     cleared = _clear_clip_window(track, clip)
     try:
@@ -540,17 +620,23 @@ def delete_take(track, clip, take_uid):
     target = takes.find_take(clip, take_uid)
     if target is None:
         raise ValueError(f"Take {take_uid} does not belong to this Clip.")
+    if is_pending(target):
+        cancel_take_generation(track, clip, take_uid)
 
     resource = (target.take_action, target.source_motion_text)
     active_take = takes.current_take(clip)
     if active_take is not None and active_take.uid == target.uid:
-        replacement = next((take for take in clip.takes if take.uid != target.uid), None)
+        replacement = next((take for take in clip.takes
+                            if take.uid != target.uid and take.take_action is not None), None)
         if replacement is not None:
             switch_take(track, clip, replacement.uid)
         else:
             cleared = _clear_clip_window(track, clip)
             try:
-                edit_track(track, takes.delete_takes, clip)
+                if len(clip.takes) == 1:
+                    edit_track(track, takes.delete_takes, clip)
+                else:
+                    edit_track(track, takes.remove_take, clip, target.uid)
             except Exception:
                 _restore_cleared_window(cleared, clip)
                 raise
@@ -566,6 +652,7 @@ def delete_clip(track, clip):
     """Clear this Clip's Working window, then remove its Takes and metadata."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
+    _cancel_clip_generations(track, clip)
     resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
     cleared = _clear_clip_window(track, clip)
     try:
@@ -582,6 +669,7 @@ def bake_clip(track, clip):
     """Keep visible Working Action keys and remove this Clip's Take ownership."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
+    _cancel_clip_generations(track, clip)
     working_action, working_slot = _working_binding(track, track.object)
     actions.bake_generated_range(
         working_action,
@@ -601,6 +689,8 @@ def copy_clip(clip):
     copied_takes = {}
     try:
         for take in clip.takes:
+            if take.take_action is None:
+                continue
             action, slot = _take_binding(take)
             copied_action, copied_slot_handle, copied_text = _copy_take_resource(
                 action, slot, take.source_motion_text, f"Copied Take {take.uid}",
@@ -608,7 +698,9 @@ def copy_clip(clip):
             copied_takes[take.uid] = ClipboardTake(
                 copied_action, copied_slot_handle, copied_text,
             )
-        return ClipboardClip(tracks.serialize_clip(clip), copied_takes)
+        data = tracks.serialize_clip(clip)
+        data = replace(data, takes=tuple(take for take in data.takes if take.uid in copied_takes))
+        return ClipboardClip(data, copied_takes)
     except Exception:
         _remove_take_resources(None, (
             (item.action, item.source_text) for item in copied_takes.values()

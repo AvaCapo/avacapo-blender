@@ -9,6 +9,8 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 
 from ..core import takes, tracks
+from ..core.generation_models import TaskStatus
+from .generation_status import is_pending, STATUS_LABELS
 from .properties import find_track
 from .runtime import HoverTarget, in_timeline, runtime, ui_scale
 from .track_style import STYLE
@@ -196,7 +198,8 @@ class ClipDrawing:
                          1, STYLE.chevron_width * scale, palette.chevron)
 
         label_left, label_right = x0 + handle_width, x1 - handle_width
-        take = takes.current_take(clip)
+        take = next((item for item in reversed(clip.takes) if is_pending(item)),
+                    takes.current_take(clip))
         if take is not None and label_right > label_left:
             take_start = view.pixel(clip.start + take.offset)
             take_end = view.pixel(clip.start + take.offset + take.length)
@@ -217,9 +220,10 @@ class ClipDrawing:
                         palette.stripe,
                     )
                 label_left, label_right = visible_start, visible_end
-        # TODO: decide if we need to show prompt here
-        # labels.append((clip.prompt.strip() or clip.name, label_left, label_right, palette.text))
-        labels.append((clip.name, label_left, label_right, palette.text))
+        label = clip.name
+        if take is not None and is_pending(take):
+            label = f"{STATUS_LABELS[TaskStatus(take.generation_status)]}: {clip.name}"
+        labels.append((label, label_left, label_right, palette.text))
 
     @staticmethod
     def _draw_sync_dot(mesh, clips_by_uid, view, metrics, center_y, hover):

@@ -214,12 +214,31 @@ class CLIPS_OT_new_take(_ClipOp, Operator):
     bl_description = ""
     bl_options = {'UNDO'}
 
+    @classmethod
+    def poll(cls, context):
+        return runtime.generation_ready()
+
     def execute(self, context):
         track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
         if not self._generate_take(context, track, clip):
             return {'CANCELLED'}
+        tag_redraw()
+        return {'FINISHED'}
+
+
+class CLIPS_OT_cancel_take(_ClipOp, Operator):
+    """Cancel generation locally and send cancellation to the server."""
+    bl_idname = "clips.cancel_take"
+    bl_label = "Cancel Take"
+    take_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        track, clip = self._get_clip(context)
+        if clip is None:
+            return {'CANCELLED'}
+        operations.cancel_take_generation(track, clip, self.take_uid)
         tag_redraw()
         return {'FINISHED'}
 

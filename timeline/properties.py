@@ -9,6 +9,7 @@ from bpy.types import PropertyGroup
 
 from ..common.config import Config, TimelineConfig
 from ..core import tracks
+from ..core.generation_models import TaskStatus
 from ..server import models
 from .runtime import tag_redraw
 
@@ -169,6 +170,8 @@ class CT_Take(PropertyGroup):
     name: StringProperty(name="Name", default="Take")
     prompt: StringProperty(name="Prompt")
     generation_mode: StringProperty(default="text", options={'HIDDEN'})
+    generation_status: StringProperty(default=TaskStatus.SUCCEEDED.value, options={'HIDDEN'})
+    generation_error: StringProperty(options={'HIDDEN'})
     generation_name: StringProperty(options={'HIDDEN'})
     generation_model: StringProperty(default=Config.DEFAULT_MODEL_TYPE, options={'HIDDEN'})
     generation_in_place: BoolProperty(options={'HIDDEN'})
