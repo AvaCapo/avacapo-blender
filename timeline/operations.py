@@ -10,11 +10,12 @@ from ..common.logger import log
 from ..core import takes, tracks
 from ..core.generation_models import (
     ConstraintsParameters, GenerationCommand, PoseConstraint, TaskStatus, TextParameters,
+    TERMINAL_STATUSES,
 )
 from ..core.generation_service import GenerationService
 from ..core.storage import Storage
 from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
-from .generation_status import is_pending, STATUS_PROGRESS
+from .generation_status import is_pending, set_status
 from . import actions
 from .properties import edit_track
 from .runtime import ClipboardClip, ClipboardTake, runtime, tag_redraw
@@ -135,7 +136,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
 
     command = command.resolve_seed()
     take = edit_track(track, takes.add_take, clip, command=command, activate=False)
-    take.generation_status = TaskStatus.QUEUED.value
+    set_status(take, TaskStatus.QUEUED)
     try:
         task_id = _generation_service.submit(command)
     except Exception:
@@ -176,8 +177,7 @@ def cancel_take_generation(track, clip, take_uid) -> bool:
                 return False
             take = takes.find_take(clip, take_uid)
             if take is not None:
-                take.generation_status = TaskStatus.CANCELLED.value
-                take.progress = 0.0
+                set_status(take, TaskStatus.CANCELLED)
             tag_redraw()
             return True
     return False
@@ -208,11 +208,9 @@ def _finish_generation() -> float | None:
             log.info("Generation %s: %s", task_id[:8], task.status.value)
             pending.status = task.status
             if take is not None:
-                take.generation_status = task.status.value
-                take.generation_error = task.error or ""
-                take.progress = STATUS_PROGRESS[task.status]
+                set_status(take, task.status, error=task.error or "")
             changed = True
-        if task.status not in {TaskStatus.SUCCEEDED, TaskStatus.CANCELLED, TaskStatus.FAILED}:
+        if task.status not in TERMINAL_STATUSES:
             continue
 
         _pending_generations.pop(task_id)
@@ -225,9 +223,7 @@ def _finish_generation() -> float | None:
                 _publish_generation(pending, result.bvh_bytes, result.resolved_seed)
             except Exception as exc:
                 log.error("Could not create Take from generated animation: %s", exc)
-                take.generation_status = TaskStatus.FAILED.value
-                take.generation_error = str(exc)
-                take.progress = 0.0
+                set_status(take, TaskStatus.FAILED, error=str(exc))
             finally:
                 _generation_service.release_result(task_id)
         elif task.status == TaskStatus.FAILED:
@@ -284,8 +280,7 @@ def cancel_generation() -> None:
     for pending in _pending_generations.values():
         take = _pending_take(pending)
         if take is not None:
-            take.generation_status = TaskStatus.CANCELLED.value
-            take.progress = 0.0
+            set_status(take, TaskStatus.CANCELLED)
     _pending_generations.clear()
     runtime.generation_cooldown_until = 0.0
     if _generation_service is not None:
@@ -371,9 +366,7 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         take.source_motion_text = source_record
 
         switch_take(track, clip, take.uid)
-        take.generation_status = TaskStatus.SUCCEEDED.value
-        take.generation_error = ""
-        take.progress = 1.0
+        set_status(take, TaskStatus.SUCCEEDED, error="")
         return take
     except Exception:
         if take is not None:

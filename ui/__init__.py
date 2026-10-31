@@ -27,7 +27,7 @@ from .track_panels import (
 )
 from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene
 from ..timeline.runtime import runtime
-from ..timeline.generation_status import is_pending
+from ..timeline.generation_status import is_pending, set_status
 from ..core.storage import Storage
 from ..core.generation_models import TaskStatus
 from .update_notice import TIMER_CALLBACKS as UPDATE_TIMER_CALLBACKS, stop_update_notice
@@ -79,7 +79,7 @@ def _on_load_pre(_):
 
 
 @persistent
-def _on_load_post(_):
+def _on_load_post(_=None):
     _state()
     # Saved pending requests cannot resume after loading a file or re-enabling.
     for scene in bpy.data.scenes:
@@ -87,13 +87,7 @@ def _on_load_post(_):
             for clip in track.clips:
                 for take in clip.takes:
                     if is_pending(take):
-                        take.generation_status = TaskStatus.CANCELLED.value
-                        take.progress = 0.0
-
-
-def _initialize_scene_state():
-    _on_load_post(None)
-    return None
+                        set_status(take, TaskStatus.CANCELLED)
 
 
 def _unregister_retargeting():
@@ -178,8 +172,8 @@ def register():
             _register_class(cls)
             state["classes"].append(cls)
         bpy.types.Scene.clip_data = PointerProperty(type=CT_Scene)
-        state["initialization_timer"] = _initialize_scene_state
-        bpy.app.timers.register(_initialize_scene_state, first_interval=0.0)
+        state["initialization_timer"] = _on_load_post
+        bpy.app.timers.register(_on_load_post, first_interval=0.0)
         state.setdefault("handlers", [])
         for handler_list, callback in (
             (bpy.app.handlers.load_pre, _on_load_pre),

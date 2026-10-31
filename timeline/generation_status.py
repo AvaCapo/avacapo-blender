@@ -20,3 +20,11 @@ STATUS_PROGRESS = {
 
 def is_pending(take):
     return TaskStatus(take.generation_status) not in TERMINAL_STATUSES
+
+
+def set_status(take, status, *, error=None):
+    """Update the displayed stage, preserving errors unless explicitly supplied."""
+    take.generation_status = status.value
+    take.progress = STATUS_PROGRESS[status]
+    if error is not None:
+        take.generation_error = error

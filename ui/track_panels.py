@@ -6,7 +6,7 @@ from ..timeline.generation_status import is_pending, STATUS_LABELS
 from bpy.types import Menu, Panel
 
 from ..animation.retargeting import blender_retarget_service
-from ..core import takes, tracks
+from ..core import tracks
 from ..core.generation_models import TaskStatus
 from ..core.storage import Storage
 from ..timeline.properties import find_track
@@ -205,7 +205,6 @@ class CLIPS_PT_panel(Panel):
             row.prop(clip, "generation_in_place")
 
         # Takes
-        take = takes.current_take(clip)
         takes_box = clip_col.box()
         row = takes_box.row()
         row.prop(
