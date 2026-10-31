@@ -91,13 +91,13 @@ class CLIPS_MT_clip(Menu):
         layout.operator("clips.delete_clip", text="Delete Clip",
                         icon='TRASH').clip_uid = uid
 
-
+# the main and only panel
 class CLIPS_PT_panel(Panel):
     bl_idname = "CLIPS_PT_panel"
-    bl_label = "Clips"
+    bl_label = "Avacapo"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Clips"
+    bl_category = "Avacapo"
 
     def draw(self, context):
         layout = self.layout
