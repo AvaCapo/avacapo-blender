@@ -296,6 +296,7 @@ def materialize_take(
     take_offset,
     *,
     keyframe_type="GENERATED",
+    preserve_manual=True
 ):
     """Copy a local Take window into the Working Action across the full channel scope."""
     working = read_slot_curves(working_action, working_slot)
@@ -314,7 +315,7 @@ def materialize_take(
             clip_start,
             clip_end,
             keyframe_type=keyframe_type,
-            preserve_manual=True,
+            preserve_manual=preserve_manual,
         )
 
 

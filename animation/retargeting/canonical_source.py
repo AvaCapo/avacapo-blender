@@ -1,31 +1,46 @@
-"""Portable contract for AvaCapo's canonical animation source skeleton.
+"""Portable rest skeleton for AvaCapo's canonical animation source.
 
-This topology is used only before a source clip is available: mapping rows,
-deterministic rig detection and name-based Auto Mapping. At retarget time the
-actual ``Motion.hierarchy`` remains the authoritative animation source.
+This is the 22-joint skeleton expected by the generation service.  It is used
+for mapping before a source clip exists and for reverse-retargeting user poses
+into constraint payloads.  At normal retarget time, a returned
+``Motion.hierarchy`` is still the authoritative source.
 """
 
-from __future__ import annotations
 
+# Ordered depth-first rest avacapo skeleton.
+#TODO: update offsets after changes on the backend side
+CANONICAL_SOURCE_JOINTS = (
+    ("Hips",        -1, (0.000000, 0.000000, 0.000000)),          #0
+    ("LeftUpLeg",   0, (0.069520, -0.091406, -0.006815)),         #1
+    ("LeftLeg",     1, (0.034277, -0.375199, -0.004496)),         #2
+    ("LeftFoot",    2, (-0.013596, -0.397960, -0.043693)),        #3
+    ("LeftToe",     3, (0.026358, -0.055791, 0.119288)),          #4
+    ("RightUpLeg",  0, (-0.067670, -0.090522, -0.004320)),        #5
+    ("RightLeg",    5, (-0.038290, -0.382569, -0.008850)),        #6
+    ("RightFoot",   6, (0.015774, -0.398415, -0.042312)),         #7
+    ("RightToe",    7, (-0.025372, -0.048144, 0.123348)),         #8
+    ("Spine",       0, (-0.002533, 0.108963, -0.026696)),         #9
+    ("Spine1",      9, (0.005487, 0.135180, 0.001092)),           #10
+    ("Spine2",      10, (0.001457, 0.052922, 0.025425)),          #11
+    ("Neck",        11, (-0.002778, 0.213870, -0.042857)),        #12
+    ("Head",        12, (0.005152, 0.064970, 0.051349)),          #13
+    ("LeftShoulder",11, (0.078845, 0.121749, -0.034090)),         #14
+    ("LeftArm",     14, (0.090977, 0.030469, -0.008868)),         #15
+    ("LeftForeArm", 15, (0.259612, -0.012772, -0.027456)),        #16
+    ("LeftHand",    16, (0.249234, 0.008986, -0.001171)),         #17
+    ("RightShoulder",11, (-0.081759, 0.118833, -0.038615)),       #18
+    ("RightArm",    18, (-0.096012, 0.032551, -0.009143)),        #19
+    ("RightForeArm",19, (-0.253742, -0.013329, -0.021401)),       #20
+    ("RightHand",   20, (-0.255298, 0.007772, -0.005559)),        #21
+)
 
-# Ordered depth-first topology. Parent indices refer to this stable tuple.
-# The order is also the mapping-editor order: complete one leg, then the
-# trunk/head, then each arm. It is deliberately not a breadth-first list.
-CANONICAL_SOURCE_TOPOLOGY = (
-    ("Hips", -1),
-    ("LeftUpLeg", 0), ("LeftLeg", 1), ("LeftFoot", 2), ("LeftToe", 3),
-    ("RightUpLeg", 0), ("RightLeg", 5), ("RightFoot", 6), ("RightToe", 7),
-    ("Spine", 0), ("Spine1", 9), ("Spine2", 10),
-    ("Neck", 11), ("Head", 12),
-    ("LeftShoulder", 11), ("LeftArm", 14),
-    ("LeftForeArm", 15), ("LeftHand", 16),
-    ("RightShoulder", 11), ("RightArm", 18),
-    ("RightForeArm", 19), ("RightHand", 20),
+CANONICAL_SOURCE_TOPOLOGY = tuple(
+    (name, parent) for name, parent, _offset in CANONICAL_SOURCE_JOINTS
 )
 
 CANONICAL_SOURCE_ROOT_NAME = "Hips"
 SOURCE_ACTION_FPS_PROPERTY = "avacapo_source_fps"
-DEFAULT_SOURCE_ACTION_FPS = 30.0
+DEFAULT_SOURCE_ACTION_FPS = 30.0 #TODO: check
 
 
 def parent_name(parent_index: int) -> str | None:
@@ -34,11 +49,11 @@ def parent_name(parent_index: int) -> str | None:
 
 
 def canonical_source_hierarchy():
-    """Build the synthetic hierarchy used before loading a real Motion."""
+    """Build the complete canonical source hierarchy."""
     import broom
 
     joints = []
-    for name, parent in CANONICAL_SOURCE_TOPOLOGY:
+    for name, parent, offset in CANONICAL_SOURCE_JOINTS:
         channels = (
             (
                 "Xposition", "Yposition", "Zposition",
@@ -50,7 +65,8 @@ def canonical_source_hierarchy():
         joints.append(broom.Joint(
             name=name,
             parent=parent,
-            offset=(0.0, 1.0 if parent != -1 else 0.0, 0.0),
+            offset=offset,
             channels=channels,
+            local_orientation=(1.0, 0.0, 0.0, 0.0),
         ))
     return broom.Hierarchy(tuple(joints))

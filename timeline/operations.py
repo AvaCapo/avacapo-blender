@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 
 import bpy
 
+from ..animation import bvh_npz
 from ..common.logger import log
 from ..core import takes, tracks
 from ..core.generation_models import (
@@ -75,16 +76,27 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
             samples.append((following.start, last_target))
         if samples:
             from ..animation.constraint_utils import (
-                create_pose_constraint_npz_at_frames, pose_heading_at_frame,
-                rebase_constraint_payloads,
+                pose_heading_at_frame, rebase_constraint_payloads,
             )
-
+            from ..animation.retargeting.constraint_capture import (
+                raw_constraint_npz_from_canonical_motion,
+                user_pose_to_canonical_motion,
+            )
             if any(abs(frame - round(frame)) > 1e-4 for frame, _ in samples):
                 raise ValueError("Move manual pose keys to whole frames before generating a Take.")
             samples = sorted({(int(round(frame)), int(round(target)))
                               for frame, target in samples})
             joint_map = blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping)
             blender_retarget_service.current_retarget_build(armature, joint_map)
+            
+            #TODO: remove later after all debugging is done
+            from ..animation.retargeting.constraint_debug import (
+                DEBUG_SHOW_ARMATURE,
+                copy_user_key_armature,
+            )
+
+            if DEBUG_SHOW_ARMATURE:
+                copy_user_key_armature(scene, armature, working_action, working_slot)
             constraints = []
             # Sampling uses the actual Working Action, including evaluated IK.
             # The immutable byte payload is captured before the background job starts.
@@ -98,11 +110,14 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
                         bpy.context, armature, heading_frame, source_to_bone=joint_map,
                     )
                     for frame, target_frame in samples:
-                        payload, _ = create_pose_constraint_npz_at_frames(
-                            bpy.context, armature, [frame], source_to_bone=joint_map,
+                        _user_motion, canonical_motion = user_pose_to_canonical_motion(
+                            bpy.context, armature, [frame],
                         )
                         constraints.append(PoseConstraint(
-                            motion_file=payload, source_frame=0,
+                            motion_file=bvh_npz.create_npz_bytes(
+                                raw_constraint_npz_from_canonical_motion(canonical_motion),
+                            ),
+                            source_frame=0,
                             target_frame=target_frame,
                         ))
                 finally:
@@ -229,6 +244,11 @@ def cancel_generation() -> None:
 def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
                            root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)):
     """Retarget one source Motion and publish its Take only after it is usable."""
+    # TODO: remove after all debugging is done or intergrate into the UI
+    from ..animation.retargeting.constraint_debug import (
+        DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
+    )
+
     armature = _working_armature(track)
     if not isinstance(source_text, str) or not source_text:
         raise ValueError("Generated source text is missing.")
@@ -298,7 +318,15 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         take.take_slot_handle = int(slot.handle)
         take.source_motion_text = source_record
 
-        switch_take(track, clip, take.uid)
+        # TODO(debug-generated-only): enable this temporary debug mode to
+        # replace user keys with pure generated animation in the Clip window.
+        # switch_take(track, clip, take.uid)
+        switch_take(
+            track,
+            clip,
+            take.uid,
+            preserve_manual=not DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
+        )
         take.progress = 1.0
         return take
     except Exception:
@@ -309,7 +337,7 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         raise
 
 
-def switch_take(track, clip, take_uid, *, backup_working_area=False):
+def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_manual=True):
     """Make one immutable Take visible in the Working Action."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
@@ -336,7 +364,7 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False):
     actions.read_slot_curves(target_action, target_slot)
     if active_take is not None and active_take.take_action == target_action:
         raise ValueError("Different Takes cannot share one Take Action.")
-    if active_take is not None:
+    if active_take is not None and preserve_manual:
         active_action, active_slot = _take_binding(active_take)
         actions.manual_pose_frames(
             working_action, working_slot, clip.start, clip.end,
@@ -354,6 +382,7 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False):
         actions.materialize_take(
             working_action, working_slot, target_action, target_slot,
             clip.start, clip.end, target_take.offset,
+            preserve_manual=preserve_manual,
         )
     except Exception:
         if working_snapshot is not None:

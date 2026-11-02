@@ -34,7 +34,7 @@ def motion_from_avacapo_action(source_armature, action, scene):
         source_armature,
         source_to_bone,
     )
-    hierarchy = _canonical_hierarchy_from_armature(source_armature, source_from_armature)
+    hierarchy = canonical_hierarchy_from_armature(source_armature, source_from_armature)
     frame_start, frame_end = _integer_action_range(action)
     animation_data = source_armature.animation_data_create()
     previous_action = animation_data.action
@@ -68,7 +68,7 @@ def motion_from_avacapo_action(source_armature, action, scene):
     )
 
 
-def _canonical_hierarchy_from_armature(source_armature, source_from_armature):
+def canonical_hierarchy_from_armature(source_armature, source_from_armature):
     """Build the portable source hierarchy, not Blender's oriented bone rig."""
     import broom
 
