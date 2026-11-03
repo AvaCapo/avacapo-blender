@@ -27,6 +27,7 @@ def get_animation(
     in_place=False,
     cycled=False,
     seed=-1,
+    enhance_prompt: bool = True,
     *,
     api_token=None,
     fps=Config.DEFAULT_FPS,
@@ -55,6 +56,7 @@ def get_animation(
         "model": model or Config.DEFAULT_MODEL_TYPE,
         "cycled": cycled,
         "seed": secrets.randbelow(2**31 - 1) + 1 if seed == -1 else seed,
+        "enhance_prompt": enhance_prompt,
         "source": source
     }
     return jobs.generate_animation(
@@ -81,6 +83,7 @@ def get_animation_constraints(
     model="gen2",
     in_place=False,
     cycled=False,
+    enhance_prompt: bool = True,
     *,
     api_token=None,
     cancel_event=None,
@@ -136,6 +139,7 @@ def get_animation_constraints(
         "constraint_weight": constraint_weight, 
         "first_heading": first_heading, 
         "cycled": cycled,
+        "enhance_prompt": enhance_prompt,
         "source": source
     }
     token = Storage.api_token if api_token is None else api_token
