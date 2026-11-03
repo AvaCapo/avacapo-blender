@@ -1,6 +1,7 @@
 """Blender context helpers and temporary timeline UI state."""
 
 from dataclasses import dataclass, field
+from time import monotonic
 
 import bpy
 
@@ -50,6 +51,10 @@ class TimelineRuntimeState:
     hover: HoverTarget = field(default_factory=HoverTarget)
     menu_target: MenuTarget = field(default_factory=MenuTarget)
     clipboard: ClipboardClip | None = None
+    generation_cooldown_until: float = 0.0
+
+    def generation_ready(self):
+        return monotonic() >= self.generation_cooldown_until
 
     def set_clipboard(self, clipboard: ClipboardClip):
         if isinstance(self.clipboard, ClipboardClip):
@@ -57,6 +62,7 @@ class TimelineRuntimeState:
         self.clipboard = clipboard
 
     def reset(self):
+        self.generation_cooldown_until = 0.0
         self.hover = HoverTarget()
         self.menu_target = MenuTarget()
         if isinstance(self.clipboard, ClipboardClip):

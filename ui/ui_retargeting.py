@@ -504,7 +504,6 @@ _CLASSES = (
     AVACAPO_OT_retarget_source_action,
     AVACAPO_OT_retarget_again,
     AVACAPO_OT_refresh_retarget_status,
-    AVACAPO_PT_retarget_mapping,
 )
 
 

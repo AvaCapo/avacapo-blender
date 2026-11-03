@@ -14,11 +14,11 @@ class Palette:
 
 @dataclass
 class Style:
-    clip_height: float = 36.0
-    y_margin: float = 14.0
+    clip_height: float = 30.0
+    y_margin: float = 10.0
     handle_width: float = 15.0
     take_inset: float = 3.0
-    corner_radius: float = 10.0
+    corner_radius: float = 3.0
     clip_gap: float = 0.8
     chevron_size: float = 5.0
     chevron_width: float = 2.0
