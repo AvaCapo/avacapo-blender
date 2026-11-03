@@ -12,17 +12,6 @@ import bpy
 from ...timeline import actions
 
 
-# Hardcoded debug toggle. Move to UI only if this comparison remains useful.
-# The copied armature holds the user-authored, non-GENERATED keyframes captured
-# immediately before the request. The original armature receives the generated
-# Take, so both can be compared in the scene.
-DEBUG_SHOW_ARMATURE = True
-
-# DEBUG ONLY: replace user-authored keys with generated keys in the original
-# armature. The normal contract preserves user keys, so keep this disabled.
-DEBUG_REPLACE_USER_KEYS_WITH_GENERATED = False
-
-
 def copy_user_key_armature(scene, armature, working_action, working_slot):
     """Create an armature copy with an Action containing only user keys.
 

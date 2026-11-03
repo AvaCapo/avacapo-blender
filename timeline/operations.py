@@ -24,6 +24,16 @@ _generation_service = None
 _generation_service_token = ""
 _pending_generations = {}
 
+# Hardcoded debug toggle. Move to UI only if this comparison remains useful.
+# The copied armature holds the user-authored, non-GENERATED keyframes captured
+# immediately before the request. The original armature receives the generated Take,
+# so both can be compared in the scene.
+DEBUG_SHOW_ARMATURE = False
+
+# DEBUG ONLY: replace user-authored keys with generated keys in the original
+# armature. The normal contract preserves user keys, so keep this disabled.
+DEBUG_REPLACE_USER_KEYS_WITH_GENERATED = False
+
 
 @dataclass
 class _PendingGeneration:
@@ -90,12 +100,9 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
             blender_retarget_service.current_retarget_build(armature, joint_map)
             
             #TODO: remove later after all debugging is done
-            from ..animation.retargeting.constraint_debug import (
-                DEBUG_SHOW_ARMATURE,
-                copy_user_key_armature,
-            )
-
             if DEBUG_SHOW_ARMATURE:
+                from ..animation.retargeting.constraint_debug import copy_user_key_armature
+
                 copy_user_key_armature(scene, armature, working_action, working_slot)
             constraints = []
             # Sampling uses the actual Working Action, including evaluated IK.
@@ -245,10 +252,6 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
                            root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)):
     """Retarget one source Motion and publish its Take only after it is usable."""
     # TODO: remove after all debugging is done or intergrate into the UI
-    from ..animation.retargeting.constraint_debug import (
-        DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
-    )
-
     armature = _working_armature(track)
     if not isinstance(source_text, str) or not source_text:
         raise ValueError("Generated source text is missing.")
