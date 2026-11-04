@@ -48,6 +48,7 @@ class _PendingGeneration:
     scene_fps: float
     status: TaskStatus = TaskStatus.QUEUED
     root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    start_from_previous: bool = False
 
 
 def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_fps: float) -> str:
@@ -60,6 +61,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
     if not runtime.generation_ready():
         raise ValueError("Wait one second before generating another Take.")
     root_offset = (0.0, 0.0, 0.0)
+    start_from_previous = _can_align_previous_start(command.parameters)
     if isinstance(command.parameters, TextParameters):
         armature = _working_armature(track)
         working_action, working_slot = _working_binding(track, armature)
@@ -73,15 +75,17 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         # Store source and target separately: neighbour poses belong to other
         # Clips, but constrain the first or last frame of this request.
         samples = [(frame, frame - clip.start) for frame in frames]
+        start_from_previous = not any(target == 0 for _, target in samples)
         heading_frame = clip.start
         previous, following = tracks.neighbors(track.clips, clip.uid)
-        if not samples:
-            if (previous is not None and previous.end == clip.start
-                    and actions.has_pose_keys(
-                        working_action, working_slot, previous.start, previous.end,
-                    )):
-                heading_frame = previous.end - 1
-                samples = [(heading_frame, 0)]
+        # Interior constraints must not suppress continuity at the start.
+        if (previous is not None and previous.end == clip.start
+                and not any(target == 0 for _, target in samples)
+                and actions.has_pose_keys(
+                    working_action, working_slot, previous.start, previous.end,
+                )):
+            heading_frame = previous.end - 1
+            samples.append((heading_frame, 0))
         # Keep an authored ending pose (or the start pose of a one-frame Clip).
         last_target = clip.end - clip.start - 1
         if (following is not None and following.start == clip.end
@@ -172,6 +176,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         command=command,
         scene_fps=scene_fps,
         root_offset=root_offset,
+        start_from_previous=start_from_previous,
     )
     clip.show_takes = True
     runtime.generation_cooldown_until = monotonic() + 1.0
@@ -286,6 +291,7 @@ def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_
         source_text=bvh_bytes.decode("utf-8"),
         scene_fps=pending.scene_fps,
         root_offset=pending.root_offset,
+        start_from_previous=pending.start_from_previous,
         take_uid=pending.take_uid,
     )
 
@@ -313,7 +319,8 @@ def cancel_generation() -> None:
 
 def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
                            root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
-                           take_uid: int | None = None):
+                           take_uid: int | None = None,
+                           start_from_previous: bool | None = None):
     """Retarget one source Motion and publish its Take only after it is usable."""
     # TODO: remove after all debugging is done or intergrate into the UI
     armature = _working_armature(track)
@@ -360,6 +367,13 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         frame_start=0.0,
         frame_step=frame_step,
     )
+    if start_from_previous is None:
+        start_from_previous = _can_align_previous_start(command.parameters)
+    if start_from_previous:
+        prepared = _align_generated_start(
+            track, clip, armature, command, prepared, scene_fps,
+            root_bone_name=joint_map[source_motion.hierarchy.root_name],
+        )
 
     # Resolve this before creating any resource owned by the new Take.
     _working_binding(track, armature)
@@ -410,6 +424,62 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         _remove_if_unused(bpy.data.actions, action)
         _remove_if_unused(bpy.data.texts, source_record)
         raise
+
+
+def _can_align_previous_start(parameters):
+    if isinstance(parameters, TextParameters):
+        return True
+    if isinstance(parameters, ConstraintsParameters):
+        return not any(item.target_frame == 0 for item in parameters.constraints)
+    return False
+
+
+def _align_generated_start(track, clip, armature, command, prepared, scene_fps, *, root_bone_name):
+    """Use the current neighbour pose rather than trusting the server's first sample."""
+    previous, _ = tracks.neighbors(track.clips, clip.uid)
+    if previous is None or previous.end != clip.start:
+        return prepared
+    working_action, working_slot = _working_binding(track, armature)
+    if not actions.has_pose_keys(working_action, working_slot, previous.start, previous.end):
+        return prepared
+    active_take = takes.current_take(clip)
+    take_action, take_slot = (None, None) if active_take is None else _take_binding(active_take)
+    manual_frames = actions.manual_pose_frames(
+        working_action, working_slot, clip.start, clip.end,
+        take_action=take_action, take_slot=take_slot,
+        take_origin=clip.start + (active_take.offset if active_take is not None else 0),
+    )
+    # An explicit starting pose takes priority over automatic continuity.
+    if clip.start in manual_frames:
+        return prepared
+    later_constraints = [frame - clip.start for frame in manual_frames if frame > clip.start]
+    if isinstance(command.parameters, ConstraintsParameters):
+        later_constraints.extend(item.target_frame for item in command.parameters.constraints
+                                 if item.target_frame > 0)
+
+    scene = track.id_data
+    previous_frame, previous_subframe = scene.frame_current, scene.frame_subframe
+    animation_data = armature.animation_data
+    previous_action, previous_slot = animation_data.action, animation_data.action_slot
+    with bpy.context.temp_override(scene=scene, object=armature, active_object=armature):
+        try:
+            animation_data.action = working_action
+            animation_data.action_slot = working_slot
+            scene.frame_set(previous.end - 1)
+            bpy.context.view_layer.update()
+            start_pose = {curve.data_path: tuple(armature.path_resolve(curve.data_path))
+                          for curve in prepared.curves}
+        finally:
+            animation_data.action = previous_action
+            animation_data.action_slot = previous_slot
+            scene.frame_set(previous_frame, subframe=previous_subframe)
+            bpy.context.view_layer.update()
+    return blender_motion_writer.align_prepared_motion_start(
+        armature, prepared, start_pose,
+        root_bone_name=root_bone_name,
+        blend_frames=max(1, round(scene_fps * 0.25)),
+        next_constraint_frame=min(later_constraints, default=None),
+    )
 
 
 def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_manual=True):
