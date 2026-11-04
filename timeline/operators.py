@@ -14,6 +14,17 @@ from .runtime import runtime, tag_redraw
 from .track_style import STYLE
 
 
+def clip_name_from_prompt(prompt):
+    """Keep timeline labels short while preserving the full generation prompt."""
+    name = " ".join(prompt.split())
+    if len(name) <= 48:
+        return name
+    prefix = name[:45]
+    if " " in prefix:
+        prefix = prefix.rsplit(" ", 1)[0]
+    return prefix.rstrip() + "..."
+
+
 class _ClipOp:
     """Resolve a clip UID (0 means the selected clip) for Blender operators."""
     clip_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
@@ -76,9 +87,12 @@ class CLIPS_OT_create(Operator):
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
-        if operations.create_clip(track, self.frame, scene.clip_data.default_length) is None:
+        clip = operations.create_clip(track, self.frame, scene.clip_data.default_length)
+        if clip is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
+        clip.prompt = scene.clip_data.new_clip_prompt
+        clip.name = clip_name_from_prompt(clip.prompt) or clip.name
         tag_redraw()
         return {'FINISHED'}
 
@@ -142,6 +156,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
     bl_label = "Generate Take"
     bl_options = {'UNDO'}
     prompt: StringProperty(name="Prompt", options={'SKIP_SAVE'})
+    name_from_prompt: BoolProperty(options={'HIDDEN', 'SKIP_SAVE'})
     seed: IntProperty(name="Seed", min=-1, default=-1, options={'SKIP_SAVE'})
     model: EnumProperty(
         name="Model", description="Generation model", items=models.get_model_enum_items,
@@ -181,6 +196,8 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         if clip is None:
             return {'CANCELLED'}
         clip.prompt = self.prompt
+        if self.name_from_prompt:
+            clip.name = clip_name_from_prompt(self.prompt) or clip.name
         clip.seed = self.seed
         clip.generation_model = self.model
         clip.generation_temperature = self.temperature

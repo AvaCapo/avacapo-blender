@@ -533,11 +533,13 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
     return True
 
 
-def create_clip(track, frame, default_length):
+def create_clip(track, frame, default_length, *, stick_previous=False):
     """Create a Clip and apply automatic binding resizes to Working Actions."""
     initial = edit_track(track, tracks.snapshot)
     clip = edit_track(track, tracks.create_clip_at, frame, default_length)
     if clip is not None:
+        if stick_previous:
+            edit_track(track, tracks.stick_to_neighbors, clip.uid, 'PREV')
         _apply_resize_deltas(track, initial)
     return clip
 
