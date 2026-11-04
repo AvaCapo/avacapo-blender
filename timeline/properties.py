@@ -241,6 +241,7 @@ class CT_Clip(PropertyGroup):
     generation_in_place: BoolProperty(name="In Place")
     show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
     show_takes: BoolProperty(default=True, options={'HIDDEN'})
+    show_clip_settings: BoolProperty(default=True, options={'HIDDEN'})
 
     def _get_start(self):
         return self.get("_start", 0)
@@ -336,6 +337,9 @@ class CT_Scene(PropertyGroup):
         options={'SKIP_SAVE'},
     )
     tracks: CollectionProperty(type=CT_Track)
+    new_clip_prompt: StringProperty(
+        name="Prompt", description="Motion prompt for the new clip",
+    )
     default_length: IntProperty(
         name="Default Length", min=TimelineConfig.MIN_CLIP_LENGTH,
         default=TimelineConfig.DEFAULT_CLIP_LENGTH,

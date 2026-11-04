@@ -6,7 +6,7 @@ from ..timeline.generation_status import is_pending, STATUS_LABELS
 from bpy.types import Menu, Panel
 
 from ..animation.retargeting import blender_retarget_service
-from ..core import tracks
+from ..core import takes, tracks
 from ..core.generation_models import TaskStatus
 from ..core.storage import Storage
 from ..timeline.properties import find_track
@@ -165,9 +165,8 @@ class CLIPS_PT_panel(Panel):
 
         new_clip_box = layout.box()
         new_clip_box.label(text="New clip")
-        # TODO: prompt prop here, auto-name clip on creation
-        # ? clip_name_from_prompt(prompt:str) -> str
-        new_clip_box.prop(data, "default_length", text="duration")
+        new_clip_box.prop(data, "new_clip_prompt", text="Prompt")
+        new_clip_box.prop(data, "default_length", text="Duration (frames)")
         new_clip_box.operator("clips.create", text="New Clip at Current Frame",
                               icon='ADD').frame = scene.frame_current
 
@@ -238,14 +237,25 @@ class CLIPS_PT_panel(Panel):
                 if take.generation_error:
                     takes_box.label(text=take.generation_error, icon='ERROR')
             if len(clip.takes) > 0:
+                take = takes.current_take(clip)
+                if take is not None and take.take_action is not None:
+                    takes_box.prop(take, "offset", text="Take Offset (frames)")
                 takes_box.operator("clips.delete_takes").clip_uid = clip.uid
-                # if take is not None:
-                #     takes_box.prop(take, "offset")
             else:
                 takes_box.label(text="No Takes Yet, Generate Take")
 
         # Clip Props
         clip_prop_box = clip_col.box()
+        row = clip_prop_box.row()
+        row.prop(
+            clip,
+            "show_clip_settings",
+            text="Clip Settings",
+            emboss=False,
+            icon='TRIA_DOWN' if clip.show_clip_settings else 'TRIA_RIGHT',
+        )
+        if not clip.show_clip_settings:
+            return
         clip_prop_box.prop(clip, "name")
 
         col = clip_prop_box.column(align=True)

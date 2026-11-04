@@ -235,12 +235,17 @@ class CLIPS_OT_mouse(Operator):
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
-        clip = operations.create_clip(track, hit.frame, scene.clip_data.default_length)
+        clip = operations.create_clip(
+            track, hit.frame, scene.clip_data.default_length, stick_previous=True,
+        )
         if clip is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
         tag_redraw()
-        bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=clip.uid)
+        clip.prompt = scene.clip_data.new_clip_prompt
+        bpy.ops.clips.edit_prompt(
+            'INVOKE_DEFAULT', clip_uid=clip.uid, name_from_prompt=True,
+        )
         return {'FINISHED'}
 
     def _begin_drag(self, context, event, track, hit, view):
