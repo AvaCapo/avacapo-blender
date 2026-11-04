@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import bpy
 import bpy.utils
 import bpy_extras.anim_utils
-from mathutils import Euler, Matrix, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 @dataclass(frozen=True)
 class _PreparedCurve:
@@ -117,6 +117,79 @@ def apply_prepared_motion(
     _write_prepared_curves(channelbag, prepared, keyframe_type=keyframe_type)
     if assign_to_skeleton:
         assign_action(skeleton, action, action_slot)
+
+
+def align_prepared_motion_start(
+    skeleton,
+    prepared,
+    start_pose,
+    *,
+    root_bone_name,
+    blend_frames,
+    next_constraint_frame=None,
+):
+    """Match the actual preceding Blender pose, after all retarget conversions.
+
+    Keep the root displacement for the remaining trajectory. If a later pose
+    is constrained, release that displacement by its frame instead. Other
+    pose differences fade over a short interval without crossing a constraint.
+    Rotations blend as quaternions, including rigs using Euler channels.
+    """
+    if not prepared.frame_times:
+        return prepared
+    pose_end = max(1.0, float(blend_frames))
+    if next_constraint_frame is not None:
+        if next_constraint_frame <= 0:
+            raise ValueError("The next constraint must follow the starting frame.")
+        pose_end = min(pose_end, float(next_constraint_frame))
+    root_path = skeleton.pose.bones[root_bone_name].path_from_id("location")
+
+    def weight(frame, end):
+        if end is None:
+            return 1.0
+        t = min(1.0, max(0.0, frame / end))
+        return 1.0 - t * t * (3.0 - 2.0 * t)
+
+    curves = []
+    for curve in prepared.curves:
+        anchor = start_pose[curve.data_path]
+        samples = []
+        if curve.data_path.endswith((".rotation_euler", ".rotation_quaternion")):
+            bone = skeleton.pose.bones[curve.group_name]
+            quaternion = curve.data_path.endswith(".rotation_quaternion")
+            order = bone.rotation_mode if bone.rotation_mode in {
+                "XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX",
+            } else "XYZ"
+
+            def rotation(value):
+                return (Quaternion(value).normalized() if quaternion
+                        else Euler(value, order).to_quaternion())
+
+            correction = rotation(anchor) @ rotation(curve.samples[0]).inverted()
+            identity = Quaternion((1.0, 0.0, 0.0, 0.0))
+            previous = Quaternion(anchor) if quaternion else Euler(anchor, order)
+            for index, (frame, sample) in enumerate(zip(prepared.frame_times, curve.samples)):
+                if index == 0:
+                    samples.append(tuple(anchor))
+                    continue
+                amount = weight(frame - prepared.frame_times[0], pose_end)
+                corrected = identity.slerp(correction, amount) @ rotation(sample)
+                if quaternion:
+                    if corrected.dot(previous) < 0:
+                        corrected.negate()
+                    previous = corrected
+                else:
+                    previous = corrected.to_euler(order, previous)
+                samples.append(tuple(previous))
+        else:
+            end = next_constraint_frame if curve.data_path == root_path else pose_end
+            delta = tuple(a - b for a, b in zip(anchor, curve.samples[0]))
+            for frame, sample in zip(prepared.frame_times, curve.samples):
+                amount = weight(frame - prepared.frame_times[0], end)
+                samples.append(tuple(value + offset * amount for value, offset in zip(sample, delta)))
+            samples[0] = tuple(anchor)
+        curves.append(replace(curve, samples=tuple(samples)))
+    return replace(prepared, curves=tuple(curves))
 
 
 def replace_action_slot_from_staging(
