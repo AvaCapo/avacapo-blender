@@ -4,6 +4,8 @@ It provides the constraint-generation boundary:
     evaluated user pose -> canonical AvaCapo Motion -> raw NPZ
 """
 
+import numpy as np
+
 from .. import bvh_npz, constraint_utils
 from . import blender_pose_adapter, blender_retarget_service, canonical_source, workflow
 
@@ -55,4 +57,7 @@ def user_pose_to_canonical_motion(context, armature, frames):
 
 def raw_constraint_npz_from_canonical_motion(canonical_motion):
     """Convert canonical Motion to NPZ arrays without rig-specific offsets."""
-    return bvh_npz.convert_motion_npz(canonical_motion)
+    result = bvh_npz.convert_motion_npz(canonical_motion)
+    # The canonical root has zero rest offset: trans is its absolute position.
+    result["avacapo_trans_is_root_position"] = np.asarray(True)
+    return result

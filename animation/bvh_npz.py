@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from io import BytesIO
 from operator import index
 from threading import RLock
 
@@ -214,6 +215,11 @@ def convert_motion_npz(
 
 def create_npz_bytes(result: Mapping[str, np.ndarray]) -> bytes:
     """Serialize arrays as compressed NPZ bytes using Broom."""
+    # Broom only serializes standard body-model fields and drops our root flag.
+    if "avacapo_trans_is_root_position" in result:
+        with BytesIO() as buffer:
+            np.savez_compressed(buffer, **result)
+            return buffer.getvalue()
     return serialize_ndarray_npz(result)
 
 
