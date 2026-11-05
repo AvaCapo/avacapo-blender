@@ -243,7 +243,7 @@ class CT_Clip(PropertyGroup):
     generation_enhance_prompt: BoolProperty(name="Enhance Prompt", default=True)
     show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
     show_takes: BoolProperty(default=True, options={'HIDDEN'})
-    show_clip_settings: BoolProperty(default=True, options={'HIDDEN'})
+    show_clip_settings: BoolProperty(default=False, options={'HIDDEN'})
 
     def _get_start(self):
         return self.get("_start", 0)

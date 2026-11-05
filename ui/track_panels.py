@@ -182,7 +182,6 @@ class CLIPS_PT_panel(Panel):
 
         generation_box = clip_col.box()
         generation_box.label(text="Current Clip:")
-        generation_box.prop(clip, "prompt", text="")
         generation_box.operator(
             "clips.new_take", text="Generate Take", icon='SHADERFX',
         ).clip_uid = clip.uid
@@ -196,13 +195,14 @@ class CLIPS_PT_panel(Panel):
         )
         if clip.show_advanced_generation:
             col = generation_box.column()
+            col.prop(clip, "prompt")
             col.prop(clip, "generation_model")
             col.prop(clip, "seed")
             col.prop(clip, "generation_temperature")
             row = col.row(align=True)
             row.prop(clip, "generation_cycled")
             row.prop(clip, "generation_in_place")
-            row.prop(clip, "generation_enhance_prompt")
+            col.prop(clip, "generation_enhance_prompt")
 
         # Takes
         takes_box = clip_col.box()
@@ -238,9 +238,6 @@ class CLIPS_PT_panel(Panel):
                 if take.generation_error:
                     takes_box.label(text=take.generation_error, icon='ERROR')
             if len(clip.takes) > 0:
-                take = takes.current_take(clip)
-                if take is not None and take.take_action is not None:
-                    takes_box.prop(take, "offset", text="Take Offset (frames)")
                 takes_box.operator("clips.delete_takes").clip_uid = clip.uid
             else:
                 takes_box.label(text="No Takes Yet, Generate Take")
@@ -273,6 +270,10 @@ class CLIPS_PT_panel(Panel):
         row.prop(clip, "bind_end", text="", toggle=True,
                  icon='LINKED' if clip.bind_end else 'UNLINKED')
         col.prop(clip, "duration")
+
+        take = takes.current_take(clip)
+        if take is not None and take.take_action is not None:
+            clip_prop_box.prop(take, "offset", text="Take Offset (frames)")
 
         clip_prop_box.operator("clips.delete_clip",
                                icon='TRASH').clip_uid = clip.uid

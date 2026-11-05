@@ -69,12 +69,16 @@ class _ClipOp:
         return True
 
 
-class CLIPS_OT_create(Operator):
-    """Create a clip: default length, shortened to fit before the next clip"""
+class CLIPS_OT_create(_ClipOp, Operator):
+    """Create a clip and generate its first Take from the new clip prompt"""
     bl_idname = "clips.create"
     bl_label = "Create Clip"
     bl_options = {'UNDO'}
     frame: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.clip_data.new_clip_prompt.strip()) and runtime.generation_ready()
 
     def execute(self, context):
         scene = context.scene
@@ -94,6 +98,7 @@ class CLIPS_OT_create(Operator):
             return {'CANCELLED'}
         clip.prompt = scene.clip_data.new_clip_prompt
         clip.name = clip_name_from_prompt(clip.prompt) or clip.name
+        self._generate_take(context, track, clip)
         tag_redraw()
         return {'FINISHED'}
 
