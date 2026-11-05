@@ -2,7 +2,7 @@ import os
 
 
 class Config:
-    """Configuration for the Avacapo addon."""
+    """Configuration for the AvaCapo addon."""
 
     ADDON_NAME = "avacapo"
     ADDON_DIR = os.path.dirname(os.path.abspath(__file__))

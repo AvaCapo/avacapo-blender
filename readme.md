@@ -55,7 +55,7 @@ must stay at the top level.
 
 ## Quick Start
 
-1. Open Blender and go to `3D View -> Sidebar -> Avacapo`.
+1. Open Blender and go to `3D View -> Sidebar -> AvaCapo`.
 2. Connect with `Login via Browser`, or paste an API token manually.
 3. Select a compatible armature.
 4. If you do not have one yet, click `New Armature` to append the bundled rig.
@@ -94,7 +94,7 @@ This means you can:
 
 ## Panel Overview
 
-The main panel lives in `3D View -> Sidebar -> Avacapo`.
+The main panel lives in `3D View -> Sidebar -> AvaCapo`.
 
 ### Connection
 

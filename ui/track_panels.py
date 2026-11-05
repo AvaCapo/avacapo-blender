@@ -98,10 +98,10 @@ class CLIPS_MT_clip(Menu):
 # the main and only panel
 class CLIPS_PT_panel(Panel):
     bl_idname = "CLIPS_PT_panel"
-    bl_label = "Avacapo"
+    bl_label = "AvaCapo"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Avacapo"
+    bl_category = "AvaCapo"
 
     def draw(self, context):
         layout = self.layout
