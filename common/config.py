@@ -33,7 +33,7 @@ class Config:
     AVACAPO_RIG_NAME = "avacapo_bvh_v1"
 
     DEFAULT_MODEL_TYPE = "gen2"
-    DEFAULT_MODELS = ["gen2", "asm", "gen1"]
+    DEFAULT_MODELS = ["gen2", "asm", "kimodo"]
     DEFAULT_MODEL_DETAILS = {
         "gen2": {
             "name": "Advanced",
@@ -43,6 +43,10 @@ class Config:
             "name": "Constructor",
             "description": "Motion construction from a high-quality animation database.",
         },
+        "kimodo": {
+            "name": "Kimodo",
+            "description": "Motion generation powered by NVIDIA's model.",
+        }
     }
     REQUEST_TIMEOUT = 120
     POLL_INTERVAL = 3

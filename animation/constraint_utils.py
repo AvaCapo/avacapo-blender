@@ -47,7 +47,7 @@ OBJECT_TARGET_ITEMS = tuple(
 )
 
 # Blender's IK target is placed on the parent bone whose tail is the wrist or
-# ankle represented by Kimodo's end-effector joint.
+# ankle represented by neural networks end-effector joint.
 _OBJECT_TARGET_IK_CHAINS = {
     "LeftHand": ("LeftForeArm", 2),
     "RightHand": ("RightForeArm", 2),
@@ -380,13 +380,13 @@ def rebase_constraint_payloads(payloads: Iterable[bytes]) -> tuple[list[bytes], 
             data = {name: arrays[name] for name in arrays.files}
         if origin is None:
             origin = data["trans"][0].copy()
-            # AMASS is Z-up; the standalone Y-up export keeps Y as height.
+            # Target is Z-up; the standalone Y-up export keeps Y as height.
             origin[1 if bvh_npz.config.KEEP_Y_UP else 2] = 0.0
         data["trans"] = data["trans"] - origin
         rebased.append(bvh_npz.create_npz_bytes(data))
     if origin is None:
         return rebased, (0.0, 0.0, 0.0)
-    canonical = origin if bvh_npz.config.KEEP_Y_UP else origin @ bvh_npz.Y_UP_TO_AMASS_Z_UP
+    canonical = origin if bvh_npz.config.KEEP_Y_UP else origin @ bvh_npz.Y_UP_TO_Z_UP
     return rebased, tuple(float(value) for value in canonical)
 
 
