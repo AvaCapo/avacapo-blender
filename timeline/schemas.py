@@ -12,6 +12,7 @@ class TakeData:
     generation_name: str
     generation_model: str
     generation_in_place: bool
+    generation_enhance_prompt: bool
     duration_seconds: float
     fps: float
     temperature: float
@@ -41,6 +42,7 @@ class ClipData:
     generation_temperature: float
     generation_cycled: bool
     generation_in_place: bool
+    generation_enhance_prompt: bool
     active_take_uid: int
     takes: tuple[TakeData, ...]
 

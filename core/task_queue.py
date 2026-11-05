@@ -182,6 +182,8 @@ class GenerationQueue:
             GenerationMode.CONSTRAINTS: client.get_animation_constraints,
             GenerationMode.INBETWEEN: client.get_animation_inbetween,
         }[command.mode]
+        if command.mode != GenerationMode.INBETWEEN:
+            parameters["enhance_prompt"] = command.enhance_prompt
         return generate(
             name=command.name, prompt=command.prompt, model=command.model,
             in_place=command.in_place, api_token=api_token,

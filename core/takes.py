@@ -59,6 +59,7 @@ def delete_takes(store, clip) -> None:
     clip.generation_temperature = Config.DEFAULT_TEMPERATURE
     clip.generation_cycled = False
     clip.generation_in_place = False
+    clip.generation_enhance_prompt = True
 
 
 def remove_take(store, clip, take_uid: int) -> bool:
@@ -82,7 +83,7 @@ def restore_take(store, clip, payload: TakeData):
     take.name = payload.name
     for field in (
         "prompt", "generation_mode", "generation_name", "generation_model",
-        "generation_in_place", "duration_seconds", "fps", "temperature", "cycled",
+        "generation_in_place", "generation_enhance_prompt", "duration_seconds", "fps", "temperature", "cycled",
         "seed", "left_frame", "right_frame", "left_context_frames",
         "right_context_frames", "gap_frames", "end_offset_x", "end_offset_z",
         "align_heading", "length", "constraint_frames",
@@ -103,6 +104,7 @@ def _set_generation_request(take, command: GenerationCommand) -> None:
     take.generation_name = command.name
     take.generation_model = command.model
     take.generation_in_place = command.in_place
+    take.generation_enhance_prompt = command.enhance_prompt
     if isinstance(command.parameters, TextParameters):
         parameters = command.parameters
         take.duration_seconds = parameters.duration

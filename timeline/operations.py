@@ -556,6 +556,7 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_ma
     clip.generation_temperature = target_take.temperature
     clip.generation_cycled = target_take.cycled
     clip.generation_in_place = target_take.generation_in_place
+    clip.generation_enhance_prompt = target_take.generation_enhance_prompt
     return target_take
 
 

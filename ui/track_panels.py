@@ -202,6 +202,7 @@ class CLIPS_PT_panel(Panel):
             row = col.row(align=True)
             row.prop(clip, "generation_cycled")
             row.prop(clip, "generation_in_place")
+            row.prop(clip, "generation_enhance_prompt")
 
         # Takes
         takes_box = clip_col.box()

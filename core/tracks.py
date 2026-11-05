@@ -194,6 +194,7 @@ def serialize_clip(clip) -> ClipData:
         generation_temperature=clip.generation_temperature,
         generation_cycled=clip.generation_cycled,
         generation_in_place=clip.generation_in_place,
+        generation_enhance_prompt=clip.generation_enhance_prompt,
         active_take_uid=clip.active_take_uid,
         takes=tuple(
             TakeData(
@@ -204,6 +205,7 @@ def serialize_clip(clip) -> ClipData:
                 generation_name=take.generation_name,
                 generation_model=take.generation_model,
                 generation_in_place=take.generation_in_place,
+                generation_enhance_prompt=take.generation_enhance_prompt,
                 duration_seconds=take.duration_seconds,
                 fps=take.fps,
                 temperature=take.temperature,
@@ -235,6 +237,7 @@ def restore_clip(store, payload: ClipData, start: int):
     clip.generation_temperature = payload.generation_temperature
     clip.generation_cycled = payload.generation_cycled
     clip.generation_in_place = payload.generation_in_place
+    clip.generation_enhance_prompt = payload.generation_enhance_prompt
     for take_payload in payload.takes:
         takes.restore_take(store, clip, take_payload)
     if payload.active_take_uid:

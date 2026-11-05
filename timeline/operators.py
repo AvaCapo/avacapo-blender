@@ -45,6 +45,7 @@ class _ClipOp:
                 prompt=clip.prompt,
                 model=clip.generation_model,
                 in_place=clip.generation_in_place,
+                enhance_prompt=clip.generation_enhance_prompt,
                 parameters=TextParameters(
                     duration=(clip.end - clip.start) / Config.DEFAULT_FPS,
                     fps=Config.DEFAULT_FPS,
@@ -165,6 +166,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
     temperature: FloatProperty(name="Temperature", min=0.001, options={'SKIP_SAVE'})
     cycled: BoolProperty(name="Cycled", options={'SKIP_SAVE'})
     in_place: BoolProperty(name="In Place", options={'SKIP_SAVE'})
+    enhance_prompt: BoolProperty(name="Enhance Prompt", default=True, options={'SKIP_SAVE'})
 
     def invoke(self, context, event):
         _, clip = self._get_clip(context)
@@ -176,6 +178,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         self.temperature = clip.generation_temperature
         self.cycled = clip.generation_cycled
         self.in_place = clip.generation_in_place
+        self.enhance_prompt = clip.generation_enhance_prompt
         return context.window_manager.invoke_props_dialog(self, width=STYLE.prompt_dialog_width)
 
     def draw(self, context):
@@ -190,6 +193,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         row = col.row(align=True)
         row.prop(self, "cycled")
         row.prop(self, "in_place")
+        row.prop(self, "enhance_prompt")
 
     def execute(self, context):
         track, clip = self._get_clip(context)
@@ -203,11 +207,13 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         clip.generation_temperature = self.temperature
         clip.generation_cycled = self.cycled
         clip.generation_in_place = self.in_place
+        clip.generation_enhance_prompt = self.enhance_prompt
         if not self._generate_take(
             context, track, clip,
             command=GenerationCommand(
                 prompt=self.prompt, model=self.model,
                 in_place=self.in_place,
+                enhance_prompt=self.enhance_prompt,
                 parameters=TextParameters(
                     # TODO(postprocess-fps): keep the model request at the configured
                     # 24 FPS. Scene FPS is for later local post-processing, not this request.

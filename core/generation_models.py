@@ -89,6 +89,7 @@ class GenerationCommand:
     model: str = Config.DEFAULT_MODEL_TYPE
     name: str = ""
     in_place: bool = False
+    enhance_prompt: bool = True
 
     @property
     def mode(self) -> GenerationMode:
