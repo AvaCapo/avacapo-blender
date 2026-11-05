@@ -113,11 +113,11 @@ class AVACAPO_OT_clear_retarget_mapping(bpy.types.Operator):
 
 
 class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
-    """DEBUG ONLY: add the bundled AvaCapo reference fixture to this scene."""
+    """Add the bundled AvaCapo reference fixture to this scene."""
 
     bl_idname = "avacapo.append_avacapo_reference_armature"
-    bl_label = "DEBUG ONLY: Add AvaCapo Reference Rig"
-    bl_description = "DEBUG ONLY: append the bundled AvaCapo armature and select it as target"
+    bl_label = "Add the AvaCapo armature"
+    bl_description = "Add the AvaCapo armature and select it as target"
 
     def execute(self, context):
         try:
@@ -398,8 +398,6 @@ def draw_retarget_mapping(layout, context):
         layout.label(text="Retarget properties are unavailable; re-enable the extension.", icon="ERROR")
         return
     layout.prop(scene, "avacapo_retarget_target", text="Target Armature")
-    # DEBUG ONLY: fixture setup for strict direct-compatibility checks.
-    layout.operator("avacapo.append_avacapo_reference_armature", icon="ARMATURE_DATA")
     armature = scene.avacapo_retarget_target
     if armature is None:
         layout.label(text="Choose a custom armature to create a draft.", icon="INFO")
@@ -439,10 +437,11 @@ def draw_retarget_mapping(layout, context):
     actions = layout.row(align=True)
     actions.enabled = blender_retarget_service.can_confirm_mapping(armature)
     actions.operator("avacapo.confirm_retarget_mapping", icon="CHECKMARK")
-    test_action = layout.row()
-    test_action.enabled = blender_retarget_service.is_valid_mapping(armature)
-    test_action.operator("avacapo.retarget_test_bvh", icon="PLAY")
-    # _draw_source_action_retarget(layout, scene, armature) # uncomment for debug
+    # uncomment for debug or move to another function
+    # test_action = layout.row()
+    # test_action.enabled = blender_retarget_service.is_valid_mapping(armature)
+    # test_action.operator("avacapo.retarget_test_bvh", icon="PLAY")
+    # _draw_source_action_retarget(layout, scene, armature)
 
 
 def _visible_mapping_errors(errors, confirmed):
@@ -570,7 +569,7 @@ _CLASSES = (
     AVACAPO_RetargetMappingState,
     AVACAPO_OT_suggest_retarget_mapping,
     AVACAPO_OT_clear_retarget_mapping,
-    # AVACAPO_OT_append_avacapo_reference_armature, # uncomment for debug
+    AVACAPO_OT_append_avacapo_reference_armature,
     AVACAPO_OT_confirm_retarget_mapping,
     # AVACAPO_OT_retarget_test_bvh, # uncomment for debug
     AVACAPO_OT_retarget_source_action,
