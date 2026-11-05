@@ -30,8 +30,8 @@ config = Config()
 
 NPZ_BVH_JOINT_NAMES = tuple(source for _, source, _ in NPZ_BVH_MAP)
 
-# Source BVH: Y-up and +Z forward. Target AMASS: Z-up and +Y forward.
-Y_UP_TO_AMASS_Z_UP = np.array(
+# Source BVH: Y-up and +Z forward. Target: Z-up and +Y forward.
+Y_UP_TO_Z_UP = np.array(
     [
         [-1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0],
@@ -188,7 +188,7 @@ def convert_motion_npz(
         body_to_source=mapping,
         source_global_rotation_offsets=source_global_rotation_offsets,
         root_translation_scale=root_scale,
-        coordinate_transform=None if keep_y_up else Y_UP_TO_AMASS_Z_UP,
+        coordinate_transform=None if keep_y_up else Y_UP_TO_Z_UP,
         target_fps=target_fps,
         betas=None,
         hand_pose=None,
