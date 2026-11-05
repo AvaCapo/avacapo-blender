@@ -37,6 +37,10 @@ DEBUG_SHOW_ARMATURE = False
 # armature. The normal contract preserves user keys, so keep this disabled.
 DEBUG_REPLACE_USER_KEYS_WITH_GENERATED = False
 
+# Switch for comparing ordinary mapped retargeting with SpaceTime refinement.
+# TODO: move to UI
+USE_SPACETIME_REFINEMENT = True
+
 
 @dataclass
 class _PendingGeneration:
@@ -322,7 +326,6 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
                            take_uid: int | None = None,
                            start_from_previous: bool | None = None):
     """Retarget one source Motion and publish its Take only after it is usable."""
-    # TODO: remove after all debugging is done or intergrate into the UI
     armature = _working_armature(track)
     if not isinstance(source_text, str) or not source_text:
         raise ValueError("Generated source text is missing.")
@@ -360,6 +363,13 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
     )
     retargeted_motion = workflow.retarget_mapped_motion(source_motion, target, joint_map)
+    if USE_SPACETIME_REFINEMENT:
+        retargeted_motion, _constraints = workflow.refine_motion_spacetime(
+            source_motion,
+            retargeted_motion, # used as an initial guess
+            joint_map,
+            settings=workflow.SpaceTimeSettings(), # Default setting, TODO: move to UI if necessary
+        )
     prepared = blender_motion_writer.prepare_retargeted_motion(
         armature,
         retargeted_motion,

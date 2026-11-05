@@ -15,6 +15,7 @@ from ..animation.retargeting import (
     blender_source_adapter,
     canonical_source,
     mapping,
+    # spacetime_debug, # Spacetime retarget UI is disabled.
     workflow,
 )
 from ..animation.retargeting.debug import reference_rig
@@ -228,6 +229,41 @@ class AVACAPO_OT_retarget_source_action(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AVACAPO_OT_retarget_source_action_spacetime(bpy.types.Operator):
+    """Create a separate debug Action after a post-retarget space-time solve."""
+
+    bl_idname = "avacapo.retarget_source_action_spacetime"
+    bl_label = "Run Space-Time Retarget"
+    bl_description = "Create a new Action with post-retarget space-time constraints"
+
+    def execute(self, context):
+        scene = context.scene
+        armature = scene.avacapo_retarget_target
+        try:
+            action, constraints = spacetime_debug.create_debug_action(
+                context,
+                scene.avacapo_retarget_source_armature,
+                scene.avacapo_retarget_source_action,
+                armature,
+                workflow.SpaceTimeSettings(
+                    pose_weight=scene.avacapo_spacetime_pose_weight,
+                    foot_height_weight=scene.avacapo_spacetime_foot_height_weight,
+                    foot_stationary_weight=scene.avacapo_spacetime_foot_stationary_weight,
+                    floor_weight=scene.avacapo_spacetime_floor_weight,
+                    control_point_spacing=scene.avacapo_spacetime_control_point_spacing,
+                    control_weight=scene.avacapo_spacetime_control_weight,
+                    constraint_tolerance=scene.avacapo_spacetime_constraint_tolerance,
+                    max_nfev=scene.avacapo_spacetime_max_nfev,
+                ),
+            )
+            context.view_layer.update()
+        except (OSError, RuntimeError, ValueError) as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Created action {action.name!r} ({len(constraints)} constraints).")
+        return {"FINISHED"}
+
+
 class AVACAPO_OT_retarget_again(bpy.types.Operator):
     """Overwrite the active retargeted Action using the current target armature."""
 
@@ -308,6 +344,41 @@ class AVACAPO_PT_retarget_mapping(bpy.types.Panel):
 
     def draw(self, context):
         draw_retarget_mapping(self.layout, context)
+
+
+class AVACAPO_PT_spacetime_retarget(bpy.types.Panel):
+    bl_idname = "AVACAPO_PT_spacetime_retarget"
+    bl_label = "Space-Time Retarget"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "AvaCapo Retarget"
+
+    def draw(self, context):
+        scene = context.scene
+        layout = self.layout
+        layout.label(text="Debug workflow: creates a separate Action", icon="INFO")
+        layout.prop(scene, "avacapo_retarget_target", text="Target Armature")
+        layout.prop(scene, "avacapo_retarget_source_armature", text="Source Armature")
+        layout.prop(scene, "avacapo_retarget_source_action", text="Source Action")
+        layout.separator()
+        layout.label(text="Constraint Weights")
+        layout.prop(scene, "avacapo_spacetime_pose_weight", text="Pose")
+        layout.prop(scene, "avacapo_spacetime_foot_height_weight", text="Foot Height")
+        layout.prop(scene, "avacapo_spacetime_foot_stationary_weight", text="Foot Stationary")
+        layout.prop(scene, "avacapo_spacetime_floor_weight", text="Floor")
+        layout.separator()
+        layout.label(text="Solver")
+        layout.prop(scene, "avacapo_spacetime_control_point_spacing")
+        layout.prop(scene, "avacapo_spacetime_control_weight")
+        layout.prop(scene, "avacapo_spacetime_constraint_tolerance")
+        layout.prop(scene, "avacapo_spacetime_max_nfev")
+        row = layout.row()
+        row.enabled = (
+            scene.avacapo_retarget_target is not None
+            and scene.avacapo_retarget_source_armature is not None
+            and scene.avacapo_retarget_source_action is not None
+        )
+        row.operator("avacapo.retarget_source_action_spacetime", icon="PLAY")
 
 
 def draw_retarget_mapping(layout, context):
@@ -502,8 +573,11 @@ _CLASSES = (
     AVACAPO_OT_confirm_retarget_mapping,
     AVACAPO_OT_retarget_test_bvh,
     AVACAPO_OT_retarget_source_action,
+    # Debug Space-Time retarget UI is temporarily disabled.
+    # AVACAPO_OT_retarget_source_action_spacetime,
     AVACAPO_OT_retarget_again,
     AVACAPO_OT_refresh_retarget_status,
+    # AVACAPO_PT_spacetime_retarget,
 )
 
 
@@ -531,6 +605,30 @@ def register():
         bpy.types.Scene.avacapo_retarget_source_action = bpy.props.PointerProperty(
             type=bpy.types.Action,
         )
+        bpy.types.Scene.avacapo_spacetime_pose_weight = bpy.props.FloatProperty(
+            name="Pose Weight", default=1.0, min=0.0,
+        )
+        bpy.types.Scene.avacapo_spacetime_foot_height_weight = bpy.props.FloatProperty(
+            name="Foot Height Weight", default=1.0, min=0.0,
+        )
+        bpy.types.Scene.avacapo_spacetime_foot_stationary_weight = bpy.props.FloatProperty(
+            name="Foot Stationary Weight", default=1.0, min=0.0,
+        )
+        bpy.types.Scene.avacapo_spacetime_floor_weight = bpy.props.FloatProperty(
+            name="Floor Weight", default=1.0, min=0.0,
+        )
+        bpy.types.Scene.avacapo_spacetime_control_point_spacing = bpy.props.IntProperty(
+            name="Control Point Spacing", default=4, min=1,
+        )
+        bpy.types.Scene.avacapo_spacetime_control_weight = bpy.props.FloatProperty(
+            name="Control Weight", default=1.0e-3, min=0.0,
+        )
+        bpy.types.Scene.avacapo_spacetime_constraint_tolerance = bpy.props.FloatProperty(
+            name="Constraint Tolerance", default=0.01, min=1.0e-6,
+        )
+        bpy.types.Scene.avacapo_spacetime_max_nfev = bpy.props.IntProperty(
+            name="Max Solver Iterations", default=60, min=1,
+        )
     except Exception:
         unregister()
         raise
@@ -546,6 +644,18 @@ def unregister():
         _unregister_class_if_needed(cls)
     if hasattr(bpy.types.Scene, "avacapo_retarget_source_action"):
         del bpy.types.Scene.avacapo_retarget_source_action
+    for name in (
+        "avacapo_spacetime_pose_weight",
+        "avacapo_spacetime_foot_height_weight",
+        "avacapo_spacetime_foot_stationary_weight",
+        "avacapo_spacetime_floor_weight",
+        "avacapo_spacetime_control_point_spacing",
+        "avacapo_spacetime_control_weight",
+        "avacapo_spacetime_constraint_tolerance",
+        "avacapo_spacetime_max_nfev",
+    ):
+        if hasattr(bpy.types.Scene, name):
+            delattr(bpy.types.Scene, name)
     if hasattr(bpy.types.Scene, "avacapo_retarget_source_armature"):
         del bpy.types.Scene.avacapo_retarget_source_armature
     if hasattr(bpy.types.Scene, "avacapo_retarget_target"):

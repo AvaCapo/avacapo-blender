@@ -3,13 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import replace, dataclass
 from pathlib import Path
 
 from . import mapping
 
 from broom.ops.motion_editing import repeat_pose, trim_frames
 from broom.ops.resample import resample_fps
+from broom.retargeting import solve_motion_spacetime
+
+from . import spacetime_constraints
+
+@dataclass(frozen=True)
+class SpaceTimeSettings:
+    pose_weight: float = 1.0
+    foot_height_weight: float = 1.0
+    foot_stationary_weight: float = 1.0
+    floor_weight: float = 1.0
+    control_point_spacing: int = 4
+    control_weight: float = 1.0e-3
+    constraint_tolerance: float = 0.01
+    max_nfev: int = 60
 
 def load_bvh_motion(path) -> object:
     """Load an external BVH into a portable ``Motion`` representation."""
@@ -107,3 +121,58 @@ def retarget_mapped_motion(
         source_root_height=source_root_height,
         target_mapped_root_height=target_root_height,
     )
+
+
+def refine_motion_spacetime(
+    source_motion,
+    initial_motion,
+    joint_map,
+    *,
+    pose_constraints=(),
+    contact_frames=None,
+    settings: SpaceTimeSettings,
+):
+    """Refine an already retargeted Motion with space-time constraints."""
+    if source_motion.frame_count != initial_motion.frame_count:
+        raise ValueError("Source Motion and target initial guess must have equal frame counts.")
+    if initial_motion.frame_count < 2:
+        return initial_motion, ()
+
+    constraints = [
+        *_weighted_constraints(pose_constraints, settings),
+        *_weighted_constraints(
+            spacetime_constraints.foot_constraints_from_motion(
+                source_motion,
+                initial_motion,
+                joint_map,
+                contact_frames=contact_frames,
+            ),
+            settings,
+        ),
+    ]
+    if not constraints:
+        return initial_motion, ()
+    result = solve_motion_spacetime(
+        initial_motion,
+        constraints,
+        control_point_spacing=settings.control_point_spacing,
+        control_weight=settings.control_weight,
+        constraint_tolerance=settings.constraint_tolerance,
+        max_nfev=settings.max_nfev,
+    )
+    return result.motion, tuple(constraints)
+
+
+def _weighted_constraints(constraints, settings):
+    for constraint in constraints:
+        value = dict(constraint)
+        name = value["name"]
+        if name.startswith("user_pose_"):
+            value["weight"] = settings.pose_weight
+        elif "foot_height" in name:
+            value["weight"] = settings.foot_height_weight
+        elif "foot_stationary" in name:
+            value["weight"] = settings.foot_stationary_weight
+        elif name.startswith("floor_"):
+            value["weight"] = settings.floor_weight
+        yield value
