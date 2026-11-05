@@ -442,7 +442,7 @@ def draw_retarget_mapping(layout, context):
     test_action = layout.row()
     test_action.enabled = blender_retarget_service.is_valid_mapping(armature)
     test_action.operator("avacapo.retarget_test_bvh", icon="PLAY")
-    _draw_source_action_retarget(layout, scene, armature)
+    # _draw_source_action_retarget(layout, scene, armature) # uncomment for debug
 
 
 def _visible_mapping_errors(errors, confirmed):
@@ -462,6 +462,7 @@ def _draw_mapping_status(layout, state, errors) -> None:
         layout.label(text="Mapping not saved", icon="INFO")
 
 
+# debuging section
 def _draw_source_action_retarget(layout, scene, armature) -> None:
     """Draw the supported production input: an imported AvaCapo source Action."""
     box = layout.box()
@@ -569,9 +570,9 @@ _CLASSES = (
     AVACAPO_RetargetMappingState,
     AVACAPO_OT_suggest_retarget_mapping,
     AVACAPO_OT_clear_retarget_mapping,
-    AVACAPO_OT_append_avacapo_reference_armature,
+    # AVACAPO_OT_append_avacapo_reference_armature, # uncomment for debug
     AVACAPO_OT_confirm_retarget_mapping,
-    AVACAPO_OT_retarget_test_bvh,
+    # AVACAPO_OT_retarget_test_bvh, # uncomment for debug
     AVACAPO_OT_retarget_source_action,
     # Debug Space-Time retarget UI is temporarily disabled.
     # AVACAPO_OT_retarget_source_action_spacetime,
