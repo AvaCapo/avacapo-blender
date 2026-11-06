@@ -12,6 +12,7 @@ from ..core import tracks
 from ..core.generation_models import TaskStatus
 from ..server import models
 from .runtime import tag_redraw
+from .end_effector_targets import END_EFFECTOR_ITEMS, target_object_poll
 
 
 _writing_properties = False
@@ -48,12 +49,35 @@ class BlenderTrackStore:
     def clear_take_records(self, clip):
         clip.takes.clear()
 
+    def restore_effector_target(self, clip, data):
+        target = clip.end_effector_targets.add()
+        target.enabled = data.enabled
+        target.joint_name = data.joint_name
+        target.target_frame = data.target_frame
+        target.target_object = bpy.data.objects.get(data.target_object_name)
+
 
 def find_track(context):
     """Find the Track for the current Object, Action, and Slot without creating data."""
     scene = context.scene
     armature = context.active_object
-    if armature is None or armature.type != 'ARMATURE' or not armature.select_get():
+    if armature is None or not armature.select_get():
+        return None
+    if armature.type == 'EMPTY':
+        candidates = [
+            track for track in scene.clip_data.tracks
+            if any(target.target_object == armature
+                   for clip in track.clips for target in clip.end_effector_targets)
+            and track.object is not None
+            and track.object.animation_data is not None
+            and track.object.animation_data.action == track.working_action
+            and track.object.animation_data.action_slot is not None
+            and track.object.animation_data.action_slot.handle == track.working_slot_handle
+        ]
+        return next((track for track in candidates
+                     if track.uid == scene.clip_data.active_track_uid),
+                    candidates[0] if len(candidates) == 1 else None)
+    if armature.type != 'ARMATURE':
         return None
     animation_data = armature.animation_data
     if animation_data is None or animation_data.action is None or animation_data.action_slot is None:
@@ -192,6 +216,7 @@ class CT_Take(PropertyGroup):
     end_offset_z: FloatProperty(options={'HIDDEN'})
     align_heading: BoolProperty(default=True, options={'HIDDEN'})
     constraint_frames: StringProperty(default="[]", options={'HIDDEN'})
+    end_effector_targets_json: StringProperty(default="[]", options={'HIDDEN'})
     take_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
     take_slot_handle: IntProperty(options={'HIDDEN'})
     source_motion_text: PointerProperty(type=bpy.types.Text, options={'HIDDEN'})
@@ -223,6 +248,18 @@ class CT_Take(PropertyGroup):
         name="Progress", min=0.0, max=1.0, default=1.0, subtype='FACTOR')
 
 
+class CT_EndEffectorTarget(PropertyGroup):
+    enabled: BoolProperty(name="Enabled", default=True)
+    joint_name: EnumProperty(name="Joint", items=END_EFFECTOR_ITEMS, default='RightHand')
+    target_object: PointerProperty(
+        name="Target", type=bpy.types.Object, poll=target_object_poll,
+    )
+    target_frame: IntProperty(
+        name="Frame", min=0,
+        description="Zero-based frame relative to the start of this Clip",
+    )
+
+
 class CT_Clip(PropertyGroup):
     uid: IntProperty()
     name: StringProperty(name="Name", default="Clip")
@@ -244,6 +281,7 @@ class CT_Clip(PropertyGroup):
     show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
     show_takes: BoolProperty(default=True, options={'HIDDEN'})
     show_clip_settings: BoolProperty(default=True, options={'HIDDEN'})
+    end_effector_targets: CollectionProperty(type=CT_EndEffectorTarget)
 
     def _get_start(self):
         return self.get("_start", 0)

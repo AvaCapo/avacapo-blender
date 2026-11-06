@@ -64,6 +64,10 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         raise ValueError("Connect to AvaCapo before generating a Take.")
     if not runtime.generation_ready():
         raise ValueError("Wait one second before generating another Take.")
+    has_targets = any(target.enabled for target in clip.end_effector_targets)
+    target_frames = {target.target_frame for target in clip.end_effector_targets if target.enabled}
+    if has_targets and (command.in_place or getattr(command.parameters, "cycled", False)):
+        raise ValueError("Disable Cycled and In Place before generating with Empty targets.")
     root_offset = (0.0, 0.0, 0.0)
     start_from_previous = _can_align_previous_start(command.parameters)
     if isinstance(command.parameters, TextParameters):
@@ -85,6 +89,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         # Interior constraints must not suppress continuity at the start.
         if (previous is not None and previous.end == clip.start
                 and not any(target == 0 for _, target in samples)
+                and 0 not in target_frames
                 and actions.has_pose_keys(
                     working_action, working_slot, previous.start, previous.end,
                 )):
@@ -94,6 +99,7 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         last_target = clip.end - clip.start - 1
         if (following is not None and following.start == clip.end
                 and not any(target == last_target for _, target in samples)
+                and last_target not in target_frames
                 and actions.has_pose_keys(
                     working_action, working_slot, following.start, following.end,
                 )):
@@ -153,6 +159,28 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
                 seed=command.parameters.seed, cycled=command.parameters.cycled,
                 first_heading=first_heading,
             ))
+    if has_targets:
+        from .end_effector_targets import capture_generation_targets
+
+        if not isinstance(command.parameters, (TextParameters, ConstraintsParameters)):
+            raise ValueError("Empty targets are supported for clip generation, not inbetweening.")
+        parameters = command.parameters
+        if isinstance(parameters, TextParameters):
+            parameters = ConstraintsParameters(
+                num_frames=clip.end - clip.start, seed=parameters.seed, cycled=parameters.cycled,
+            )
+        armature = _working_armature(track)
+        with bpy.context.temp_override(scene=scene, object=armature, active_object=armature):
+            targets, root_offset, heading = capture_generation_targets(
+                bpy.context, track, clip,
+                root_offset=root_offset if parameters.constraints else None,
+                fullbody_frames=[item.target_frame for item in parameters.constraints],
+            )
+        command = replace(command, parameters=replace(
+            parameters, end_effector_targets=targets,
+            first_heading=parameters.first_heading if parameters.constraints else heading,
+        ))
+        start_from_previous = _can_align_previous_start(command.parameters)
     if _generation_service is None:
         _generation_service = GenerationService(
             api_token=Storage.api_token,
@@ -363,7 +391,9 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
     )
     retargeted_motion = workflow.retarget_mapped_motion(source_motion, target, joint_map)
-    if USE_SPACETIME_REFINEMENT:
+    # The foot-only refinement has no Empty observations and can displace goals.
+    has_targets = isinstance(command.parameters, ConstraintsParameters) and bool(command.parameters.end_effector_targets)
+    if USE_SPACETIME_REFINEMENT and not has_targets:
         retargeted_motion, _constraints = workflow.refine_motion_spacetime(
             source_motion,
             retargeted_motion, # used as an initial guess
@@ -440,7 +470,9 @@ def _can_align_previous_start(parameters):
     if isinstance(parameters, TextParameters):
         return True
     if isinstance(parameters, ConstraintsParameters):
-        return not any(item.target_frame == 0 for item in parameters.constraints)
+        return not any(item.target_frame == 0 for item in (
+            *parameters.constraints, *parameters.end_effector_targets,
+        ))
     return False
 
 
@@ -465,6 +497,8 @@ def _align_generated_start(track, clip, armature, command, prepared, scene_fps, 
     later_constraints = [frame - clip.start for frame in manual_frames if frame > clip.start]
     if isinstance(command.parameters, ConstraintsParameters):
         later_constraints.extend(item.target_frame for item in command.parameters.constraints
+                                 if item.target_frame > 0)
+        later_constraints.extend(item.target_frame for item in command.parameters.end_effector_targets
                                  if item.target_frame > 0)
 
     scene = track.id_data

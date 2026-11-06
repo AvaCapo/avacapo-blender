@@ -9,6 +9,7 @@ from ..core import takes, tracks
 from ..core.generation_models import GenerationCommand, TextParameters
 from ..server import models
 from . import operations
+from . import end_effector_targets
 from .properties import edit_track, ensure_track, find_track
 from .runtime import runtime, tag_redraw
 from .track_style import STYLE
@@ -23,6 +24,16 @@ def clip_name_from_prompt(prompt):
     if " " in prefix:
         prefix = prefix.rsplit(" ", 1)[0]
     return prefix.rstrip() + "..."
+
+
+def _select_target(context, obj):
+    if context.object is not None and context.object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    for selected in context.selected_objects:
+        selected.select_set(False)
+    obj.hide_set(False)
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
 
 
 class _ClipOp:
@@ -67,6 +78,82 @@ class _ClipOp:
             return False
         self.report({'INFO'}, "Generation queued")
         return True
+
+
+class CLIPS_OT_add_effector_target(_ClipOp, Operator):
+    bl_idname = "clips.add_effector_target"
+    bl_label = "Add End Effector Target"
+    bl_options = {'REGISTER', 'UNDO'}
+    joint_name: EnumProperty(
+        name="Joint", items=end_effector_targets.END_EFFECTOR_ITEMS, default='RightHand',
+    )
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        self.layout.prop(self, "joint_name")
+
+    def execute(self, context):
+        track, clip = self._get_clip(context)
+        if clip is None:
+            return {'CANCELLED'}
+        try:
+            target = end_effector_targets.create_target(context, track, clip, self.joint_name)
+        except (ValueError, RuntimeError) as exc:
+            self.report({'WARNING'}, str(exc))
+            return {'CANCELLED'}
+        context.scene.clip_data.active_track_uid = track.uid
+        track.active_clip_uid = clip.uid
+        _select_target(context, target.target_object)
+        tag_redraw()
+        return {'FINISHED'}
+
+
+class CLIPS_OT_remove_effector_target(_ClipOp, Operator):
+    bl_idname = "clips.remove_effector_target"
+    bl_label = "Remove End Effector Target"
+    bl_description = "Remove the Clip target binding; keep the scene object"
+    bl_options = {'UNDO'}
+    target_index: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        track, clip = self._get_clip(context)
+        if clip is None or not 0 <= self.target_index < len(clip.end_effector_targets):
+            return {'CANCELLED'}
+        obj = clip.end_effector_targets[self.target_index].target_object
+        clip.end_effector_targets.remove(self.target_index)
+        if context.active_object == obj:
+            obj.select_set(False)
+            track.object.select_set(True)
+            context.view_layer.objects.active = track.object
+        tag_redraw()
+        return {'FINISHED'}
+
+
+class CLIPS_OT_select_effector_target(_ClipOp, Operator):
+    bl_idname = "clips.select_effector_target"
+    bl_label = "Select Target"
+    target_index: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        track, clip = self._get_clip(context)
+        if clip is None or not 0 <= self.target_index < len(clip.end_effector_targets):
+            return {'CANCELLED'}
+        target = clip.end_effector_targets[self.target_index]
+        if target.target_object is None:
+            self.report({'WARNING'}, "Select a target Empty first.")
+            return {'CANCELLED'}
+        obj = target.target_object
+        if obj.name not in context.view_layer.objects:
+            self.report({'WARNING'}, "Target Empty is not in the current View Layer.")
+            return {'CANCELLED'}
+        context.scene.frame_set(clip.start + target.target_frame)
+        context.scene.clip_data.active_track_uid = track.uid
+        track.active_clip_uid = clip.uid
+        _select_target(context, obj)
+        tag_redraw()
+        return {'FINISHED'}
 
 
 class CLIPS_OT_create(Operator):
