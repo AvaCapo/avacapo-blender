@@ -85,6 +85,7 @@ def get_animation_constraints(
     cycled=False,
     enhance_prompt: bool = True,
     *,
+    end_effector_targets=None,
     api_token=None,
     cancel_event=None,
     on_progress=None,
@@ -127,6 +128,12 @@ def get_animation_constraints(
         if kind == "end-effector":
             item["joint_names"] = list(joints)
         normalized.append(item)
+    targets = _normalize_effector_targets(
+        end_effector_targets or (), num_frames,
+        {item["target_frame"] for item in normalized},
+    )
+    if targets and (cycled or in_place):
+        raise GenerationError("End effector targets currently require Cycled and In Place to be disabled.")
     metadata = {
         "text_prompt": prompt, 
         "bvh_filename": name or _build_animation_name(prompt),
@@ -142,6 +149,12 @@ def get_animation_constraints(
         "enhance_prompt": enhance_prompt,
         "source": source
     }
+    # Omit optional lists when unused: the existing pose_constraints field
+    # requires a nonempty list whenever it is present.
+    if not normalized:
+        metadata.pop("pose_constraints")
+    if targets:
+        metadata["end_effector_targets"] = targets
     token = Storage.api_token if api_token is None else api_token
     files = [
         ("api_token", (None, token)),
@@ -160,6 +173,37 @@ def get_animation_constraints(
         on_progress=on_progress, 
         files=files,
     )
+
+
+def _normalize_effector_targets(targets, num_frames, pose_frames):
+    normalized, seen, roots = [], set(), {}
+    for target in targets:
+        joint = target.get("joint_name")
+        frame = target.get("target_frame")
+        if joint not in {"LeftHand", "RightHand", "LeftFoot", "RightFoot"}:
+            raise GenerationError("End effector target requires a supported hand or foot.")
+        if type(frame) is not int or not 0 <= frame < num_frames:
+            raise GenerationError("End effector target frame must be inside the Clip.")
+        if frame in pose_frames or (joint, frame) in seen:
+            raise GenerationError("End effector target conflicts with another constraint on this frame.")
+        seen.add((joint, frame))
+        item = {"joint_name": joint, "target_frame": frame}
+        for name, length in (("position", 3), ("rotation", 4), ("root_2d", 2)):
+            values = target.get(name)
+            if not isinstance(values, (list, tuple)) or len(values) != length or not all(
+                type(value) in (int, float) and math.isfinite(value) for value in values
+            ):
+                raise GenerationError(f"Target {name} must contain {length} finite numbers.")
+            item[name] = list(values)
+        norm = math.hypot(*item["rotation"])
+        if not math.isfinite(norm) or norm <= 1.0e-8:
+            raise GenerationError("Target rotation must be a nonzero finite WXYZ quaternion.")
+        item["rotation"] = [value / norm for value in item["rotation"]]
+        previous = roots.setdefault(frame, item["root_2d"])
+        if any(abs(a - b) > 1.0e-5 for a, b in zip(previous, item["root_2d"])):
+            raise GenerationError("Targets on the same frame must share the root reference.")
+        normalized.append(item)
+    return normalized
 
 
 def get_animation_inbetween(

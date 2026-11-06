@@ -30,6 +30,15 @@ class TakeData:
     length: int
     progress: float
     constraint_frames: str = "[]"
+    end_effector_targets_json: str = "[]"
+
+
+@dataclass(frozen=True)
+class EndEffectorTargetData:
+    joint_name: str
+    target_frame: int
+    target_object_name: str
+    enabled: bool
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,7 @@ class ClipData:
     generation_enhance_prompt: bool
     active_take_uid: int
     takes: tuple[TakeData, ...]
+    end_effector_targets: tuple[EndEffectorTargetData, ...] = ()
 
 
 @dataclass(frozen=True)

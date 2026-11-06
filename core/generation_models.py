@@ -49,6 +49,21 @@ class PoseConstraint:
 
 
 @dataclass(frozen=True)
+class EndEffectorTarget:
+    """Kimodo Y-up target in metres, WXYZ rotation and XZ root reference."""
+
+    joint_name: str
+    target_frame: int
+    position: tuple[float, float, float]
+    rotation: tuple[float, float, float, float]
+    root_2d: tuple[float, float]
+
+    def __post_init__(self):
+        for name in ("position", "rotation", "root_2d"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+
+
+@dataclass(frozen=True)
 class ConstraintsParameters:
     num_frames: int = 150
     constraints: tuple[PoseConstraint, ...] = ()
@@ -58,9 +73,11 @@ class ConstraintsParameters:
     first_heading: float = 0.0
     direction: tuple[float, float, float] | None = None
     cycled: bool = False
+    end_effector_targets: tuple[EndEffectorTarget, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "constraints", tuple(self.constraints))
+        object.__setattr__(self, "end_effector_targets", tuple(self.end_effector_targets))
         if self.direction is not None:
             object.__setattr__(self, "direction", tuple(self.direction))
 

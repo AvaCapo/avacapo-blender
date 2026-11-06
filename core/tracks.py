@@ -8,7 +8,7 @@ import math
 
 from ..common.config import TimelineConfig
 from . import takes
-from .schemas import ClipData, ClipSnapshot, DragSession, TakeData
+from .schemas import ClipData, ClipSnapshot, DragSession, EndEffectorTargetData, TakeData
 
 
 def ordered_clips(clips) -> list:
@@ -220,11 +220,21 @@ def serialize_clip(clip) -> ClipData:
                 end_offset_z=take.end_offset_z,
                 align_heading=take.align_heading,
                 constraint_frames=take.constraint_frames,
+                end_effector_targets_json=take.end_effector_targets_json,
                 length=int(take.length),
                 offset=int(take.offset),
                 progress=take.progress,
             )
             for take in clip.takes
+        ),
+        end_effector_targets=tuple(
+            EndEffectorTargetData(
+                joint_name=target.joint_name,
+                target_frame=target.target_frame,
+                target_object_name=target.target_object.name if target.target_object else "",
+                enabled=target.enabled,
+            )
+            for target in clip.end_effector_targets
         ),
     )
 
@@ -238,6 +248,8 @@ def restore_clip(store, payload: ClipData, start: int):
     clip.generation_cycled = payload.generation_cycled
     clip.generation_in_place = payload.generation_in_place
     clip.generation_enhance_prompt = payload.generation_enhance_prompt
+    for target in payload.end_effector_targets:
+        store.restore_effector_target(clip, target)
     for take_payload in payload.takes:
         takes.restore_take(store, clip, take_payload)
     if payload.active_take_uid:

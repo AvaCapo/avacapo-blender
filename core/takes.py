@@ -1,6 +1,7 @@
 """Take operations on records supplied by a storage adapter; no Blender API."""
 
 import json
+from dataclasses import asdict
 
 from ..common.config import Config
 from .generation_models import (
@@ -86,7 +87,7 @@ def restore_take(store, clip, payload: TakeData):
         "generation_in_place", "generation_enhance_prompt", "duration_seconds", "fps", "temperature", "cycled",
         "seed", "left_frame", "right_frame", "left_context_frames",
         "right_context_frames", "gap_frames", "end_offset_x", "end_offset_z",
-        "align_heading", "length", "constraint_frames",
+        "align_heading", "length", "constraint_frames", "end_effector_targets_json",
     ):
         setattr(take, field, getattr(payload, field))
     take.offset = int(payload.offset)
@@ -132,5 +133,8 @@ def _set_generation_request(take, command: GenerationCommand) -> None:
         take.seed = parameters.seed
         take.cycled = parameters.cycled
         take.constraint_frames = json.dumps([item.target_frame for item in parameters.constraints])
+        take.end_effector_targets_json = json.dumps([
+            asdict(item) for item in parameters.end_effector_targets
+        ])
         return
     raise ValueError("Unsupported generation command.")
