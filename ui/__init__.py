@@ -19,13 +19,15 @@ from ..timeline.operators import (
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
+    CLIPS_OT_add_effector_target, CLIPS_OT_remove_effector_target,
+    CLIPS_OT_select_effector_target,
     CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
 )
 from ..timeline.operations import cancel_generation
 from .track_panels import (
     CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )
-from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene
+from ..timeline.properties import CT_EndEffectorTarget, CT_Take, CT_Clip, CT_Track, CT_Scene
 from ..timeline.runtime import runtime
 from ..timeline.generation_status import is_pending, set_status
 from ..core.storage import Storage
@@ -36,7 +38,7 @@ from ..animation.retargeting import blender_retarget_watcher
 
 
 CLASSES = (
-    CT_Take, CT_Clip, CT_Track, CT_Scene,
+    CT_EndEffectorTarget, CT_Take, CT_Clip, CT_Track, CT_Scene,
     AVACAPO_OT_login_browser, AVACAPO_OT_paste_token,
     AVACAPO_OT_disconnect,
     CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap,
@@ -44,6 +46,8 @@ CLASSES = (
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
+    CLIPS_OT_add_effector_target, CLIPS_OT_remove_effector_target,
+    CLIPS_OT_select_effector_target,
     CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
     CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )

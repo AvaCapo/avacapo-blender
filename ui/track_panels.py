@@ -12,6 +12,34 @@ from ..core.storage import Storage
 from ..timeline.properties import find_track
 from ..timeline.runtime import runtime
 from . import ui_retargeting
+from ..timeline.end_effector_targets import validate_targets
+
+
+def _draw_effector_targets(layout, clip):
+    box = layout.box()
+    box.label(text="End Effector Targets", icon='EMPTY_ARROWS')
+    for index, target in enumerate(clip.end_effector_targets):
+        entry = box.box()
+        row = entry.row(align=True)
+        row.prop(target, "enabled", text="")
+        row.prop(target, "joint_name", text="")
+        remove = row.operator("clips.remove_effector_target", text="", icon='X')
+        remove.clip_uid, remove.target_index = clip.uid, index
+        col = entry.column()
+        col.enabled = target.enabled
+        row = col.row(align=True)
+        row.prop(target, "target_object", text="")
+        select = row.operator("clips.select_effector_target", text="", icon='RESTRICT_SELECT_OFF')
+        select.clip_uid, select.target_index = clip.uid, index
+        row = col.row()
+        row.alert = not 0 <= target.target_frame < clip.end - clip.start
+        row.prop(target, "target_frame", text="Clip Frame")
+        row.label(text=f"Scene: {clip.start + target.target_frame}")
+    box.operator("clips.add_effector_target", text="Add Target", icon='ADD').clip_uid = clip.uid
+    try:
+        validate_targets(clip)
+    except ValueError as exc:
+        box.label(text=str(exc), icon='ERROR')
 
 
 class CLIPS_MT_empty(Menu):
@@ -132,8 +160,9 @@ class CLIPS_PT_panel(Panel):
         armature_box = armature_col.box()
         armature_box.label(text="Armature:")
 
-        armature = context.active_object
-        if armature is None or armature.type != "ARMATURE" or not armature.select_get():
+        track = find_track(context)
+        armature = track.object if track is not None else context.active_object
+        if armature is None or armature.type != "ARMATURE":
             armature_box.label(text="Select an armature", icon="INFO")
             armature_box.operator(
                 "avacapo.append_avacapo_reference_armature",
@@ -170,7 +199,6 @@ class CLIPS_PT_panel(Panel):
         new_clip_box.operator("clips.create", text="New Clip at Current Frame",
                               icon='ADD').frame = scene.frame_current
 
-        track = find_track(context)
         clip = tracks.active_clip(track) if track is not None else None
 
         clip_col = layout.column(align=True)
@@ -179,6 +207,8 @@ class CLIPS_PT_panel(Panel):
             clip_col.label(text="Select a clip in the Timeline")
 
             return
+
+        _draw_effector_targets(clip_col, clip)
 
         generation_box = clip_col.box()
         generation_box.label(text="Current Clip:")
