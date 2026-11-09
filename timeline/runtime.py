@@ -91,12 +91,6 @@ def in_timeline(context):
     return True
 
 
-def select_mouse_button(context):
-    keyconfig = context.window_manager.keyconfigs.active
-    preferences = getattr(keyconfig, "preferences", None)
-    return 'RIGHTMOUSE' if getattr(preferences, "select_mouse", 'LEFT') == 'RIGHT' else 'LEFTMOUSE'
-
-
 def tag_redraw():
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:

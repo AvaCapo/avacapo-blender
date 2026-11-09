@@ -191,8 +191,6 @@ def register():
                 ("clips.mouse", 'LEFTMOUSE', 'PRESS'),
                 ("clips.mouse", 'LEFTMOUSE', 'DOUBLE_CLICK'),
                 ("clips.mouse", 'RIGHTMOUSE', 'PRESS'),
-                ("clips.mouse", 'RIGHTMOUSE', 'DOUBLE_CLICK'),
-                ("clips.mouse", 'W', 'PRESS'),
                 ("clips.hover", 'MOUSEMOVE', 'ANY'),
             ):
                 item = keymap.keymap_items.new(operator, button, value)

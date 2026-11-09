@@ -11,7 +11,7 @@ from .drawing import ClipDrawing
 from . import operations
 from .properties import edit_track, ensure_track, find_track
 from .runtime import (
-    HoverTarget, MenuTarget, in_timeline, runtime, select_mouse_button, tag_redraw,
+    HoverTarget, MenuTarget, in_timeline, runtime, tag_redraw,
 )
 from . import actions
 
@@ -188,7 +188,6 @@ class CLIPS_OT_mouse(Operator):
         return in_timeline(context)
 
     def invoke(self, context, event):
-        select_button = select_mouse_button(context)
         track = find_track(context)
         clips = () if track is None else track.clips
         view, metrics = ClipDrawing.metrics(context.region)
@@ -196,9 +195,8 @@ class CLIPS_OT_mouse(Operator):
             clips, view, metrics,
             event.mouse_region_x, event.mouse_region_y,
         )
-        menu_button = 'W' if select_button == 'RIGHTMOUSE' else 'RIGHTMOUSE'
-        menu_event = event.type == menu_button and event.value == 'PRESS'
-        select_event = event.type == select_button and event.value in {'PRESS', 'DOUBLE_CLICK'}
+        menu_event = event.type == 'RIGHTMOUSE' and event.value == 'PRESS'
+        select_event = event.type == 'LEFTMOUSE' and event.value in {'PRESS', 'DOUBLE_CLICK'}
         if not (menu_event or select_event):
             return {'PASS_THROUGH'}
         if hit.kind == 'NONE':
@@ -264,7 +262,6 @@ class CLIPS_OT_mouse(Operator):
         )
         self._scene = context.scene
         self._track = track
-        self._mouse_button = event.type
         self._start_mouse_x = event.mouse_region_x
         self._pixels_per_frame = view.pixels_per_frame
         self._native_drag = False
@@ -311,16 +308,13 @@ class CLIPS_OT_mouse(Operator):
             edit_track(track, tracks.update_drag, self._session, delta)
             tag_redraw()
             return {'RUNNING_MODAL'}
-        if event.type == self._mouse_button and event.value == 'RELEASE':
+        if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
             if not self._finish_resize_drag():
                 self._finish(context)
                 return {'CANCELLED'}
             self._finish(context)
             return {'FINISHED'}
-        if event.value == 'PRESS' and (
-            event.type == 'ESC'
-            or event.type in {'LEFTMOUSE', 'RIGHTMOUSE'} and event.type != self._mouse_button
-        ):
+        if event.value == 'PRESS' and event.type in {'ESC', 'RIGHTMOUSE'}:
             self.cancel(context)
             return {'CANCELLED'}
         if event.type in {
@@ -381,7 +375,7 @@ class CLIPS_OT_mouse(Operator):
             if self._session.last_valid_delta == delta:
                 return {'PASS_THROUGH'}
             return {'RUNNING_MODAL'}
-        if event.type == self._mouse_button and event.value == 'RELEASE':
+        if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
             self._restore_animation_snapping()
             self._native_drag = False
             if not self._finish_resize_drag():
@@ -389,10 +383,7 @@ class CLIPS_OT_mouse(Operator):
                 return {'CANCELLED', 'PASS_THROUGH'}
             self._finish(context)
             return {'FINISHED', 'PASS_THROUGH'}
-        if event.value == 'PRESS' and (
-            event.type == 'ESC'
-            or event.type in {'LEFTMOUSE', 'RIGHTMOUSE'} and event.type != self._mouse_button
-        ):
+        if event.value == 'PRESS' and event.type in {'ESC', 'RIGHTMOUSE'}:
             edit_track(track, tracks.cancel_drag, self._session)
             self._restore_animation_snapping()
             self._native_drag = False
