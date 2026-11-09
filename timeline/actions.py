@@ -43,6 +43,9 @@ def _channelbags(action, slot):
 
 def read_slot_curves(action, slot):
     """Return validated FCurves of a known Slot without creating a channelbag."""
+    # Use this function only when you really unsure about sorted keyframe times. 
+    # It's better to delete this function and sort keys in other places.
+    # It looks like we need to use _slot_curves in most cases
     result = _slot_curves(action, slot)
     for identity, curve in result.items():
         times = curve_times(curve)
@@ -95,18 +98,48 @@ def curve_times(curve):
 
 def has_pose_keys(action, slot, start, end):
     """Return whether a range contains authored or generated pose keys."""
-    for (path, _), curve in read_slot_curves(action, slot).items():
+    for (path, _), curve in _slot_curves(action, slot).items(): #TODO: ?change to generator instead
         if not (path.startswith('pose.bones[') or path in {
             'location', 'rotation_euler', 'rotation_quaternion', 'rotation_axis_angle', 'scale',
         }):
             continue
-        times = curve_times(curve)
-        if int(np.searchsorted(times, start)) < int(np.searchsorted(times, end)):
+        points = curve.keyframe_points
+        if _lower_bound(points, start) < _lower_bound(points, end):
             return True
     return False
 
 
-def manual_pose_frames(working_action, working_slot, start, end, *,
+#NOTE: new implementation does not track user modification of GENERATED keys. 
+# If such behaviour is needed - create new functions based on np arrays comparison instead of for cycle.
+def manual_pose_frames(working_action, working_slot, start, end):
+    """Collect frames containing non-GENERATED pose keys."""
+
+    working = _slot_curves(working_action, working_slot)
+    frames = set()
+
+    pose_paths = {
+        "location", "rotation_euler", "rotation_quaternion",
+        "rotation_axis_angle", "scale"
+    }
+
+    for (path, _), curve in working.items():
+        if not (path.startswith("pose.bones[") or path in pose_paths):
+            continue
+
+        points = curve.keyframe_points
+
+        left = _lower_bound(points, start)
+        right = _lower_bound(points, end)
+
+        for i in range(left, right):
+            if points[i].type != "GENERATED":
+                frames.add(float(points[i].co.x))
+
+    return sorted(frames)
+
+
+# NOTE: this function was replaced by new implementation. 
+def manual_pose_frames_old(working_action, working_slot, start, end, *,
                        take_action=None, take_slot=None, take_origin=0):
     """Find authored pose keys and promote edited generated values to ordinary keys."""
     working = read_slot_curves(working_action, working_slot)
@@ -152,9 +185,8 @@ def _empty_keys():
 def read_keys_range(curve, start, end):
     """Read complete keyframe properties in the half-open range [start, end)."""
     points = curve.keyframe_points
-    times = curve_times(curve)
-    left = int(np.searchsorted(times, start))
-    right = int(np.searchsorted(times, end))
+    left = _lower_bound(points, start)
+    right = _lower_bound(points, end)
     count = right - left
     data = _empty_keys()
     for field in COORD_FIELDS:
@@ -299,8 +331,8 @@ def materialize_take(
     preserve_manual=True
 ):
     """Copy a local Take window into the Working Action across the full channel scope."""
-    working = read_slot_curves(working_action, working_slot)
-    take = read_slot_curves(take_action, take_slot)
+    working = _slot_curves(working_action, working_slot)
+    take = _slot_curves(take_action, take_slot)
     origin = clip_start + take_offset
     local_start, local_end = clip_start - origin, clip_end - origin
     for identity in sorted(working.keys() | take.keys()):
@@ -511,6 +543,7 @@ def _range_difference(start, end, other_start, other_end):
 
 
 def _lower_bound(points, frame):
+    """Binary search by frame; keyframe points must be sorted by time."""
     left, right = 0, len(points)
     while left < right:
         middle = (left + right) // 2
@@ -563,7 +596,7 @@ def clear_range(action, slot, start, end):
     """Remove keys in [start, end) from every curve of one known Slot."""
     if end <= start:
         return
-    for curve in read_slot_curves(action, slot).values():
+    for curve in _slot_curves(action, slot).values(): #TODO: ?change to generator instead
         replace_range(curve, _empty_keys(), start, end)
 
 
@@ -571,13 +604,13 @@ def bake_generated_range(action, slot, start, end):
     """Make generated keys in [start, end) ordinary editable keyframes."""
     if end <= start:
         return
-    for curve in read_slot_curves(action, slot).values():
-        times = curve_times(curve)
-        left = int(np.searchsorted(times, start))
-        right = int(np.searchsorted(times, end))
+    for curve in _slot_curves(action, slot).values(): #TODO: ?change to generator instead
+        points = curve.keyframe_points
+        left = _lower_bound(points, start)
+        right = _lower_bound(points, end)
         changed = False
         for index in range(left, right):
-            point = curve.keyframe_points[index]
+            point = points[index]
             if point.type == "GENERATED":
                 point.type = "KEYFRAME"
                 changed = True
@@ -589,13 +622,13 @@ def snapshot_range(action, slot, start, end):
     """Capture every channel window of a known Slot for local operation rollback."""
     return {
         identity: read_keys_range(curve, start, end)
-        for identity, curve in read_slot_curves(action, slot).items()
+        for identity, curve in _slot_curves(action, slot).items()
     }
 
 
 def restore_range(action, slot, snapshot, start, end):
     """Restore a snapshot window and remove channels created after that snapshot."""
-    curves = read_slot_curves(action, slot)
+    curves = _slot_curves(action, slot)
     bag = ensure_slot_channelbag(action, slot)
     for identity, curve in tuple(curves.items()):
         if identity not in snapshot:

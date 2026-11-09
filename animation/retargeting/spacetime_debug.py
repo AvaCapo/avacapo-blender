@@ -112,23 +112,11 @@ def _active_clip_pose_constraints(context, armature, target_hierarchy, frame_cou
         track.working_slot_handle,
         "Working Action",
     )
-    active_take = takes.current_take(clip)
-    take_action = take_slot = None
-    if active_take is not None:
-        take_action = active_take.take_action
-        take_slot = timeline_actions.find_slot(
-            take_action,
-            active_take.take_slot_handle,
-            "Take Action",
-        )
     frames = timeline_actions.manual_pose_frames(
         working_action,
         working_slot,
         clip.start,
         clip.end,
-        take_action=take_action,
-        take_slot=take_slot,
-        take_origin=clip.start + (active_take.offset if active_take is not None else 0),
     )
     samples = [(frame, frame - clip.start) for frame in frames]
     previous, following = tracks.neighbors(track.clips, clip.uid)

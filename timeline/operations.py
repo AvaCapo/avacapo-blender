@@ -69,12 +69,8 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
     if isinstance(command.parameters, TextParameters):
         armature = _working_armature(track)
         working_action, working_slot = _working_binding(track, armature)
-        active_take = takes.current_take(clip)
-        take_action, take_slot = (None, None) if active_take is None else _take_binding(active_take)
         frames = actions.manual_pose_frames(
-            working_action, working_slot, clip.start, clip.end,
-            take_action=take_action, take_slot=take_slot,
-            take_origin=clip.start + (active_take.offset if active_take is not None else 0),
+            working_action, working_slot, clip.start, clip.end
         )
         # Store source and target separately: neighbour poses belong to other
         # Clips, but constrain the first or last frame of this request.
@@ -452,12 +448,8 @@ def _align_generated_start(track, clip, armature, command, prepared, scene_fps, 
     working_action, working_slot = _working_binding(track, armature)
     if not actions.has_pose_keys(working_action, working_slot, previous.start, previous.end):
         return prepared
-    active_take = takes.current_take(clip)
-    take_action, take_slot = (None, None) if active_take is None else _take_binding(active_take)
     manual_frames = actions.manual_pose_frames(
-        working_action, working_slot, clip.start, clip.end,
-        take_action=take_action, take_slot=take_slot,
-        take_origin=clip.start + (active_take.offset if active_take is not None else 0),
+        working_action, working_slot, clip.start, clip.end
     )
     # An explicit starting pose takes priority over automatic continuity.
     if clip.start in manual_frames:
@@ -520,12 +512,9 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_ma
     if active_take is not None and active_take.take_action == target_action:
         raise ValueError("Different Takes cannot share one Take Action.")
     if active_take is not None and preserve_manual:
-        active_action, active_slot = _take_binding(active_take)
-        actions.manual_pose_frames(
-            working_action, working_slot, clip.start, clip.end,
-            take_action=active_action, take_slot=active_slot,
-            take_origin=clip.start + active_take.offset,
-        )
+        #TODO: if we decide to keep user changes, here is the place to function call 
+        #for promouting changed GENERATED keys to KEYFRAME type
+        pass
 
     working_snapshot = None
     if backup_working_area:

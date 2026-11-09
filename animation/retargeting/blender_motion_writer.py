@@ -8,6 +8,7 @@ import math
 import bpy
 import bpy.utils
 import bpy_extras.anim_utils
+import numpy as np
 from mathutils import Euler, Matrix, Quaternion, Vector
 
 @dataclass(frozen=True)
@@ -69,7 +70,9 @@ def prepare_retargeted_motion(
             for offset, channel in enumerate(joint.channels)
             if channel.endswith("position")
         }
-        if position_columns:
+        if position_columns and np.any(
+            motion.values[:, tuple(position_columns.values())] != 0.0
+        ):
             locations = _retarget_joint_locations(
                 motion, joint_index, position_columns, armature_from_canonical, bases
             )
@@ -85,7 +88,9 @@ def prepare_retargeted_motion(
             for offset, channel in enumerate(joint.channels)
             if channel.endswith("rotation")
         }
-        if rotation_columns:
+        if rotation_columns and np.any(
+            motion.values[:, tuple(rotation_columns.values())] != 0.0
+        ):
             samples, data_path = _rotation_samples(
                 motion, joint_index, rotation_columns, pose_bone.rotation_mode
             )

@@ -13,6 +13,7 @@ from .properties import edit_track, ensure_track, find_track
 from .runtime import (
     HoverTarget, MenuTarget, in_timeline, runtime, select_mouse_button, tag_redraw,
 )
+from . import actions
 
 
 def _visible_working_curves(data, clip):
@@ -117,13 +118,21 @@ def _select_clip_keys(context, data, clip, *, clear_selection):
 
     anchor = None
     for curve in blender_actions.iter_slot_fcurves(action, slot):
-        for key in curve.keyframe_points:
-            if clip.start <= key.co.x < clip.end:
-                key.select_control_point = True
-                key.select_left_handle = True
-                key.select_right_handle = True
-                if anchor is None:
-                    anchor = key, float(key.co.x)
+        points = curve.keyframe_points
+
+        left = actions._lower_bound(points, clip.start)
+        right = actions._lower_bound(points, clip.end)
+
+        for i in range(left, right):
+            key = points[i]
+
+            key.select_control_point = True
+            key.select_left_handle = True
+            key.select_right_handle = True
+
+            if anchor is None:
+                anchor = key, float(key.co.x)
+
     return action, anchor
 
 
