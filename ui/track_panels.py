@@ -204,6 +204,37 @@ class CLIPS_PT_panel(Panel):
             row.prop(clip, "generation_in_place")
             col.prop(clip, "generation_enhance_prompt")
 
+        spacetime_box = clip_col.box()
+        row = spacetime_box.row()
+        row.prop(
+            clip,
+            "show_spacetime_settings",
+            text="Generation Post-Processing",
+            emboss=False,
+            icon='TRIA_DOWN' if clip.show_spacetime_settings else 'TRIA_RIGHT',
+        )
+        if clip.show_spacetime_settings:
+            spacetime_box.prop(scene, "avacapo_spacetime_enabled")
+            if scene.avacapo_spacetime_enabled:
+                settings = spacetime_box.column()
+                # Commented out advanced spacetime settings for now, keep them for future
+                # settings.prop(scene, "avacapo_spacetime_pose_weight")
+                settings.prop(scene, "avacapo_spacetime_foot_contact_weight")
+                settings.prop(scene, "avacapo_spacetime_control_point_spacing")
+                # settings.prop(scene, "avacapo_spacetime_root_translation_weight")
+                # settings.prop(scene, "avacapo_spacetime_root_rotation_weight")
+                # settings.prop(scene, "avacapo_spacetime_joint_rotation_weight")
+                settings.prop(scene, "avacapo_spacetime_constraint_tolerance")
+                settings.prop(scene, "avacapo_spacetime_max_nfev")
+                # spacetime_box.separator()
+                # spacetime_box.label(text="Manual Foot Contact Frames")
+                # spacetime_box.prop(clip, "spacetime_left_toe_frames")
+                # spacetime_box.prop(clip, "spacetime_right_toe_frames")
+                row = spacetime_box.row()
+                take = takes.current_take(clip)
+                row.enabled = take is not None and take.take_action is not None
+                row.operator("clips.reapply_spacetime", text="Reapply post-processing", icon='FILE_REFRESH')
+
         # Takes
         takes_box = clip_col.box()
         row = takes_box.row()

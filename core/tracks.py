@@ -220,6 +220,7 @@ def serialize_clip(clip) -> ClipData:
                 end_offset_z=take.end_offset_z,
                 align_heading=take.align_heading,
                 constraint_frames=take.constraint_frames,
+                source_root_offset=tuple(take.source_root_offset),
                 length=int(take.length),
                 offset=int(take.offset),
                 progress=take.progress,

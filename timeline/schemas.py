@@ -30,6 +30,7 @@ class TakeData:
     length: int
     progress: float
     constraint_frames: str = "[]"
+    source_root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)

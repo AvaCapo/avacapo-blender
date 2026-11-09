@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import replace, dataclass
 from pathlib import Path
 
+import numpy as np
+
 from . import mapping
 
 from broom.ops.motion_editing import repeat_pose, trim_frames
@@ -22,6 +24,9 @@ class SpaceTimeSettings:
     floor_weight: float = 1.0
     control_point_spacing: int = 4
     control_weight: float = 1.0e-3
+    root_translation_weight: float = 1.0
+    root_rotation_weight: float = 3400.0
+    joint_rotation_weight: float = 3000.0
     constraint_tolerance: float = 0.01
     max_nfev: int = 60
 
@@ -157,10 +162,30 @@ def refine_motion_spacetime(
         constraints,
         control_point_spacing=settings.control_point_spacing,
         control_weight=settings.control_weight,
+        parameter_weights=build_parameter_weights(initial_motion.hierarchy, settings),
         constraint_tolerance=settings.constraint_tolerance,
         max_nfev=settings.max_nfev,
     )
     return result.motion, tuple(constraints)
+
+
+def build_parameter_weights(hierarchy, settings):
+    """Match Broom's optimized root-translation and rotation channel order."""
+    weights = []
+    for joint in hierarchy.joints:
+        for channel in joint.channels:
+            if joint.parent == -1 and channel.endswith("position"):
+                weight = settings.root_translation_weight
+            elif channel.endswith("rotation"):
+                weight = (
+                    settings.root_rotation_weight
+                    if joint.parent == -1
+                    else settings.joint_rotation_weight
+                )
+            else:
+                continue
+            weights.append(weight)
+    return np.asarray(weights, dtype=np.float64)
 
 
 def _weighted_constraints(constraints, settings):

@@ -1,15 +1,24 @@
 """Build target-space Broom constraints for local space-time retargeting."""
 
+#NOTE: Changes in this file is most likely to commit in main 
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
 import numpy as np
 
+from . import foot_contacts
+
+
+_TOE_SOURCE_JOINTS = {
+    "left": "LeftToe",
+    "right": "RightToe",
+}
 
 _FOOT_SOURCE_JOINTS = {
-    "left": ("LeftToe", "LeftFoot"),
-    "right": ("RightToe", "RightFoot"),
+    "left": "LeftFoot",
+    "right": "RightFoot",
 }
 
 _SERVER_FLOOR_Y = 0.0
@@ -22,6 +31,10 @@ def pose_constraints_from_samples(target_hierarchy, samples: Iterable[tuple[int,
     ``samples`` contains ``(clip_relative_frame, user_motion)`` pairs captured
     before the server request.  User and target motions are both in the
     canonical armature coordinate basis, so their FK positions are comparable.
+    
+    Preconditions:
+        source_motion and initial_target_motion must have identical frame counts 
+        and frame times. Both motions must be synchronized frame-by-frame.
     """
     from broom.kinematics import compute_global_positions
 
@@ -73,80 +86,66 @@ def foot_constraints_from_motion(
     ``right`` side.  When omitted, contact frames are detected from source FK.
 
     ``initial_target_motion`` is the ordinary mapped retarget result. 
-    A Foot+Toe source group detects each contact interval, but only its lowest
-    mapped target joint is locked for that interval.
+    Contacts are detected from source Toe joints. A mapped target Toe is locked
+    when available; otherwise the required mapped target Foot is used.
     """
     from broom.foot_lock import contact_segments
-    from broom.kinematics import compute_global_positions, compute_rest_joint_positions
+    from broom.kinematics import compute_rest_joint_positions
     
 
     if source_motion.frame_count != initial_target_motion.frame_count:
         raise ValueError("Source Motion and target initial guess must have equal frame counts.")
 
     target_hierarchy = initial_target_motion.hierarchy
-    source_positions = compute_global_positions(source_motion)
-    target_positions = compute_global_positions(initial_target_motion)
     target_rest_positions = compute_rest_joint_positions(target_hierarchy)
-    source_groups = {
-        side: np.asarray(
-            [
-                source_motion.hierarchy.joint_index(name)
-                for name in names
-                if name in source_motion.hierarchy.joint_names
-            ],
-            dtype=np.int64,
-        )
-        for side, names in _FOOT_SOURCE_JOINTS.items()
-    }
-    source_groups = {side: indices for side, indices in source_groups.items() if len(indices)}
-    if not source_groups:
-        return ()
-
-    target_groups = {
-        side: tuple(dict.fromkeys(
-            source_to_target[source_name]
-            for source_name in _FOOT_SOURCE_JOINTS[side]
-            if source_name in source_to_target
-            and source_to_target[source_name] in target_hierarchy.joint_names
-        ))
-        for side in source_groups
-    }
-    target_groups = {side: names for side, names in target_groups.items() if names}
-    if not target_groups:
+    target_joints = {}
+    for side, toe_name in _TOE_SOURCE_JOINTS.items():
+        # Prefer mapped Toe for foot locking.
+        # Fall back to mapped Foot (ankle) when Toe is unavailable.
+        # Ankle locking is an approximation for incomplete skeleton mappings.
+        if toe_name not in source_motion.hierarchy.joint_names:
+            continue
+        target_name = source_to_target.get(toe_name)
+        if target_name not in target_hierarchy.joint_names:
+            target_name = source_to_target.get(_FOOT_SOURCE_JOINTS[side])
+        if target_name in target_hierarchy.joint_names:
+            target_joints[side] = target_name
+    if not target_joints:
         return ()
 
     frame_count = source_motion.frame_count
     if contact_frames is None:
-        masks = _detect_contacts_on_known_floor(source_motion, source_positions, source_groups)
+        contacts_by_joint = foot_contacts.detect_floor_contact_frames(
+            source_motion,
+            floor_y=_SERVER_FLOOR_Y,
+            joint_names=tuple(_TOE_SOURCE_JOINTS[side] for side in target_joints),
+        )
+        masks = {
+            side: np.zeros(frame_count, dtype=bool)
+            for side in target_joints
+        }
+        for side in target_joints:
+            toe_name = _TOE_SOURCE_JOINTS[side]
+            masks[side][contacts_by_joint[toe_name]] = True
     else:
-        masks = _contact_masks_from_frames(contact_frames, frame_count, source_groups)
+        masks = _contact_masks_from_frames(contact_frames, frame_count, target_joints)
 
-    mapped_foot_names = tuple(dict.fromkeys(
-        name for names in target_groups.values() for name in names
-    ))
-    mapped_foot_indices = [target_hierarchy.joint_index(name) for name in mapped_foot_names]
-    rest_floor_y = min(target_rest_positions[index, 1] for index in mapped_foot_indices)
+    contact_target_names = tuple(dict.fromkeys(target_joints.values()))
+    contact_target_indices = [target_hierarchy.joint_index(name) for name in contact_target_names]
+    rest_floor_y = min(target_rest_positions[index, 1] for index in contact_target_indices)
     floor_joint_indices = _floor_joint_indices(
         target_hierarchy,
         target_rest_positions,
-        mapped_foot_indices,
+        contact_target_indices,
         rest_floor_y,
     )
 
     stationary_constraints = []
     height_constraints = []
     floor_constraints = []
-    for side, source_indices in source_groups.items():
-        if side not in target_groups:
-            continue
+    for side, target_name in target_joints.items():
         for start, end in contact_segments(masks[side]):
             frames = np.arange(start, end + 1, dtype=np.int64)
-            target_name = min(
-                target_groups[side],
-                key=lambda name: target_positions[
-                    frames, target_hierarchy.joint_index(name), 1
-                ].mean(),
-            )
             target_index = target_hierarchy.joint_index(target_name)
             if len(frames) > 1:
                 stationary_constraints.append({
@@ -158,16 +157,15 @@ def foot_constraints_from_motion(
                 })
 
             rest_height = target_rest_positions[target_index, 1] - rest_floor_y
-            if rest_height > _REST_EPSILON:
-                # TODO(rest-contact-height): improve this rest-pose height heuristic.
-                height_constraints.append({
-                    "type": "position",
-                    "name": f"{side}_foot_height_{start}_{end}",
-                    "joint": target_name,
-                    "frames": frames,
-                    "positions": np.full((len(frames), 1), _SERVER_FLOOR_Y + rest_height),
-                    "axes": "Y",
-                })
+            # TODO(rest-contact-height): improve this rest-pose height heuristic.
+            height_constraints.append({
+                "type": "position",
+                "name": f"{side}_foot_height_{start}_{end}",
+                "joint": target_name,
+                "frames": frames,
+                "positions": np.full((len(frames), 1), _SERVER_FLOOR_Y + rest_height),
+                "axes": "Y",
+            })
 
     all_frames = np.arange(frame_count, dtype=np.int64)
     for index in sorted(floor_joint_indices):
@@ -180,25 +178,6 @@ def foot_constraints_from_motion(
             "offset": _SERVER_FLOOR_Y,
         })
     return tuple(stationary_constraints + height_constraints + floor_constraints)
-
-
-def _detect_contacts_on_known_floor(source_motion, positions, source_groups):
-    """Detect source contacts against the server's known Y=0 ground plane."""
-    from broom.ops.skeleton_geometry import estimate_height
-    from broom.foot_lock import remove_short_contacts
-    skeleton_height = estimate_height(source_motion.hierarchy, include_end_sites=False)
-    height_limit = max(0.035 * skeleton_height, 0.02)
-    velocity_limit = max(0.025 * skeleton_height, 0.015)
-    masks = {}
-    for side, indices in source_groups.items():
-        xz = positions[:, indices, :][:, :, (0, 2)].mean(axis=1)
-        velocity = np.linalg.norm(np.diff(xz, axis=0, prepend=xz[:1]), axis=1)
-        if len(velocity) > 1:
-            velocity[0] = velocity[1]
-        height = positions[:, indices, 1].min(axis=1)
-        mask = (height <= _SERVER_FLOOR_Y + height_limit) & (velocity <= velocity_limit)
-        masks[side] = remove_short_contacts(mask, min_frames=2)
-    return masks
 
 
 def _floor_joint_indices(target_hierarchy, rest_positions, foot_indices, rest_floor_y):

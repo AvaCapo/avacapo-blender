@@ -86,7 +86,7 @@ def restore_take(store, clip, payload: TakeData):
         "generation_in_place", "generation_enhance_prompt", "duration_seconds", "fps", "temperature", "cycled",
         "seed", "left_frame", "right_frame", "left_context_frames",
         "right_context_frames", "gap_frames", "end_offset_x", "end_offset_z",
-        "align_heading", "length", "constraint_frames",
+        "align_heading", "length", "constraint_frames", "source_root_offset",
     ):
         setattr(take, field, getattr(payload, field))
     take.offset = int(payload.offset)

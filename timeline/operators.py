@@ -413,6 +413,27 @@ class CLIPS_OT_set_take(_ClipOp, Operator):
         return {'FINISHED'}
 
 
+class CLIPS_OT_reapply_spacetime(_ClipOp, Operator):
+    """Rebuild the active Take with its current post-processing settings."""
+
+    bl_idname = "clips.reapply_spacetime"
+    bl_label = "Reapply post-processing"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        track, clip = self._get_clip(context)
+        if clip is None:
+            return {'CANCELLED'}
+        try:
+            operations.reapply_spacetime(context, track, clip)
+        except (OSError, RuntimeError, ValueError, ReferenceError) as exc:
+            self.report({'WARNING'}, f"Could not reapply post-processing: {exc}")
+            return {'CANCELLED'}
+        tag_redraw()
+        self.report({'INFO'}, "Applied post-processing to the Working Action")
+        return {'FINISHED'}
+
+
 class CLIPS_OT_stick(_ClipOp, Operator):
     """Stretch the clip to its neighbours and generate a new take"""
     bl_idname = "clips.stick"

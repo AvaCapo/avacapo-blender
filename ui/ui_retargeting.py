@@ -16,9 +16,9 @@ from ..animation.retargeting import (
     canonical_source,
     mapping,
     # spacetime_debug, # Spacetime retarget UI is disabled.
-    workflow,
 )
 from ..animation.retargeting.debug import reference_rig
+from ..timeline.properties import spacetime_settings
 
 
 _STATE_KEY = "avacapo_retarget_mapping_ui_classes"
@@ -245,16 +245,7 @@ class AVACAPO_OT_retarget_source_action_spacetime(bpy.types.Operator):
                 scene.avacapo_retarget_source_armature,
                 scene.avacapo_retarget_source_action,
                 armature,
-                workflow.SpaceTimeSettings(
-                    pose_weight=scene.avacapo_spacetime_pose_weight,
-                    foot_height_weight=scene.avacapo_spacetime_foot_height_weight,
-                    foot_stationary_weight=scene.avacapo_spacetime_foot_stationary_weight,
-                    floor_weight=scene.avacapo_spacetime_floor_weight,
-                    control_point_spacing=scene.avacapo_spacetime_control_point_spacing,
-                    control_weight=scene.avacapo_spacetime_control_weight,
-                    constraint_tolerance=scene.avacapo_spacetime_constraint_tolerance,
-                    max_nfev=scene.avacapo_spacetime_max_nfev,
-                ),
+                spacetime_settings(scene),
             )
             context.view_layer.update()
         except (OSError, RuntimeError, ValueError) as error:
@@ -362,14 +353,15 @@ class AVACAPO_PT_spacetime_retarget(bpy.types.Panel):
         layout.prop(scene, "avacapo_retarget_source_action", text="Source Action")
         layout.separator()
         layout.label(text="Constraint Weights")
-        layout.prop(scene, "avacapo_spacetime_pose_weight", text="Pose")
-        layout.prop(scene, "avacapo_spacetime_foot_height_weight", text="Foot Height")
-        layout.prop(scene, "avacapo_spacetime_foot_stationary_weight", text="Foot Stationary")
-        layout.prop(scene, "avacapo_spacetime_floor_weight", text="Floor")
+        # Commented out advanced spacetime settings for now, keep them for future
+        # layout.prop(scene, "avacapo_spacetime_pose_weight", text="Pose")
+        layout.prop(scene, "avacapo_spacetime_foot_contact_weight", text="Foot Contact")
         layout.separator()
         layout.label(text="Solver")
         layout.prop(scene, "avacapo_spacetime_control_point_spacing")
-        layout.prop(scene, "avacapo_spacetime_control_weight")
+        # layout.prop(scene, "avacapo_spacetime_root_translation_weight")
+        # layout.prop(scene, "avacapo_spacetime_root_rotation_weight")
+        # layout.prop(scene, "avacapo_spacetime_joint_rotation_weight")
         layout.prop(scene, "avacapo_spacetime_constraint_tolerance")
         layout.prop(scene, "avacapo_spacetime_max_nfev")
         row = layout.row()
@@ -605,30 +597,6 @@ def register():
         bpy.types.Scene.avacapo_retarget_source_action = bpy.props.PointerProperty(
             type=bpy.types.Action,
         )
-        bpy.types.Scene.avacapo_spacetime_pose_weight = bpy.props.FloatProperty(
-            name="Pose Weight", default=1.0, min=0.0,
-        )
-        bpy.types.Scene.avacapo_spacetime_foot_height_weight = bpy.props.FloatProperty(
-            name="Foot Height Weight", default=1.0, min=0.0,
-        )
-        bpy.types.Scene.avacapo_spacetime_foot_stationary_weight = bpy.props.FloatProperty(
-            name="Foot Stationary Weight", default=1.0, min=0.0,
-        )
-        bpy.types.Scene.avacapo_spacetime_floor_weight = bpy.props.FloatProperty(
-            name="Floor Weight", default=1.0, min=0.0,
-        )
-        bpy.types.Scene.avacapo_spacetime_control_point_spacing = bpy.props.IntProperty(
-            name="Control Point Spacing", default=4, min=1,
-        )
-        bpy.types.Scene.avacapo_spacetime_control_weight = bpy.props.FloatProperty(
-            name="Control Weight", default=1.0e-3, min=0.0,
-        )
-        bpy.types.Scene.avacapo_spacetime_constraint_tolerance = bpy.props.FloatProperty(
-            name="Constraint Tolerance", default=0.01, min=1.0e-6,
-        )
-        bpy.types.Scene.avacapo_spacetime_max_nfev = bpy.props.IntProperty(
-            name="Max Solver Iterations", default=60, min=1,
-        )
     except Exception:
         unregister()
         raise
@@ -644,18 +612,6 @@ def unregister():
         _unregister_class_if_needed(cls)
     if hasattr(bpy.types.Scene, "avacapo_retarget_source_action"):
         del bpy.types.Scene.avacapo_retarget_source_action
-    for name in (
-        "avacapo_spacetime_pose_weight",
-        "avacapo_spacetime_foot_height_weight",
-        "avacapo_spacetime_foot_stationary_weight",
-        "avacapo_spacetime_floor_weight",
-        "avacapo_spacetime_control_point_spacing",
-        "avacapo_spacetime_control_weight",
-        "avacapo_spacetime_constraint_tolerance",
-        "avacapo_spacetime_max_nfev",
-    ):
-        if hasattr(bpy.types.Scene, name):
-            delattr(bpy.types.Scene, name)
     if hasattr(bpy.types.Scene, "avacapo_retarget_source_armature"):
         del bpy.types.Scene.avacapo_retarget_source_armature
     if hasattr(bpy.types.Scene, "avacapo_retarget_target"):

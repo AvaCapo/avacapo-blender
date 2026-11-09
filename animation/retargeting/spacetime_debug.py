@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import bpy
 
-from ...core import takes, tracks
+from ...core import tracks
 from ...timeline import actions as timeline_actions
 from ...timeline.properties import find_track
 from . import (
@@ -15,7 +15,7 @@ from . import (
     constraint_capture,
     spacetime_constraints,
 )
-from .workflow import SpaceTimeSettings, refine_motion_spacetime, retarget_mapped_motion
+from .workflow import refine_motion_spacetime, retarget_mapped_motion
 
 
 def create_debug_action(context, source_armature, source_action, target_armature, settings):

@@ -2,7 +2,7 @@
 
 import bpy
 from bpy.props import (
-    BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty,
+    BoolProperty, CollectionProperty, EnumProperty, FloatProperty, FloatVectorProperty, IntProperty, PointerProperty,
     StringProperty,
 )
 from bpy.types import PropertyGroup
@@ -11,10 +11,75 @@ from ..common.config import Config, TimelineConfig
 from ..core import tracks
 from ..core.generation_models import TaskStatus
 from ..server import models
+from ..animation.retargeting import workflow
 from .runtime import tag_redraw
 
 
 _writing_properties = False
+
+
+def spacetime_settings(scene):
+    """Build solver settings from the Scene-global Timeline controls."""
+    return workflow.SpaceTimeSettings(
+        pose_weight=scene.avacapo_spacetime_pose_weight,
+        foot_height_weight=scene.avacapo_spacetime_foot_contact_weight,
+        foot_stationary_weight=scene.avacapo_spacetime_foot_contact_weight,
+        floor_weight=scene.avacapo_spacetime_foot_contact_weight,
+        control_point_spacing=scene.avacapo_spacetime_control_point_spacing,
+        root_translation_weight=scene.avacapo_spacetime_root_translation_weight,
+        root_rotation_weight=scene.avacapo_spacetime_root_rotation_weight,
+        joint_rotation_weight=scene.avacapo_spacetime_joint_rotation_weight,
+        constraint_tolerance=scene.avacapo_spacetime_constraint_tolerance,
+        max_nfev=scene.avacapo_spacetime_max_nfev,
+    )
+
+
+def register_spacetime_properties():
+    """Register Scene controls used by Timeline post-processing."""
+    defaults = workflow.SpaceTimeSettings()
+    bpy.types.Scene.avacapo_spacetime_enabled = BoolProperty(
+        name="Improve Foot Contacts", default=True,
+    )
+    bpy.types.Scene.avacapo_spacetime_pose_weight = FloatProperty(
+        name="Pose Weight", default=defaults.pose_weight, min=0.0,
+    )
+    bpy.types.Scene.avacapo_spacetime_foot_contact_weight = FloatProperty(
+        name="Foot Contact Weight", default=defaults.foot_height_weight, min=0.0,
+    )
+    bpy.types.Scene.avacapo_spacetime_control_point_spacing = IntProperty(
+        name="Smoothing Interval (Frames)", default=defaults.control_point_spacing, min=1,
+    )
+    bpy.types.Scene.avacapo_spacetime_root_translation_weight = FloatProperty(
+        name="Root Translation Weight", default=defaults.root_translation_weight, min=0.0,
+    )
+    bpy.types.Scene.avacapo_spacetime_root_rotation_weight = FloatProperty(
+        name="Root Rotation Weight", default=defaults.root_rotation_weight, min=0.0,
+    )
+    bpy.types.Scene.avacapo_spacetime_joint_rotation_weight = FloatProperty(
+        name="Joint Rotation Weight", default=defaults.joint_rotation_weight, min=0.0,
+    )
+    bpy.types.Scene.avacapo_spacetime_constraint_tolerance = FloatProperty(
+        name="Constraint Tolerance", default=defaults.constraint_tolerance, min=1.0e-6,
+    )
+    bpy.types.Scene.avacapo_spacetime_max_nfev = IntProperty(
+        name="Max Solver Iterations", default=defaults.max_nfev, min=1,
+    )
+
+
+def unregister_spacetime_properties():
+    for name in (
+        "avacapo_spacetime_enabled",
+        "avacapo_spacetime_pose_weight",
+        "avacapo_spacetime_foot_contact_weight",
+        "avacapo_spacetime_control_point_spacing",
+        "avacapo_spacetime_root_translation_weight",
+        "avacapo_spacetime_root_rotation_weight",
+        "avacapo_spacetime_joint_rotation_weight",
+        "avacapo_spacetime_constraint_tolerance",
+        "avacapo_spacetime_max_nfev",
+    ):
+        if hasattr(bpy.types.Scene, name):
+            delattr(bpy.types.Scene, name)
 
 
 class BlenderTrackStore:
@@ -192,6 +257,9 @@ class CT_Take(PropertyGroup):
     end_offset_z: FloatProperty(options={'HIDDEN'})
     align_heading: BoolProperty(default=True, options={'HIDDEN'})
     constraint_frames: StringProperty(default="[]", options={'HIDDEN'})
+    # Request normalization is undone before retargeting. Keep the original
+    # server BVH immutable and retain this scalar history on the Take instead.
+    source_root_offset: FloatVectorProperty(size=3, default=(0.0, 0.0, 0.0), options={'HIDDEN'})
     take_action: PointerProperty(type=bpy.types.Action, options={'HIDDEN'})
     take_slot_handle: IntProperty(options={'HIDDEN'})
     source_motion_text: PointerProperty(type=bpy.types.Text, options={'HIDDEN'})
@@ -242,8 +310,17 @@ class CT_Clip(PropertyGroup):
     generation_in_place: BoolProperty(name="In Place")
     generation_enhance_prompt: BoolProperty(name="Enhance Prompt", default=True)
     show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
+    show_spacetime_settings: BoolProperty(default=False, options={'HIDDEN'})
     show_takes: BoolProperty(default=True, options={'HIDDEN'})
     show_clip_settings: BoolProperty(default=False, options={'HIDDEN'})
+    spacetime_left_toe_frames: StringProperty(
+        name="Left Foot Frames",
+        description="Comma-separated clip-relative contact frames for the left foot",
+    )
+    spacetime_right_toe_frames: StringProperty(
+        name="Right Foot Frames",
+        description="Comma-separated clip-relative contact frames for the right foot",
+    )
 
     def _get_start(self):
         return self.get("_start", 0)

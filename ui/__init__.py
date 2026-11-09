@@ -19,13 +19,16 @@ from ..timeline.operators import (
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
-    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
+    CLIPS_OT_set_take, CLIPS_OT_reapply_spacetime, CLIPS_OT_stick, CLIPS_OT_set_frame,
 )
 from ..timeline.operations import cancel_generation
 from .track_panels import (
     CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )
-from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene
+from ..timeline.properties import (
+    CT_Take, CT_Clip, CT_Track, CT_Scene,
+    register_spacetime_properties, unregister_spacetime_properties,
+)
 from ..timeline.runtime import runtime
 from ..timeline.generation_status import is_pending, set_status
 from ..core.storage import Storage
@@ -44,7 +47,7 @@ CLASSES = (
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
-    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
+    CLIPS_OT_set_take, CLIPS_OT_reapply_spacetime, CLIPS_OT_stick, CLIPS_OT_set_frame,
     CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )
 
@@ -155,6 +158,7 @@ def unregister():
             except (RuntimeError, ValueError):
                 pass
         state.get("classes", []).clear()
+    unregister_spacetime_properties()
     bpy.app.driver_namespace.pop(_LEGACY_STATE_KEY, None)
     runtime.reset()
 
@@ -172,6 +176,7 @@ def register():
             _register_class(cls)
             state["classes"].append(cls)
         bpy.types.Scene.clip_data = PointerProperty(type=CT_Scene)
+        register_spacetime_properties()
         state["initialization_timer"] = _on_load_post
         bpy.app.timers.register(_on_load_post, first_interval=0.0)
         state.setdefault("handlers", [])

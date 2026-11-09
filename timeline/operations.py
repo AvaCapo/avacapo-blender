@@ -1,5 +1,6 @@
 """Compound Timeline commands that keep Track metadata and Action windows consistent."""
 
+import json
 import math
 from dataclasses import dataclass, replace
 from time import monotonic
@@ -15,10 +16,14 @@ from ..core.generation_models import (
 )
 from ..core.generation_service import GenerationService
 from ..core.storage import Storage
-from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
+from ..animation.retargeting import (
+    blender_motion_writer,
+    blender_retarget_service,
+    workflow,
+)
 from .generation_status import is_pending, set_status
 from . import actions
-from .properties import edit_track
+from .properties import edit_track, spacetime_settings
 from .runtime import ClipboardClip, ClipboardTake, runtime, tag_redraw
 
 
@@ -37,10 +42,6 @@ DEBUG_SHOW_ARMATURE = False
 # armature. The normal contract preserves user keys, so keep this disabled.
 DEBUG_REPLACE_USER_KEYS_WITH_GENERATED = False
 
-# Switch for comparing ordinary mapped retargeting with SpaceTime refinement.
-# TODO: move to UI
-USE_SPACETIME_REFINEMENT = True
-
 
 @dataclass
 class _PendingGeneration:
@@ -52,7 +53,6 @@ class _PendingGeneration:
     scene_fps: float
     status: TaskStatus = TaskStatus.QUEUED
     root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    start_from_previous: bool = False
 
 
 def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_fps: float) -> str:
@@ -65,7 +65,6 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
     if not runtime.generation_ready():
         raise ValueError("Wait one second before generating another Take.")
     root_offset = (0.0, 0.0, 0.0)
-    start_from_previous = _can_align_previous_start(command.parameters)
     if isinstance(command.parameters, TextParameters):
         armature = _working_armature(track)
         working_action, working_slot = _working_binding(track, armature)
@@ -75,7 +74,6 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         # Store source and target separately: neighbour poses belong to other
         # Clips, but constrain the first or last frame of this request.
         samples = [(frame, frame - clip.start) for frame in frames]
-        start_from_previous = not any(target == 0 for _, target in samples)
         heading_frame = clip.start
         previous, following = tracks.neighbors(track.clips, clip.uid)
         # Interior constraints must not suppress continuity at the start.
@@ -176,7 +174,6 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         command=command,
         scene_fps=scene_fps,
         root_offset=root_offset,
-        start_from_previous=start_from_previous,
     )
     clip.show_takes = True
     runtime.generation_cooldown_until = monotonic() + 1.0
@@ -291,7 +288,6 @@ def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_
         source_text=bvh_bytes.decode("utf-8"),
         scene_fps=pending.scene_fps,
         root_offset=pending.root_offset,
-        start_from_previous=pending.start_from_previous,
         take_uid=pending.take_uid,
     )
 
@@ -319,78 +315,27 @@ def cancel_generation() -> None:
 
 def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
                            root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
-                           take_uid: int | None = None,
-                           start_from_previous: bool | None = None):
+                           take_uid: int | None = None):
     """Retarget one source Motion and publish its Take only after it is usable."""
     armature = _working_armature(track)
     if not isinstance(source_text, str) or not source_text:
         raise ValueError("Generated source text is missing.")
     if not math.isfinite(scene_fps) or scene_fps <= 0.0:
         raise ValueError("Scene FPS must be positive and finite.")
-    if any(root_offset):
-        # Undo request normalization before retargeting so its scale conversion
-        # also applies to the restored translation. Keep the raw server BVH intact.
-        values = source_motion.values.copy()
-        for axis, offset in zip("XYZ", root_offset):
-            if offset:
-                column = source_motion.hierarchy.channel_index(
-                    source_motion.hierarchy.root_name, f"{axis}position",
-                )
-                values[:, column] += offset
-        source_motion = replace(source_motion, values=values)
-
-    frame_step = scene_fps * source_motion.frame_time
-    if isinstance(command.parameters, TextParameters):
-        source_motion = workflow.resample_motion(
-            source_motion, scene_fps, duration_seconds=command.parameters.duration,
-        )
-        frame_step = 1.0
-    elif isinstance(command.parameters, ConstraintsParameters):
-        # Constraint targets are clip-relative frame indices. Keep those indices
-        # on the scene grid even when the returned BVH uses a different FPS.
-        source_motion = workflow.resample_motion(
-            source_motion, scene_fps,
-            duration_seconds=command.parameters.num_frames / scene_fps,
-        )
-        frame_step = 1.0
-
-    target, joint_map, canonical_from_armature = blender_retarget_service.current_retarget_build(
-        armature,
-        blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
-    )
-    retargeted_motion = workflow.retarget_mapped_motion(source_motion, target, joint_map)
-    if USE_SPACETIME_REFINEMENT:
-        retargeted_motion, _constraints = workflow.refine_motion_spacetime(
-            source_motion,
-            retargeted_motion, # used as an initial guess
-            joint_map,
-            settings=workflow.SpaceTimeSettings(), # Default setting, TODO: move to UI if necessary
-        )
-    prepared = blender_motion_writer.prepare_retargeted_motion(
-        armature,
-        retargeted_motion,
-        canonical_from_armature=canonical_from_armature,
-        frame_start=0.0,
-        frame_step=frame_step,
-    )
-    if start_from_previous is None:
-        start_from_previous = _can_align_previous_start(command.parameters)
-    if start_from_previous:
-        prepared = _align_generated_start(
-            track, clip, armature, command, prepared, scene_fps,
-            root_bone_name=joint_map[source_motion.hierarchy.root_name],
-        )
-
-    # Resolve this before creating any resource owned by the new Take.
-    _working_binding(track, armature)
-
     existing_take = None if take_uid is None else takes.find_take(clip, take_uid)
     if take_uid is not None and existing_take is None:
         raise ValueError("The pending Take was deleted.")
     take_uid = clip.take_counter + 1 if take_uid is None else take_uid
-    action = source_record = None
     take = existing_take
+    action = source_record = None
     try:
+        if take is None:
+            take = edit_track(track, takes.add_take, clip, command=command, activate=False)
+        take.source_root_offset = root_offset
+        prepared = _prepare_take_motion(track, clip, take, source_motion, scene_fps)
+
+        # Resolve this before creating any resource owned by the new Take.
+        _working_binding(track, armature)
         action, slot = _new_take_action(armature, clip.uid, take_uid)
         blender_motion_writer.apply_prepared_motion(
             armature,
@@ -401,9 +346,6 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
             keyframe_type="GENERATED",
         )
         source_record = _new_source_text(clip.uid, take_uid, source_text)
-
-        if take is None:
-            take = edit_track(track, takes.add_take, clip, command=command, activate=False)
         take.take_action = action
         take.take_slot_handle = int(slot.handle)
         take.source_motion_text = source_record
@@ -432,15 +374,139 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         raise
 
 
-def _can_align_previous_start(parameters):
-    if isinstance(parameters, TextParameters):
-        return True
-    if isinstance(parameters, ConstraintsParameters):
-        return not any(item.target_frame == 0 for item in parameters.constraints)
-    return False
+def reapply_spacetime(context, track, clip):
+    """Rebuild the active Take from its immutable server Motion."""
+    from broom.io import load_bvh_from_bytes
+
+    active_take = takes.current_take(clip)
+    if active_take is None or active_take.source_motion_text is None:
+        raise ValueError("The active Clip has no saved server Motion.")
+    scene_fps = float(context.scene.render.fps) / float(context.scene.render.fps_base)
+    prepared = _prepare_take_motion(
+        track,
+        clip,
+        active_take,
+        load_bvh_from_bytes(active_take.source_motion_text.as_string().encode("utf-8")),
+        scene_fps,
+    )
+    take_action, take_slot = _take_binding(active_take)
+    blender_motion_writer.apply_prepared_motion(
+        track.object,
+        take_action,
+        take_slot,
+        prepared,
+        assign_to_skeleton=False,
+        keyframe_type="GENERATED",
+    )
+    working_action, working_slot = _working_binding(track, track.object)
+    actions.materialize_take(
+        working_action,
+        working_slot,
+        take_action,
+        take_slot,
+        clip.start,
+        clip.end,
+        active_take.offset,
+        preserve_manual=True,
+    )
 
 
-def _align_generated_start(track, clip, armature, command, prepared, scene_fps, *, root_bone_name):
+def _spacetime_contact_frames(clip):
+    left = _parse_contact_frames(clip.spacetime_left_toe_frames, "Left Toe Frames")
+    right = _parse_contact_frames(clip.spacetime_right_toe_frames, "Right Toe Frames")
+    if not left and not right:
+        return None
+    if not left or not right:
+        raise ValueError("Set contact frames for both toes or leave both fields empty.")
+    return {"left": left, "right": right}
+
+
+def _parse_contact_frames(value, label):
+    value = value.strip()
+    if not value:
+        return ()
+    try:
+        frames = tuple(sorted({int(item.strip()) for item in value.split(",")}))
+    except ValueError as error:
+        raise ValueError(f"{label} must contain whole frames separated by commas.") from error
+    if any(frame < 0 for frame in frames):
+        raise ValueError(f"{label} cannot contain negative frames.")
+    return frames
+
+
+def _prepare_take_motion(track, clip, take, source_motion, scene_fps):
+    """Build one Take's derived animation from its immutable server Motion."""
+    if not math.isfinite(scene_fps) or scene_fps <= 0.0:
+        raise ValueError("Scene FPS must be positive and finite.")
+
+    root_offset = tuple(float(value) for value in take.source_root_offset)
+    if any(root_offset):
+        # Undo request normalization before retargeting so its scale conversion
+        # also applies to the restored translation. The server BVH stays intact.
+        values = source_motion.values.copy()
+        for axis, offset in zip("XYZ", root_offset):
+            if offset:
+                column = source_motion.hierarchy.channel_index(
+                    source_motion.hierarchy.root_name, f"{axis}position",
+                )
+                values[:, column] += offset
+        source_motion = replace(source_motion, values=values)
+
+    frame_step = scene_fps * source_motion.frame_time
+    if take.generation_mode == "text":
+        source_motion = workflow.resample_motion(
+            source_motion, scene_fps, duration_seconds=take.duration_seconds,
+        )
+        frame_step = 1.0
+    elif take.generation_mode == "constraints":
+        # Constraint targets use exact clip-relative frame indices, independent
+        # of the scene's FPS. ``take.length`` is that original frame count.
+        source_motion = workflow.resample_motion(
+            source_motion, scene_fps, duration_seconds=take.length / scene_fps,
+        )
+        frame_step = 1.0
+
+    armature = _working_armature(track)
+    target, joint_map, canonical_from_armature = blender_retarget_service.current_retarget_build(
+        armature,
+        blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
+    )
+    retargeted_motion = workflow.retarget_mapped_motion(source_motion, target, joint_map)
+    if track.id_data.avacapo_spacetime_enabled:
+        # TODO(spacetime-pose-constraints): The debug workflow also captures
+        # non-GENERATED Working Action poses and passes them to the solver.
+        # Move that verified path here only after its constraints are tested
+        # together with the shared Generate/Reapply workflow.
+        # pose_constraints = spacetime_debug._active_clip_pose_constraints(
+        #     bpy.context, armature, target, source_motion.frame_count,
+        # )
+        retargeted_motion, _constraints = workflow.refine_motion_spacetime(
+            source_motion,
+            retargeted_motion,
+            joint_map,
+            # pose_constraints=pose_constraints,
+            contact_frames=_spacetime_contact_frames(clip),
+            settings=spacetime_settings(track.id_data),
+        )
+    prepared = blender_motion_writer.prepare_retargeted_motion(
+        armature,
+        retargeted_motion,
+        canonical_from_armature=canonical_from_armature,
+        frame_start=0.0,
+        frame_step=frame_step,
+    )
+    return _align_generated_start(
+        track,
+        clip,
+        armature,
+        take,
+        prepared,
+        scene_fps,
+        root_bone_name=joint_map[source_motion.hierarchy.root_name],
+    )
+
+
+def _align_generated_start(track, clip, armature, take, prepared, scene_fps, *, root_bone_name):
     """Use the current neighbour pose rather than trusting the server's first sample."""
     previous, _ = tracks.neighbors(track.clips, clip.uid)
     if previous is None or previous.end != clip.start:
@@ -454,10 +520,17 @@ def _align_generated_start(track, clip, armature, command, prepared, scene_fps, 
     # An explicit starting pose takes priority over automatic continuity.
     if clip.start in manual_frames:
         return prepared
+
+    try:
+        constraint_frames = json.loads(take.constraint_frames)
+    except json.JSONDecodeError as error:
+        raise ValueError("Take constraint frames are invalid.") from error
+    if not isinstance(constraint_frames, list) or any(
+        not isinstance(frame, int) or frame < 0 for frame in constraint_frames
+    ):
+        raise ValueError("Take constraint frames are invalid.")
     later_constraints = [frame - clip.start for frame in manual_frames if frame > clip.start]
-    if isinstance(command.parameters, ConstraintsParameters):
-        later_constraints.extend(item.target_frame for item in command.parameters.constraints
-                                 if item.target_frame > 0)
+    later_constraints.extend(frame for frame in constraint_frames if frame > 0)
 
     scene = track.id_data
     previous_frame, previous_subframe = scene.frame_current, scene.frame_subframe
