@@ -571,7 +571,8 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
         return False
 
     working_action, working_slot = _working_binding(track, track.object)
-    bindings = []
+    trims = []
+    extensions = []
     for clip, take, previous in changed:
         action, slot = _take_binding(take)
         if action == working_action:
@@ -579,16 +580,19 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
         previous_offsets = dict(previous.take_offsets)
         if take.uid not in previous_offsets:
             raise ValueError("Active Take is missing from the drag snapshot.")
-        bindings.append((
-            clip,
-            action,
-            slot,
-            previous.start,
-            previous.end,
-            previous.start + previous_offsets[take.uid],
+        origin = previous.start + previous_offsets[take.uid]
+        overlap_start = max(previous.start, clip.start)
+        overlap_end = max(overlap_start, min(previous.end, clip.end))
+        trims.append((
+            action, slot, previous.start, previous.end, overlap_start, overlap_end, origin,
+        ))
+        extensions.append((
+            action, slot, overlap_start, overlap_end, clip.start, clip.end, origin,
         ))
 
-    for clip, action, slot, old_start, old_end, origin in bindings:
+    # Clips share the Working Action. Remove every trimmed range before adding
+    # keys, or a shrinking neighbour can erase frames another Clip just restored.
+    for action, slot, old_start, old_end, new_start, new_end, origin in trims + extensions:
         actions.apply_resize_delta(
             working_action,
             working_slot,
@@ -596,8 +600,8 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
             slot,
             old_start,
             old_end,
-            clip.start,
-            clip.end,
+            new_start,
+            new_end,
             origin,
         )
     return True
