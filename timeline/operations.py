@@ -170,6 +170,8 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
     except Exception:
         edit_track(track, takes.remove_take, clip, take.uid)
         raise
+    if not clip.name.strip():
+        clip.name = tracks.clip_name_from_prompt(command.prompt)
     # Retain the submitted seed immediately, so disabling randomization also
     # reuses it while this Take is pending or if generation later fails.
     clip.seed = command.parameters.seed
@@ -549,7 +551,7 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_ma
         raise
 
     clip.active_take_uid = target_take.uid
-    clip.prompt = "" if target_take.prompt == clip.name else target_take.prompt
+    clip.prompt = target_take.prompt
     clip.seed = target_take.seed
     clip.generation_model = target_take.generation_model
     clip.generation_temperature = target_take.temperature
@@ -617,10 +619,10 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
     return True
 
 
-def create_clip(track, frame, default_length, *, prompt, stick_previous=False):
+def create_clip(track, frame, default_length, *, name="", stick_previous=False):
     """Create a Clip and apply automatic binding resizes to Working Actions."""
     initial = edit_track(track, tracks.snapshot)
-    clip = edit_track(track, tracks.create_clip_at, frame, default_length, prompt=prompt)
+    clip = edit_track(track, tracks.create_clip_at, frame, default_length, name=name)
     if clip is not None:
         if stick_previous:
             edit_track(track, tracks.stick_to_neighbors, clip.uid, 'PREV')

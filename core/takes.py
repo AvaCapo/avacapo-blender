@@ -52,9 +52,12 @@ def select_take(clip, take_uid: int) -> bool:
 
 
 def delete_takes(store, clip) -> None:
+    """Reset generation settings, retaining the selected Take's prompt for reuse."""
+    selected = current_take(clip)
+    prompt = selected.prompt if selected is not None else clip.prompt
     store.clear_take_records(clip)
     clip.active_take_uid = 0
-    clip.prompt = ""
+    clip.prompt = prompt
     clip.seed = -1
     clip.randomize_seed = True
     clip.generation_model = Config.DEFAULT_MODEL_TYPE

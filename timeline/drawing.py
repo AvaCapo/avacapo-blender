@@ -38,8 +38,9 @@ def hover_lines(clip, scene_fps):
     if clip is None:
         return ("Right click for options", "Double click to create a new clip")
     take_count = len(clip.takes)
+    name = clip.name.strip() or f"Clip {clip.uid}"
     lines = (
-        f"{clip.name} · {take_count} {'take' if take_count == 1 else 'takes'}",
+        f"{name} · {take_count} {'take' if take_count == 1 else 'takes'}",
         "Right click for options, drag to move",
     )
     warning = duration_warning(clip, scene_fps)
@@ -256,9 +257,9 @@ class ClipDrawing:
                         palette.stripe,
                     )
                 label_left, label_right = visible_start, visible_end
-        label = clip.name
+        label = clip.name.strip() or f"Clip {clip.uid}"
         if take is not None and is_pending(take):
-            label = f"{STATUS_LABELS[TaskStatus(take.generation_status)]}: {clip.name}"
+            label = f"{STATUS_LABELS[TaskStatus(take.generation_status)]}: {label}"
         labels.append((label, label_left, label_right, palette.text))
 
     @staticmethod

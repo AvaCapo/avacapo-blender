@@ -11,7 +11,7 @@ from ..animation import blender_actions
 from ..core import takes, tracks
 from .drawing import ClipDrawing
 from . import operations
-from .properties import edit_track, find_track
+from .properties import edit_track, ensure_track, find_track
 from .runtime import (
     HoverHint, HoverTarget, MenuTarget, has_selected_armature, in_timeline, runtime, tag_redraw,
 )
@@ -152,7 +152,7 @@ def _clear_working_key_selection(data):
 
 
 class CLIPS_OT_hover(Operator):
-    """Hover over a clip to see its prompt and details"""
+    """Hover over a clip to see its name, take count, and duration guidance"""
     bl_idname = "clips.hover"
     bl_label = "Clips Hover"
     bl_options = {'INTERNAL'}
@@ -282,9 +282,25 @@ class CLIPS_OT_mouse(Operator):
         return {'CANCELLED'}
 
     def _create_with_prompt(self, context, hit):
-        bpy.ops.clips.create(
-            'INVOKE_DEFAULT', frame=math.floor(hit.frame), stick_previous=True,
+        scene = context.scene
+        track = find_track(context)
+        clips = () if track is None else track.clips
+        if tracks.new_range(clips, hit.frame, scene.clip_data.default_length) is None:
+            self.report({'WARNING'}, "No free space here")
+            return {'CANCELLED'}
+        try:
+            track = track or ensure_track(context)
+        except ValueError as exc:
+            self.report({'WARNING'}, str(exc))
+            return {'CANCELLED'}
+        clip = operations.create_clip(
+            track, hit.frame, scene.clip_data.default_length, stick_previous=True,
         )
+        if clip is None:
+            self.report({'WARNING'}, "No free space here")
+            return {'CANCELLED'}
+        tag_redraw()
+        bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=clip.uid)
         return {'FINISHED'}
 
     def _begin_drag(self, context, event, track, hit, view):

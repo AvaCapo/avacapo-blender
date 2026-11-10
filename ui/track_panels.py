@@ -19,7 +19,7 @@ class CLIPS_MT_empty(Menu):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator_context = 'INVOKE_DEFAULT'
+        layout.operator_context = 'EXEC_DEFAULT'
         frame = math.floor(runtime.menu_target.frame)
         layout.operator("clips.create", text="Create Clip",
                         icon='ADD').frame = frame
@@ -80,7 +80,11 @@ class CLIPS_MT_clip(Menu):
     def draw(self, context):
         layout = self.layout
         uid = runtime.menu_target.clip_uid
-        layout.operator("clips.new_take", text="New Take").clip_uid = uid
+        track = find_track(context)
+        clip = tracks.find_clip(track.clips, uid) if track is not None else None
+        row = layout.row()
+        row.enabled = clip is not None and bool(clip.prompt.strip())
+        row.operator("clips.new_take", text="Generate Take").clip_uid = uid
         op = layout.operator("clips.edit_prompt",
                              text="Change Prompt / Settings...")
         op.clip_uid = uid
@@ -131,7 +135,6 @@ class CLIPS_PT_panel(Panel):
         # Armature
         armature_col = layout.column(align=True)
         armature_box = armature_col.box()
-        armature_box.label(text="Armature:")
 
         armature = context.active_object
         if armature is None or armature.type != "ARMATURE" or not armature.select_get():
@@ -165,15 +168,13 @@ class CLIPS_PT_panel(Panel):
             ui_retargeting.draw_retarget_mapping(retarget_box, context)
 
         new_clip_box = layout.box()
-        new_clip_box.label(text="New clip")
-        new_clip_box.prop(data, "new_clip_prompt", text="", placeholder="prompt")
+        new_clip_box.prop(data, "new_clip_name", text="", placeholder="name")
         new_clip_box.prop(data, "default_length", text="Duration (frames)")
         row = new_clip_box.row()
-        row.enabled = bool(data.new_clip_prompt.strip())
         row.operator_context = 'EXEC_DEFAULT'
         op = row.operator("clips.create", text="New Clip at Current Frame", icon='ADD')
         op.frame = scene.frame_current
-        op.prompt = data.new_clip_prompt
+        op.name = data.new_clip_name
 
         track = find_track(context)
         clip = tracks.active_clip(track) if track is not None else None
@@ -181,13 +182,15 @@ class CLIPS_PT_panel(Panel):
         clip_col = layout.column(align=True)
 
         if clip is None:
-            clip_col.label(text="Select a clip in the Timeline")
+            clip_col.box().label(text="Select a clip on the timeline")
 
             return
 
         generation_box = clip_col.box()
-        generation_box.label(text="Current Clip:")
-        generation_box.operator(
+        generation_box.prop(clip, "prompt", text="", placeholder="prompt")
+        row = generation_box.row()
+        row.enabled = bool(clip.prompt.strip())
+        row.operator(
             "clips.new_take", text="Generate Take", icon='SHADERFX',
         ).clip_uid = clip.uid
         row = generation_box.row()
@@ -200,7 +203,6 @@ class CLIPS_PT_panel(Panel):
         )
         if clip.show_advanced_generation:
             col = generation_box.column()
-            col.prop(clip, "prompt", placeholder=clip.name)
             col.prop(clip, "generation_model")
             row = col.row(align=True)
             seed = row.row(align=True)

@@ -163,16 +163,24 @@ def restore_snapshot(store, initial: dict[int, ClipSnapshot]) -> None:
                 take.offset = offsets[take.uid]
 
 
-def add_clip(store, start: int, end: int, name: str):
+def clip_name_from_prompt(prompt):
+    """Keep timeline labels short while preserving the full generation prompt."""
+    name = " ".join(prompt.split())
+    if len(name) <= 48:
+        return name
+    prefix = name[:45]
+    if " " in prefix:
+        prefix = prefix.rsplit(" ", 1)[0]
+    return prefix.rstrip() + "..."
+
+
+def add_clip(store, start: int, end: int, name: str | None = None):
     if end - start < TimelineConfig.MIN_CLIP_LENGTH:
         raise ValueError("A clip must span at least one frame")
-    name = name.strip()
-    if not name:
-        raise ValueError("Enter a prompt for the clip.")
     clip = store.allocate_clip()
     clip.uid = store.data.next_clip_uid
     store.data.next_clip_uid += 1
-    clip.name = name
+    clip.name = (name or "").strip()
     clip.start, clip.end = start, end
     return clip
 
@@ -255,21 +263,21 @@ def restore_clip(store, payload: ClipData, start: int):
     return clip
 
 
-def create_clip_at(store, frame: float, default_length: int, *, prompt: str):
+def create_clip_at(store, frame: float, default_length: int, *, name: str = ""):
     interval = new_range(store.clips, frame, default_length)
     if interval is None:
         return None
-    clip = add_clip(store, *interval, name=prompt)
+    clip = add_clip(store, *interval, name=name)
     store.data.active_clip_uid = clip.uid
     apply_bindings(store)
     return clip
 
 
 def fill_gap(
-    store, frame: float, max_length: int, scene_start: int, scene_end: int, *, prompt: str,
+    store, frame: float, max_length: int, scene_start: int, scene_end: int,
 ) -> list:
     ranges = fill_ranges(store.clips, frame, max_length, scene_start, scene_end)
-    clips = [add_clip(store, start, end, name=prompt) for start, end in ranges]
+    clips = [add_clip(store, start, end) for start, end in ranges]
     if clips:
         store.data.active_clip_uid = clips[0].uid
     return clips

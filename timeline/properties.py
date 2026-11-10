@@ -34,9 +34,7 @@ class BlenderTrackStore:
         return self.data.clips
 
     def allocate_clip(self):
-        clip = self.clips.add()
-        clip["_prompt_version"] = 1
-        return clip
+        return self.clips.add()
 
     def remove_clip_record(self, uid):
         for index, clip in enumerate(self.clips):
@@ -173,16 +171,6 @@ def edit_track(data, operation, *args, **kwargs):
         _writing_properties = previous
 
 
-def migrate_clip_prompts(scene):
-    """Preserve the full legacy prompt as the editable clip name, once per record."""
-    for track in scene.clip_data.tracks:
-        for clip in track.clips:
-            if clip.get("_prompt_version", 0) < 1:
-                clip.name = clip.prompt.strip() or clip.name.strip() or f"Clip {clip.uid}"
-                clip.prompt = ""
-                clip["_prompt_version"] = 1
-
-
 class CT_Take(PropertyGroup):
     uid: IntProperty(options={'HIDDEN'})
     name: StringProperty(name="Name", default="Take")
@@ -244,14 +232,14 @@ class CT_Take(PropertyGroup):
 class CT_Clip(PropertyGroup):
     uid: IntProperty()
     name: StringProperty(
-        name="Prompt", default="Clip",
-        description="Full clip prompt and timeline label. Editing it affects future takes only",
+        name="Clip Name",
+        description="Timeline name; if blank, the first queued take prompt supplies a short name",
     )
-    # Optional prompt override and editable settings for the next generation.
+    # Editable prompt and settings for the next generation.
     # Take fields retain the actual request; selecting a Take restores its settings.
     prompt: StringProperty(
-        name="Override",
-        description="Optional prompt for the next take. Leave empty to use the clip's prompt",
+        name="Prompt",
+        description="Motion for the next take. Selecting a take restores its saved prompt",
     )
     seed: IntProperty(
         name="Seed", min=-1, default=-1,
@@ -373,8 +361,8 @@ class CT_Scene(PropertyGroup):
         options={'SKIP_SAVE'},
     )
     tracks: CollectionProperty(type=CT_Track)
-    new_clip_prompt: StringProperty(
-        name="Prompt", description="Required motion prompt, stored as the new clip's full name",
+    new_clip_name: StringProperty(
+        name="Clip Name", description="Optional name; leave empty to name from the first take prompt",
     )
     default_length: IntProperty(
         name="Default Length", min=TimelineConfig.MIN_CLIP_LENGTH,
