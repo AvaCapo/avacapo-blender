@@ -19,7 +19,7 @@ from ..timeline.operators import (
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
-    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame, CLIPS_OT_toggle_section,
+    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
 )
 from ..timeline.operations import cancel_generation
 from .track_panels import (
@@ -44,7 +44,7 @@ CLASSES = (
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
     CLIPS_OT_paste_clip,
-    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame, CLIPS_OT_toggle_section,
+    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
     CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )
 

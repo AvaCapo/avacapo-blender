@@ -263,9 +263,6 @@ class CT_Clip(PropertyGroup):
         name="Enhance Prompt", default=True,
         description="Ask the service to enhance the submitted prompt",
     )
-    show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
-    show_takes: BoolProperty(default=True, options={'HIDDEN'})
-    show_clip_settings: BoolProperty(default=False, options={'HIDDEN'})
 
     def _get_start(self):
         return self.get("_start", 0)
@@ -338,25 +335,9 @@ class CT_Track(PropertyGroup):
     clips: CollectionProperty(type=CT_Clip)
 
 
-def _show_retargeting_changed(data, context):
-    if not data.show_retargeting or context is None:
-        return
-    armature = context.active_object
-    if (
-        armature is not None
-        and armature.type == 'ARMATURE'
-        and hasattr(context.scene, "avacapo_retarget_target")
-    ):
-        context.scene.avacapo_retarget_target = armature
-
-
 class CT_Scene(PropertyGroup):
     active_track_uid: IntProperty(default=0, options={'HIDDEN'})
     next_track_uid: IntProperty(default=1, options={'HIDDEN'})
-    show_retargeting: BoolProperty(
-        name="Show retargeting", description="Show retargeting",
-        default=False, options={'HIDDEN'}, update=_show_retargeting_changed,
-    )
     token_input: StringProperty(
         name="Token", description="Paste your API token here", subtype='PASSWORD',
         options={'SKIP_SAVE'},

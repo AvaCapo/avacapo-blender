@@ -17,14 +17,6 @@ from .runtime import has_selected_armature, runtime, tag_redraw
 from .track_style import STYLE
 
 
-_SECTION_ITEMS = (
-    ('show_retargeting', "Retargeting", "Show retargeting"),
-    ('show_advanced_generation', "Advanced Generation Settings", "Show advanced generation settings"),
-    ('show_takes', "Takes", "Show takes"),
-    ('show_clip_settings', "Clip Settings", "Show clip settings"),
-)
-
-
 class _ClipOp:
     """Resolve a clip UID (0 means the selected clip) for Blender operators."""
     clip_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
@@ -75,34 +67,6 @@ class _ClipOp:
             return False
         self.report({'INFO'}, "Generation queued")
         return True
-
-
-class CLIPS_OT_toggle_section(_ClipOp, Operator):
-    """Expand or collapse a sidebar section without adding an undo step."""
-    bl_idname = "clips.toggle_section"
-    bl_label = ""
-    bl_options = {'INTERNAL'}
-
-    section: EnumProperty(
-        items=_SECTION_ITEMS,
-        options={'HIDDEN', 'SKIP_SAVE'},
-    )
-
-    @classmethod
-    def description(cls, context, properties):
-        return next(description for name, _, description in _SECTION_ITEMS
-                    if name == properties.section)
-
-    def execute(self, context):
-        if self.section == 'show_retargeting':
-            owner = context.scene.clip_data
-        else:
-            _, owner = self._get_clip(context)
-            if owner is None:
-                return {'CANCELLED'}
-        setattr(owner, self.section, not getattr(owner, self.section))
-        tag_redraw()
-        return {'FINISHED'}
 
 
 class _ClipCreation:

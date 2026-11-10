@@ -134,80 +134,75 @@ class CLIPS_PT_panel(Panel):
                          text="Connect", icon="CHECKMARK")
 
         # Armature
+        layout.separator(type='LINE')
         armature_col = layout.column(align=True)
-        armature_box = armature_col.box()
 
         armature = context.active_object
         if armature is None or armature.type != "ARMATURE" or not armature.select_get():
-            armature_box.label(text="Select an armature", icon="INFO")
-            armature_box.operator(
+            armature_col.label(text="Select an armature", icon="INFO")
+            armature_col.operator(
                 "avacapo.append_avacapo_reference_armature",
                 text="New Armature",
                 icon="OUTLINER_OB_ARMATURE",
             )
             return
 
-        armature_box.label(
-            text=armature.name,
+        armature_col.label(
+            text=f'{armature.name}:',
             icon="OUTLINER_OB_ARMATURE",
         )
-        retarget_box = armature_col.box()
+        retarget_header, retarget_body = layout.panel(
+            "avacapo_retargeting", default_closed=True,
+        )
         _, status_icon = ui_retargeting.retarget_mapping_status(armature)
-        retarget_header = retarget_box.row(align=True)
         retarget_header.alert = status_icon == 'ERROR'
-        retarget_header.operator(
-            "clips.toggle_section",
-            text="Set up retargeting",
-            emboss=False,
-            icon='TRIA_DOWN' if data.show_retargeting else 'TRIA_RIGHT',
-        ).section = 'show_retargeting'
+        retarget_header.label(text="Set up retargeting")
         status = retarget_header.row(align=True)
         status.alignment = 'RIGHT'
         status.operator(
             "avacapo.retarget_mapping_status", text="",
             icon=status_icon, emboss=False,
         )
-        if data.show_retargeting:
-            ui_retargeting.draw_retarget_mapping(retarget_box, context)
+        if retarget_body is not None:
+            ui_retargeting.draw_retarget_mapping(retarget_body, context)
 
-        new_clip_box = layout.box()
-        new_clip_box.prop(data, "default_length", text="Duration (frames)")
-        row = new_clip_box.row()
+        layout.separator(type='LINE')
+        layout.label(text="New Clip:")
+        new_clip_col = layout.column(align=True)
+        new_clip_col.prop(data, "default_length", text="Frames")
+        row = new_clip_col.row()
         row.operator_context = 'EXEC_DEFAULT'
-        op = row.operator("clips.create", text="New Clip at Current Frame", icon='ADD')
+        op = row.operator("clips.create", text="New from Current Frame", icon='ADD')
         op.frame = scene.frame_current
 
         track = find_track(context)
         clip = tracks.active_clip(track) if track is not None else None
 
-        clip_col = layout.column(align=True)
-
+        layout.separator(type='LINE')
+        layout.label(text="Current Clip:")
         if clip is None:
-            hint = clip_col.box().column(align=True)
+            hint = layout.column(align=True)
             hint.label(text="Select a clip on the timeline")
             hint.label(text="or create a new clip")
 
             return
 
-        generation_box = clip_col.box()
-        generation_box.prop(clip, "prompt", text="", placeholder="prompt")
-        row = generation_box.row()
+        generation_col = layout.column()
+        generation_col.prop(clip, "prompt", text="", placeholder="prompt")
+        row = generation_col.row()
         row.enabled = bool(clip.prompt.strip())
         row.active_default = True
         row.operator(
             "clips.new_take", text="Generate Take", icon='SHADERFX',
         ).clip_uid = clip.uid
-        row = generation_box.row()
-        op = row.operator(
-            "clips.toggle_section",
-            text="Advanced Generation Settings",
-            emboss=False,
-            icon='TRIA_DOWN' if clip.show_advanced_generation else 'TRIA_RIGHT',
+        header, body = layout.panel(
+            "avacapo_advanced_generation", default_closed=True,
         )
-        op.section, op.clip_uid = 'show_advanced_generation', clip.uid
-        if clip.show_advanced_generation:
-            col = generation_box.column()
+        header.label(text="Advanced Generation Settings")
+        if body is not None:
+            col = body.column(align=True)
             col.prop(clip, "generation_model")
+            col.separator()
             row = col.row(align=True)
             seed = row.row(align=True)
             seed.enabled = not clip.randomize_seed
@@ -220,17 +215,10 @@ class CLIPS_PT_panel(Panel):
             col.prop(clip, "generation_enhance_prompt")
 
         # Takes
-        takes_box = clip_col.box()
-        row = takes_box.row()
-        op = row.operator(
-            "clips.toggle_section",
-            text="Takes",
-            emboss=False,
-            icon='TRIA_DOWN' if clip.show_takes else 'TRIA_RIGHT',
-        )
-        op.section, op.clip_uid = 'show_takes', clip.uid
-        if clip.show_takes:
-            take_list = takes_box.column(align=True)
+        header, body = layout.panel("avacapo_takes", default_closed=False)
+        header.label(text="Takes")
+        if body is not None:
+            take_list = body.column(align=True)
             for take in clip.takes:
                 row = take_list.row(align=True)
                 name_row = row
@@ -253,24 +241,17 @@ class CLIPS_PT_panel(Panel):
                 if take.generation_error:
                     take_list.label(text=take.generation_error, icon='ERROR')
             if len(clip.takes) > 0:
-                takes_box.operator("clips.delete_takes").clip_uid = clip.uid
+                body.operator("clips.delete_takes").clip_uid = clip.uid
             else:
-                takes_box.label(text="No Takes Yet, Generate Take")
+                body.label(text="No Takes Yet, Generate Take")
 
         # Clip Props
-        clip_prop_box = clip_col.box()
-        row = clip_prop_box.row()
-        op = row.operator(
-            "clips.toggle_section",
-            text="Clip Settings",
-            emboss=False,
-            icon='TRIA_DOWN' if clip.show_clip_settings else 'TRIA_RIGHT',
-        )
-        op.section, op.clip_uid = 'show_clip_settings', clip.uid
-        if not clip.show_clip_settings:
+        header, body = layout.panel("avacapo_clip_settings", default_closed=True)
+        header.label(text="Clip Settings")
+        if body is None:
             return
-        clip_prop_box.prop(clip, "name")
-        col = clip_prop_box.column(align=True)
+        body.prop(clip, "name")
+        col = body.column(align=True)
         row = col.row(align=True)
         row.prop(clip, "start")
         op = row.operator("clips.set_frame", text="", icon='TIME')
@@ -287,7 +268,6 @@ class CLIPS_PT_panel(Panel):
 
         take = takes.current_take(clip)
         if take is not None and take.take_action is not None:
-            clip_prop_box.prop(take, "offset", text="Take Offset (frames)")
+            body.prop(take, "offset", text="Take Offset (frames)")
 
-        clip_prop_box.operator("clips.delete_clip",
-                               icon='TRASH').clip_uid = clip.uid
+        body.operator("clips.delete_clip", icon='TRASH').clip_uid = clip.uid

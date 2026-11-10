@@ -185,7 +185,6 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         root_offset=root_offset,
         start_from_previous=start_from_previous,
     )
-    clip.show_takes = True
     runtime.generation_cooldown_until = monotonic() + 1.0
     tag_redraw()
     log.info("Queued server generation %s for Clip %s.", task_id[:8], clip.uid)

@@ -79,6 +79,8 @@ def retarget_mapping_status(armature):
     state = getattr(armature, "avacapo_retarget_mapping", None)
     if state is None:
         return "Unavailable", "ERROR"
+    if not state.entries and not state.confirmed and not state.draft_error:
+        return "Needs setup", "INFO"
     errors = _visible_mapping_errors(
         blender_retarget_service.mapping_status_errors(armature), state.confirmed,
     )
@@ -102,7 +104,7 @@ class AVACAPO_OT_retarget_mapping_status(bpy.types.Operator):
         return retarget_mapping_status(context.active_object)[0]
 
     def execute(self, context):
-        context.scene.clip_data.show_retargeting = True
+        self.report({'INFO'}, retarget_mapping_status(context.active_object)[0])
         return {'FINISHED'}
 
 
@@ -429,7 +431,7 @@ def draw_retarget_mapping(layout, context):
     ):
         layout.label(text="Retarget properties are unavailable; re-enable the extension.", icon="ERROR")
         return
-    layout.prop(scene, "avacapo_retarget_target", text="Target Armature")
+    layout.prop(scene, "avacapo_retarget_target", text="Target")
     armature = scene.avacapo_retarget_target
     if armature is None:
         layout.label(text="Choose a custom armature to create a draft.", icon="INFO")
