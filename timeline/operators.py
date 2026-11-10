@@ -40,6 +40,7 @@ class _ClipOp:
         return track, clip
 
     def _generate_take(self, context, track, clip, *, command=None):
+        scene_fps = float(context.scene.render.fps) / float(context.scene.render.fps_base)
         if command is None:
             command = GenerationCommand(
                 prompt=clip.prompt,
@@ -47,7 +48,10 @@ class _ClipOp:
                 in_place=clip.generation_in_place,
                 enhance_prompt=clip.generation_enhance_prompt,
                 parameters=TextParameters(
-                    duration=(clip.end - clip.start) / Config.DEFAULT_FPS,
+                    # Clip duration is measured in scene seconds.
+                    duration=(clip.end - clip.start) / scene_fps,
+                    # TODO(postprocess-fps): keep requests at the configured 24 FPS;
+                    # convert the returned motion to scene FPS locally.
                     fps=Config.DEFAULT_FPS,
                     temperature=clip.generation_temperature,
                     cycled=clip.generation_cycled,
@@ -60,7 +64,7 @@ class _ClipOp:
                 track,
                 clip,
                 command,
-                scene_fps=float(context.scene.render.fps) / float(context.scene.render.fps_base),
+                scene_fps=scene_fps,
             )
         except (OSError, RuntimeError, ValueError, ReferenceError) as exc:
             self.report({'WARNING'}, f"Could not generate Take: {exc}")
@@ -213,23 +217,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         clip.generation_cycled = self.cycled
         clip.generation_in_place = self.in_place
         clip.generation_enhance_prompt = self.enhance_prompt
-        if not self._generate_take(
-            context, track, clip,
-            command=GenerationCommand(
-                prompt=self.prompt, model=self.model,
-                in_place=self.in_place,
-                enhance_prompt=self.enhance_prompt,
-                parameters=TextParameters(
-                    # TODO(postprocess-fps): keep the model request at the configured
-                    # 24 FPS. Scene FPS is for later local post-processing, not this request.
-                    duration=(clip.end - clip.start) / Config.DEFAULT_FPS,
-                    fps=Config.DEFAULT_FPS,
-                    temperature=self.temperature,
-                    cycled=self.cycled,
-                    seed=self.seed,
-                ),
-            ),
-        ):
+        if not self._generate_take(context, track, clip):
             return {'CANCELLED'}
         tag_redraw()
         return {'FINISHED'}

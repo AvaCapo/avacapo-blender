@@ -161,7 +161,9 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         _generation_service_token = Storage.api_token
 
     command = command.resolve_seed()
-    take = edit_track(track, takes.add_take, clip, command=command, activate=False)
+    take = edit_track(
+        track, takes.add_take, clip, command=command, activate=False, scene_fps=scene_fps,
+    )
     set_status(take, TaskStatus.QUEUED)
     try:
         task_id = _generation_service.submit(command)
@@ -403,7 +405,9 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         source_record = _new_source_text(clip.uid, take_uid, source_text)
 
         if take is None:
-            take = edit_track(track, takes.add_take, clip, command=command, activate=False)
+            take = edit_track(
+                track, takes.add_take, clip, command=command, activate=False, scene_fps=scene_fps,
+            )
         take.take_action = action
         take.take_slot_handle = int(slot.handle)
         take.source_motion_text = source_record
@@ -417,6 +421,9 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
             take.uid,
             preserve_manual=not DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
         )
+        # The overlay must describe the stored Action, including when the Clip
+        # was resized while generation was pending. Clip ends are exclusive.
+        take.length = max(1, math.ceil(prepared.frame_times[-1]) + 1)
         set_status(take, TaskStatus.SUCCEEDED, error="")
         return take
     except Exception:
