@@ -229,7 +229,7 @@ class CLIPS_OT_hover(Operator):
 
 
 class CLIPS_OT_mouse(Operator):
-    """Click to select, drag to move, or drag an edge to resize. Right-click for more options"""
+    """Click to select, double-click to rename, drag to move, or drag an edge to resize. Right-click for more options"""
     bl_idname = "clips.mouse"
     bl_label = "Clips"
     bl_options = {'UNDO', 'INTERNAL'}
@@ -265,7 +265,7 @@ class CLIPS_OT_mouse(Operator):
                 _select_clip_keys(
                     context, track, hit.clip, clear_selection=not event.shift,
                 )
-                bpy.ops.clips.edit_prompt('INVOKE_DEFAULT', clip_uid=hit.clip.uid)
+                bpy.ops.clips.rename('INVOKE_DEFAULT', clip_uid=hit.clip.uid)
                 return {'FINISHED'}
             return {'PASS_THROUGH'}
         if hit.kind == 'EMPTY':

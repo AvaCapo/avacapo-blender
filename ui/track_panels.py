@@ -83,8 +83,10 @@ class CLIPS_MT_clip(Menu):
         track = find_track(context)
         clip = tracks.find_clip(track.clips, uid) if track is not None else None
         row = layout.row()
-        row.enabled = clip is not None and bool(clip.prompt.strip())
-        row.operator("clips.new_take", text="Generate Take").clip_uid = uid
+        row.enabled = clip is not None
+        row.operator_context = 'INVOKE_DEFAULT'
+        operator = "clips.new_take" if clip is not None and clip.prompt.strip() else "clips.edit_prompt"
+        row.operator(operator, text="Generate Take").clip_uid = uid
         op = layout.operator("clips.edit_prompt",
                              text="Change Prompt / Settings...")
         op.clip_uid = uid
@@ -168,13 +170,11 @@ class CLIPS_PT_panel(Panel):
             ui_retargeting.draw_retarget_mapping(retarget_box, context)
 
         new_clip_box = layout.box()
-        new_clip_box.prop(data, "new_clip_name", text="", placeholder="name")
         new_clip_box.prop(data, "default_length", text="Duration (frames)")
         row = new_clip_box.row()
         row.operator_context = 'EXEC_DEFAULT'
         op = row.operator("clips.create", text="New Clip at Current Frame", icon='ADD')
         op.frame = scene.frame_current
-        op.name = data.new_clip_name
 
         track = find_track(context)
         clip = tracks.active_clip(track) if track is not None else None

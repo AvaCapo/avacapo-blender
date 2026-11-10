@@ -79,14 +79,10 @@ class _ClipCreation:
 
 
 class CLIPS_OT_create(_ClipCreation, Operator):
-    """Create an empty clip using Duration in frames. Name is optional; enter a prompt above Generate Take to animate it"""
+    """Create an empty clip using Duration in frames. Enter a prompt above Generate Take to animate it"""
     bl_idname = "clips.create"
     bl_label = "Create Clip"
     bl_options = {'UNDO'}
-    name: StringProperty(
-        name="Clip Name", description="Optional name; leave empty to name from the first take prompt",
-        options={'SKIP_SAVE'},
-    )
 
     def execute(self, context):
         scene = context.scene
@@ -101,12 +97,11 @@ class CLIPS_OT_create(_ClipCreation, Operator):
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
         clip = operations.create_clip(
-            track, self.frame, scene.clip_data.default_length, name=self.name,
+            track, self.frame, scene.clip_data.default_length,
         )
         if clip is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
-        scene.clip_data.new_clip_name = ""
         tag_redraw()
         return {'FINISHED'}
 
@@ -161,6 +156,35 @@ class CLIPS_OT_shrink_neighbors(Operator):
         ):
             self.report({'INFO'}, "The current frame is not inside a neighbouring clip")
             return {'CANCELLED'}
+        tag_redraw()
+        return {'FINISHED'}
+
+
+class CLIPS_OT_rename(_ClipOp, Operator):
+    """Change the clip's name without changing its prompt or takes"""
+    bl_idname = "clips.rename"
+    bl_label = "Rename Clip"
+    bl_options = {'UNDO'}
+    name: StringProperty(name="Name", options={'SKIP_SAVE'})
+
+    def invoke(self, context, event):
+        _, clip = self._get_clip(context)
+        if clip is None:
+            return {'CANCELLED'}
+        self.clip_uid = clip.uid
+        self.name = clip.name
+        return context.window_manager.invoke_props_dialog(self, width=300)
+
+    def draw(self, context):
+        row = self.layout.row()
+        row.activate_init = True
+        row.prop(self, "name", text="", placeholder="name")
+
+    def execute(self, context):
+        _, clip = self._get_clip(context)
+        if clip is None:
+            return {'CANCELLED'}
+        clip.name = self.name.strip()
         tag_redraw()
         return {'FINISHED'}
 

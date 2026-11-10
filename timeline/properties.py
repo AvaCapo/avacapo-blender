@@ -361,9 +361,6 @@ class CT_Scene(PropertyGroup):
         options={'SKIP_SAVE'},
     )
     tracks: CollectionProperty(type=CT_Track)
-    new_clip_name: StringProperty(
-        name="Clip Name", description="Optional name; leave empty to name from the first take prompt",
-    )
     default_length: IntProperty(
         name="Default Length", min=TimelineConfig.MIN_CLIP_LENGTH,
         default=TimelineConfig.DEFAULT_CLIP_LENGTH,
