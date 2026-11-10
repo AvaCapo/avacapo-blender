@@ -56,6 +56,7 @@ def delete_takes(store, clip) -> None:
     clip.active_take_uid = 0
     clip.prompt = ""
     clip.seed = -1
+    clip.randomize_seed = True
     clip.generation_model = Config.DEFAULT_MODEL_TYPE
     clip.generation_temperature = Config.DEFAULT_TEMPERATURE
     clip.generation_cycled = False

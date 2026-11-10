@@ -198,6 +198,7 @@ def serialize_clip(clip) -> ClipData:
         length=clip.end - clip.start,
         prompt=clip.prompt,
         seed=clip.seed,
+        randomize_seed=clip.randomize_seed,
         generation_model=clip.generation_model,
         generation_temperature=clip.generation_temperature,
         generation_cycled=clip.generation_cycled,
@@ -241,6 +242,7 @@ def restore_clip(store, payload: ClipData, start: int):
     clip = add_clip(store, start, start + payload.length, name=payload.name)
     clip.prompt = payload.prompt
     clip.seed = payload.seed
+    clip.randomize_seed = payload.randomize_seed
     clip.generation_model = payload.generation_model
     clip.generation_temperature = payload.generation_temperature
     clip.generation_cycled = payload.generation_cycled

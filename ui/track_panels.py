@@ -202,7 +202,11 @@ class CLIPS_PT_panel(Panel):
             col = generation_box.column()
             col.prop(clip, "prompt", placeholder=clip.name)
             col.prop(clip, "generation_model")
-            col.prop(clip, "seed")
+            row = col.row(align=True)
+            seed = row.row(align=True)
+            seed.enabled = not clip.randomize_seed
+            seed.prop(clip, "seed")
+            row.prop(clip, "randomize_seed", text="", icon='TIME', toggle=True)
             col.prop(clip, "generation_temperature")
             row = col.row(align=True)
             row.prop(clip, "generation_cycled")

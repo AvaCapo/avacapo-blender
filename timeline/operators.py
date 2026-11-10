@@ -12,7 +12,7 @@ from ..core.generation_models import GenerationCommand, TextParameters
 from ..server import models
 from . import operations
 from .generation_status import take_description
-from .properties import edit_track, ensure_track, find_track
+from .properties import RANDOMIZE_SEED_DESCRIPTION, edit_track, ensure_track, find_track
 from .runtime import has_selected_armature, runtime, tag_redraw
 from .track_style import STYLE
 
@@ -51,7 +51,7 @@ class _ClipOp:
                     fps=Config.DEFAULT_FPS,
                     temperature=clip.generation_temperature,
                     cycled=clip.generation_cycled,
-                    seed=clip.seed,
+                    seed=-1 if clip.randomize_seed else clip.seed,
                 ),
             )
         try:
@@ -199,7 +199,12 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         description="Optional prompt for this take. Leave empty to use the clip's prompt",
     )
     seed: IntProperty(
-        name="Seed", min=-1, default=-1, description="-1 chooses a new random seed",
+        name="Seed", min=-1, default=-1,
+        description="Seed for take generation; -1 chooses an initial random seed",
+        options={'SKIP_SAVE'},
+    )
+    randomize_seed: BoolProperty(
+        name="Randomize Seed", default=True, description=RANDOMIZE_SEED_DESCRIPTION,
         options={'SKIP_SAVE'},
     )
     model: EnumProperty(
@@ -227,6 +232,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
             return {'CANCELLED'}
         self.prompt = clip.prompt
         self.seed = clip.seed
+        self.randomize_seed = clip.randomize_seed
         self.model = clip.generation_model
         self.temperature = clip.generation_temperature
         self.cycled = clip.generation_cycled
@@ -240,7 +246,11 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         row = col.row()
         row.activate_init = True
         row.prop(self, "prompt", placeholder=clip.name if clip is not None else "")
-        col.prop(self, "seed")
+        row = col.row(align=True)
+        seed = row.row(align=True)
+        seed.enabled = not self.randomize_seed
+        seed.prop(self, "seed")
+        row.prop(self, "randomize_seed", text="", icon='TIME', toggle=True)
         row = col.row(align=True)
         row.prop(self, "model")
         row.prop(self, "temperature")
@@ -255,6 +265,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
             return {'CANCELLED'}
         clip.prompt = self.prompt.strip()
         clip.seed = self.seed
+        clip.randomize_seed = self.randomize_seed
         clip.generation_model = self.model
         clip.generation_temperature = self.temperature
         clip.generation_cycled = self.cycled

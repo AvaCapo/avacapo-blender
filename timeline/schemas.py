@@ -45,6 +45,7 @@ class ClipData:
     generation_enhance_prompt: bool
     active_take_uid: int
     takes: tuple[TakeData, ...]
+    randomize_seed: bool = True
 
 
 @dataclass(frozen=True)

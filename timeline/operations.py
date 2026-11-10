@@ -170,6 +170,9 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
     except Exception:
         edit_track(track, takes.remove_take, clip, take.uid)
         raise
+    # Retain the submitted seed immediately, so disabling randomization also
+    # reuses it while this Take is pending or if generation later fails.
+    clip.seed = command.parameters.seed
     _pending_generations[task_id] = _PendingGeneration(
         scene=scene,
         track_uid=track.uid,

@@ -16,6 +16,12 @@ from .runtime import tag_redraw
 
 _writing_properties = False
 
+RANDOMIZE_SEED_DESCRIPTION = (
+    "Choose a new seed on every Generate Take for a new animation variation. "
+    "Disable to reuse the previous seed for consistent take regeneration, "
+    "including when changing the timeframe or frame rate"
+)
+
 
 class BlenderTrackStore:
     """Allocation only; UID assignment and timeline rules belong to core."""
@@ -247,7 +253,13 @@ class CT_Clip(PropertyGroup):
         name="Override",
         description="Optional prompt for the next take. Leave empty to use the clip's prompt",
     )
-    seed: IntProperty(name="Seed", min=-1, default=-1, description="-1 = random")
+    seed: IntProperty(
+        name="Seed", min=-1, default=-1,
+        description="Seed for take generation; -1 chooses an initial random seed",
+    )
+    randomize_seed: BoolProperty(
+        name="Randomize Seed", default=True, description=RANDOMIZE_SEED_DESCRIPTION,
+    )
     # This is the editable choice for the next generation. CT_Take.generation_model
     # is immutable history of the model that created that Take.
     generation_model: EnumProperty(
