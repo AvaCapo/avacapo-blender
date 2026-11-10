@@ -1,6 +1,8 @@
 """Timeline hover, mouse input, and native Clip drag."""
 
 import math
+from dataclasses import replace
+from time import monotonic
 
 import bpy
 from bpy.types import Operator
@@ -11,9 +13,10 @@ from .drawing import ClipDrawing
 from . import operations
 from .properties import edit_track, ensure_track, find_track
 from .runtime import (
-    HoverTarget, MenuTarget, in_timeline, runtime, tag_redraw,
+    HoverHint, HoverTarget, MenuTarget, has_selected_armature, in_timeline, runtime, tag_redraw,
 )
 from . import actions
+from .track_style import STYLE
 
 
 def _visible_working_curves(data, clip):
@@ -149,32 +152,80 @@ def _clear_working_key_selection(data):
 
 
 class CLIPS_OT_hover(Operator):
-    """Detect which clip handle or sync dot is under the mouse."""
+    """Highlight targets and show a delayed hint without consuming mouse input."""
     bl_idname = "clips.hover"
     bl_label = "Clips Hover"
     bl_options = {'INTERNAL'}
 
     @classmethod
     def poll(cls, context):
-        return in_timeline(context)
+        return in_timeline(context) and has_selected_armature(context)
 
     def invoke(self, context, event):
+        if runtime.hover_timer is not None:
+            return {'PASS_THROUGH'}
+        self._hover_started = monotonic()
+        if not self._update_hover(context, event):
+            return {'PASS_THROUGH'}
+        self._timer = context.window_manager.event_timer_add(
+            STYLE.hover_timer_interval, window=context.window,
+        )
+        runtime.hover_timer = self._timer
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL', 'PASS_THROUGH'}
+
+    def _update_hover(self, context, event):
+        if not self.poll(context):
+            return False
+        region = context.region
+        mouse_x, mouse_y = event.mouse_x - region.x, event.mouse_y - region.y
+        if not (0 <= mouse_x < region.width and 0 <= mouse_y < region.height):
+            return False
         track = find_track(context)
-        hover = HoverTarget()
-        if track is not None and len(track.clips):
-            view, metrics = ClipDrawing.metrics(context.region)
-            hit = ClipDrawing.hit_test(
-                track.clips, view, metrics, event.mouse_region_x, event.mouse_region_y,
-            )
-            if hit.kind in {'LEFT', 'RIGHT', 'SYNC'}:
-                hover = HoverTarget(
-                    hit.kind, track.uid, hit.clip.uid,
-                    hit.other.uid if hit.other is not None else 0,
-                )
-        if hover != runtime.hover:
+        view, metrics = ClipDrawing.metrics(region)
+        hit = ClipDrawing.hit_test(
+            () if track is None else track.clips, view, metrics, mouse_x, mouse_y,
+        )
+        if hit.kind == 'NONE':
+            return False
+        hover = HoverTarget(
+            hit.kind, track.uid if track is not None else 0,
+            hit.clip.uid if hit.clip is not None else 0,
+            hit.other.uid if hit.other is not None else 0,
+        )
+        hint = HoverHint(region.as_pointer(), mouse_x, mouse_y)
+        if hover != runtime.hover or hint != replace(runtime.hover_hint, visible=False):
             runtime.hover = hover
+            runtime.hover_hint = hint
+            self._hover_started = monotonic()
+            context.area.tag_redraw()
+        return True
+
+    def modal(self, context, event):
+        # Reset/unregister may already have removed this operator's timer.
+        if runtime.hover_timer != self._timer:
+            return {'FINISHED', 'PASS_THROUGH'}
+        if event.type.startswith('TIMER'):
+            if event.type != 'TIMER':
+                return {'PASS_THROUGH'}
+        elif event.type not in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
+            self.cancel(context)
+            return {'FINISHED', 'PASS_THROUGH'}
+        if not self._update_hover(context, event):
+            self.cancel(context)
+            return {'FINISHED', 'PASS_THROUGH'}
+        if (
+            not runtime.hover_hint.visible
+            and monotonic() - self._hover_started >= STYLE.tooltip_delay
+        ):
+            runtime.hover_hint = replace(runtime.hover_hint, visible=True)
             context.area.tag_redraw()
         return {'PASS_THROUGH'}
+
+    def cancel(self, context):
+        if runtime.hover_timer == self._timer:
+            runtime.clear_hover()
+            tag_redraw()
 
 
 class CLIPS_OT_mouse(Operator):
@@ -256,6 +307,7 @@ class CLIPS_OT_mouse(Operator):
         return {'FINISHED'}
 
     def _begin_drag(self, context, event, track, hit, view):
+        runtime.clear_hover()
         self._session = edit_track(
             track, tracks.begin_drag, hit.kind, hit.clip.uid,
             hit.other.uid if hit.other is not None else 0,
@@ -420,5 +472,5 @@ class CLIPS_OT_mouse(Operator):
         _restore_pose_bone_selection(self._track.object, self._bone_selection)
         self._bone_selection = None
         context.window.cursor_modal_restore()
-        runtime.hover = HoverTarget()
+        runtime.clear_hover()
         tag_redraw()

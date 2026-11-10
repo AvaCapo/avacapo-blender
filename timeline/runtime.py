@@ -17,6 +17,14 @@ class HoverTarget:
 
 
 @dataclass(frozen=True)
+class HoverHint:
+    region_pointer: int = 0
+    mouse_x: int = 0
+    mouse_y: int = 0
+    visible: bool = False
+
+
+@dataclass(frozen=True)
 class MenuTarget:
     frame: float = 0.0
     track_uid: int = 0
@@ -49,6 +57,8 @@ class ClipboardClip:
 @dataclass
 class TimelineRuntimeState:
     hover: HoverTarget = field(default_factory=HoverTarget)
+    hover_hint: HoverHint = field(default_factory=HoverHint)
+    hover_timer: bpy.types.Timer | None = None
     menu_target: MenuTarget = field(default_factory=MenuTarget)
     clipboard: ClipboardClip | None = None
     generation_cooldown_until: float = 0.0
@@ -61,9 +71,19 @@ class TimelineRuntimeState:
             self.clipboard.release()
         self.clipboard = clipboard
 
+    def clear_hover(self):
+        if self.hover_timer is not None:
+            try:
+                bpy.context.window_manager.event_timer_remove(self.hover_timer)
+            except (ReferenceError, RuntimeError):
+                pass
+            self.hover_timer = None
+        self.hover = HoverTarget()
+        self.hover_hint = HoverHint()
+
     def reset(self):
         self.generation_cooldown_until = 0.0
-        self.hover = HoverTarget()
+        self.clear_hover()
         self.menu_target = MenuTarget()
         if isinstance(self.clipboard, ClipboardClip):
             self.clipboard.release()
@@ -89,6 +109,11 @@ def in_timeline(context):
     if region.type != 'WINDOW':
         return False
     return True
+
+
+def has_selected_armature(context):
+    armature = context.active_object
+    return armature is not None and armature.type == 'ARMATURE' and armature.select_get()
 
 
 def tag_redraw():

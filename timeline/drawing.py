@@ -8,12 +8,42 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+from ..common.config import TimelineConfig
 from ..core import takes, tracks
 from ..core.generation_models import TaskStatus
 from .generation_status import is_pending, STATUS_LABELS
 from .properties import find_track
-from .runtime import HoverTarget, in_timeline, runtime, ui_scale
+from .runtime import HoverTarget, has_selected_armature, in_timeline, runtime, ui_scale
 from .track_style import STYLE
+
+
+def duration_warning(clip, scene_fps):
+    """Return guidance outside the inclusive recommended duration range."""
+    seconds = (clip.end - clip.start) / scene_fps
+    if seconds < TimelineConfig.RECOMMENDED_MIN_SECONDS:
+        return (
+            "For better performance keep clips larger than "
+            f"{TimelineConfig.RECOMMENDED_MIN_SECONDS:g} seconds"
+        )
+    if seconds > TimelineConfig.RECOMMENDED_MAX_SECONDS:
+        return (
+            "For better performance keep clips under "
+            f"{TimelineConfig.RECOMMENDED_MAX_SECONDS:g} seconds"
+        )
+    return ""
+
+
+def hover_lines(clip, scene_fps):
+    """Describe the clip under the pointer, or the empty track lane."""
+    if clip is None:
+        return ("Right click for options", "Double click to create a new clip")
+    take_count = len(clip.takes)
+    lines = (
+        f"{clip.name} · {take_count} {'take' if take_count == 1 else 'takes'}",
+        "Right click for options, drag to move",
+    )
+    warning = duration_warning(clip, scene_fps)
+    return (*lines, warning) if warning else lines
 
 
 class TimelineView:
@@ -37,6 +67,8 @@ class ClipMetrics:
         self.scale = scale
         self.top = (STYLE.clip_height + STYLE.y_margin) * scale
         self.bottom = self.top - STYLE.clip_height * scale
+        self.track_bottom = max(0.0, self.bottom - STYLE.track_padding * scale)
+        self.track_top = self.top + STYLE.track_padding * scale
         self.handle_width = STYLE.handle_width * scale
         self.radius = STYLE.corner_radius * scale
         self.inset = STYLE.take_inset * scale
@@ -140,7 +172,7 @@ class ClipDrawing:
 
     @staticmethod
     def hit_test(clips, view, metrics, mouse_x, mouse_y):
-        if not (metrics.bottom <= mouse_y <= metrics.top):
+        if not (metrics.track_bottom <= mouse_y <= metrics.track_top):
             return HitResult('NONE')
         frame = view.frame(mouse_x)
         ordered_clips = tracks.ordered_clips(clips)
@@ -166,14 +198,18 @@ class ClipDrawing:
         return HitResult('EMPTY', None, None, frame)
 
     @staticmethod
-    def _draw_clip(mesh, labels, clip, view, metrics, center_y, active_uid, hover, region_width):
+    def _draw_clip(mesh, labels, clip, view, metrics, center_y, active_uid, hover,
+                   region_width, scene_fps):
         left_edge, right_edge = view.pixel(clip.start), view.pixel(clip.end)
         if right_edge < -metrics.handle_width or left_edge > region_width + metrics.handle_width:
             return
 
         x0, x1 = left_edge + metrics.gap, right_edge - metrics.gap
         x1 = max(x1, x0 + 1.0)
-        palette = STYLE.selected if clip.uid == active_uid else STYLE.idle
+        if duration_warning(clip, scene_fps):
+            palette = STYLE.warning_selected if clip.uid == active_uid else STYLE.warning_idle
+        else:
+            palette = STYLE.selected if clip.uid == active_uid else STYLE.idle
         handle_width = min(metrics.handle_width, (x1 - x0) * STYLE.max_handle_fraction)
         scale = metrics.scale
 
@@ -270,9 +306,72 @@ class ClipDrawing:
         return text[:low] + "\u2026" if low else ""
 
     @classmethod
+    def _wrap_text(cls, text, max_width):
+        lines = []
+        line = ""
+        for word in text.split():
+            candidate = f"{line} {word}" if line else word
+            if line and blf.dimensions(0, candidate)[0] > max_width:
+                lines.append(cls._fit_text(line, max_width))
+                line = word
+            else:
+                line = candidate
+        if line:
+            lines.append(cls._fit_text(line, max_width))
+        return lines
+
+    @classmethod
+    def _draw_tooltip(cls, clip, hint, metrics, region, scene_fps):
+        if not hint.visible or hint.region_pointer != region.as_pointer():
+            return
+        scale = metrics.scale
+        padding = STYLE.tooltip_padding * scale
+        max_width = min(STYLE.tooltip_max_width * scale, region.width - 2 * padding)
+        text_width = max_width - 2 * padding
+        if text_width <= 0:
+            return
+
+        blf.size(0, STYLE.tooltip_font_size * scale)
+        warning = duration_warning(clip, scene_fps) if clip is not None else ""
+        lines = []
+        text_lines = hover_lines(clip, scene_fps)
+        for text in text_lines:
+            color = STYLE.tooltip_warning if text == warning else STYLE.tooltip_text
+            lines.extend((line, color) for line in cls._wrap_text(text, text_width))
+        line_height = STYLE.tooltip_line_height * scale
+        if len(lines) * line_height + 4 * padding > region.height:
+            # A short Timeline has more horizontal room than vertical room.
+            color = STYLE.tooltip_warning if warning else STYLE.tooltip_text
+            lines = [
+                (line, color) for line in cls._wrap_text(
+                    " · ".join(text_lines), region.width - 4 * padding,
+                )
+            ]
+        width = max(blf.dimensions(0, text)[0] for text, _ in lines) + 2 * padding
+        height = len(lines) * line_height + 2 * padding
+        x0 = max(padding, min(
+            hint.mouse_x + STYLE.tooltip_offset * scale, region.width - width - padding,
+        ))
+        y0 = max(padding, min(
+            metrics.track_top + STYLE.tooltip_offset * scale, region.height - height - padding,
+        ))
+        mesh = MeshBatch()
+        mesh.rounded_rect(x0, y0, x0 + width, y0 + height,
+                          metrics.radius, STYLE.tooltip_border)
+        mesh.rounded_rect(x0 + scale, y0 + scale, x0 + width - scale, y0 + height - scale,
+                          max(0, metrics.radius - scale), STYLE.tooltip_background)
+        mesh.draw()
+        text_y = y0 + height - padding - line_height
+        for text, color in lines:
+            blf.color(0, *color)
+            blf.position(0, x0 + padding, text_y, 0)
+            blf.draw(0, text)
+            text_y -= line_height
+
+    @classmethod
     def draw(cls, clips, active_uid, hover):
         context = bpy.context
-        space, region = context.space_data, context.region
+        region = context.region
         if not in_timeline(context):
             return
 
@@ -282,10 +381,17 @@ class ClipDrawing:
         center_y = (metrics.bottom + metrics.top) / 2.0
         mesh = MeshBatch()
         labels = []
+        scene_fps = context.scene.render.fps / context.scene.render.fps_base
+
+        mesh.rect(0, metrics.track_bottom, region.width, metrics.track_top,
+                  STYLE.track_background)
+        mesh.rect(0, metrics.track_top - metrics.scale, region.width, metrics.track_top,
+                  STYLE.track_border)
 
         for clip in ordered_clips:
             cls._draw_clip(
                 mesh, labels, clip, view, metrics, center_y, active_uid, hover, region.width,
+                scene_fps,
             )
         cls._draw_sync_dot(mesh, clips_by_uid, view, metrics, center_y, hover)
 
@@ -294,12 +400,26 @@ class ClipDrawing:
         try:
             mesh.draw()
             cls._draw_labels(labels, center_y, metrics.scale)
+            if hover.kind != 'NONE':
+                cls._draw_tooltip(
+                    clips_by_uid.get(hover.uid), runtime.hover_hint, metrics, region, scene_fps,
+                )
         finally:
             gpu.state.blend_set(previous_blend)
 
 
 def draw_callback():
+    if not in_timeline(bpy.context) or not has_selected_armature(bpy.context):
+        return
     track = find_track(bpy.context)
-    if track is not None and len(track.clips):
-        hover = runtime.hover if runtime.hover.track_uid == track.uid else HoverTarget()
-        ClipDrawing.draw(track.clips, track.active_clip_uid, hover)
+    track_uid = track.uid if track is not None else 0
+    hover = runtime.hover if runtime.hover.track_uid == track_uid else HoverTarget()
+    if (
+        runtime.hover_hint.region_pointer
+        and runtime.hover_hint.region_pointer != bpy.context.region.as_pointer()
+    ):
+        hover = HoverTarget()
+    ClipDrawing.draw(
+        track.clips if track is not None else (),
+        track.active_clip_uid if track is not None else 0, hover,
+    )

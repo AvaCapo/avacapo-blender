@@ -73,6 +73,7 @@ def _state():
 
 @persistent
 def _on_load_pre(_):
+    runtime.clear_hover()
     cancel_generation()
     cancel_model_catalog_refresh(_state().get("timers", set()))
     stop_update_notice(_state().get("update_timers", set()))
