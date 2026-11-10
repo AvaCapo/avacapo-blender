@@ -5,7 +5,6 @@ import math
 from ..timeline.generation_status import is_pending, STATUS_LABELS
 from bpy.types import Menu, Panel
 
-from ..animation.retargeting import blender_retarget_service
 from ..core import takes, tracks
 from ..core.generation_models import TaskStatus
 from ..core.storage import Storage
@@ -153,18 +152,21 @@ class CLIPS_PT_panel(Panel):
             icon="OUTLINER_OB_ARMATURE",
         )
         retarget_box = armature_col.box()
-        retarget_ready = (
-            hasattr(armature, "avacapo_retarget_mapping")
-            and blender_retarget_service.is_valid_mapping(armature)
-        )
-        retarget_button = retarget_box.row()
-        retarget_button.alert = not retarget_ready
-        retarget_button.prop(
+        _, status_icon = ui_retargeting.retarget_mapping_status(armature)
+        retarget_header = retarget_box.row(align=True)
+        retarget_header.alert = status_icon == 'ERROR'
+        retarget_header.prop(
             data,
             "show_retargeting",
             text="Set up retargeting",
-            toggle=True,
+            emboss=False,
             icon='TRIA_DOWN' if data.show_retargeting else 'TRIA_RIGHT',
+        )
+        status = retarget_header.row(align=True)
+        status.alignment = 'RIGHT'
+        status.operator(
+            "avacapo.retarget_mapping_status", text="",
+            icon=status_icon, emboss=False,
         )
         if data.show_retargeting:
             ui_retargeting.draw_retarget_mapping(retarget_box, context)
@@ -182,7 +184,9 @@ class CLIPS_PT_panel(Panel):
         clip_col = layout.column(align=True)
 
         if clip is None:
-            clip_col.box().label(text="Select a clip on the timeline")
+            hint = clip_col.box().column(align=True)
+            hint.label(text="Select a clip on the timeline")
+            hint.label(text="or create a new clip")
 
             return
 
@@ -190,6 +194,7 @@ class CLIPS_PT_panel(Panel):
         generation_box.prop(clip, "prompt", text="", placeholder="prompt")
         row = generation_box.row()
         row.enabled = bool(clip.prompt.strip())
+        row.active_default = True
         row.operator(
             "clips.new_take", text="Generate Take", icon='SHADERFX',
         ).clip_uid = clip.uid
@@ -226,28 +231,28 @@ class CLIPS_PT_panel(Panel):
             icon='TRIA_DOWN' if clip.show_takes else 'TRIA_RIGHT',
         )
         if clip.show_takes:
+            take_list = takes_box.column(align=True)
             for take in clip.takes:
-                row = takes_box.row(align=True)
-                columns = row.split(factor=0.9, align=True)
-                name_column = columns.column()
-                delete_column = columns.column()
-                name_column.alignment = 'LEFT'
+                row = take_list.row(align=True)
+                name_row = row
+                if take.take_action is None:
+                    name_row = row.row(align=True)
+                    name_row.enabled = False
                 status = TaskStatus(take.generation_status)
-                name_column.enabled = take.take_action is not None
-                op = name_column.operator(
+                op = name_row.operator(
                     "clips.set_take",
                     text=(take.name if status == TaskStatus.SUCCEEDED
                           else f"{take.name} - {STATUS_LABELS[status]}"),
-                    depress=take.uid == clip.active_take_uid,
+                    icon='RADIOBUT_ON' if take.uid == clip.active_take_uid else 'BLANK1',
                 )
                 op.clip_uid, op.take_uid = clip.uid, take.uid
                 pending = is_pending(take)
-                op = delete_column.operator(
+                op = row.operator(
                     "clips.cancel_take" if pending else "clips.delete_take",
                     text="", icon='CANCEL' if pending else 'TRASH')
                 op.clip_uid, op.take_uid = clip.uid, take.uid
                 if take.generation_error:
-                    takes_box.label(text=take.generation_error, icon='ERROR')
+                    take_list.label(text=take.generation_error, icon='ERROR')
             if len(clip.takes) > 0:
                 takes_box.operator("clips.delete_takes").clip_uid = clip.uid
             else:

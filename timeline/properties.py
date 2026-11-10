@@ -354,6 +354,7 @@ class CT_Scene(PropertyGroup):
     active_track_uid: IntProperty(default=0, options={'HIDDEN'})
     next_track_uid: IntProperty(default=1, options={'HIDDEN'})
     show_retargeting: BoolProperty(
+        name="Show retargeting", description="Show retargeting",
         default=False, options={'HIDDEN'}, update=_show_retargeting_changed,
     )
     token_input: StringProperty(

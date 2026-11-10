@@ -74,6 +74,38 @@ def _armature_poll(_self, obj):
     return obj is not None and obj.type == "ARMATURE"
 
 
+def retarget_mapping_status(armature):
+    """Describe the selected rig using the existing cached mapping validation."""
+    state = getattr(armature, "avacapo_retarget_mapping", None)
+    if state is None:
+        return "Unavailable", "ERROR"
+    errors = _visible_mapping_errors(
+        blender_retarget_service.mapping_status_errors(armature), state.confirmed,
+    )
+    if state.draft_error and state.draft_error not in errors:
+        errors.append(state.draft_error)
+    if errors:
+        return "Needs attention", "ERROR"
+    if blender_retarget_service.is_valid_mapping(armature):
+        return "Ready", "CHECKMARK"
+    return "Needs setup", "INFO"
+
+
+class AVACAPO_OT_retarget_mapping_status(bpy.types.Operator):
+    bl_idname = "avacapo.retarget_mapping_status"
+    # Icon-only status: omit the generic title so the tooltip is a single line.
+    bl_label = ""
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def description(cls, context, properties):
+        return retarget_mapping_status(context.active_object)[0]
+
+    def execute(self, context):
+        context.scene.clip_data.show_retargeting = True
+        return {'FINISHED'}
+
+
 class AVACAPO_OT_suggest_retarget_mapping(bpy.types.Operator):
     bl_idname = "avacapo.suggest_retarget_mapping"
     bl_label = "Auto Mapping"
@@ -567,6 +599,7 @@ def _draw_mapping_entries(
 _CLASSES = (
     AVACAPO_RetargetMappingEntry,
     AVACAPO_RetargetMappingState,
+    AVACAPO_OT_retarget_mapping_status,
     AVACAPO_OT_suggest_retarget_mapping,
     AVACAPO_OT_clear_retarget_mapping,
     AVACAPO_OT_append_avacapo_reference_armature,
