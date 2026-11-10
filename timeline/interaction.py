@@ -11,7 +11,7 @@ from ..animation import blender_actions
 from ..core import takes, tracks
 from .drawing import ClipDrawing
 from . import operations
-from .properties import edit_track, ensure_track, find_track
+from .properties import edit_track, find_track
 from .runtime import (
     HoverHint, HoverTarget, MenuTarget, has_selected_armature, in_timeline, runtime, tag_redraw,
 )
@@ -152,7 +152,7 @@ def _clear_working_key_selection(data):
 
 
 class CLIPS_OT_hover(Operator):
-    """Highlight targets and show a delayed hint without consuming mouse input."""
+    """Hover over a clip to see its prompt and details"""
     bl_idname = "clips.hover"
     bl_label = "Clips Hover"
     bl_options = {'INTERNAL'}
@@ -229,7 +229,7 @@ class CLIPS_OT_hover(Operator):
 
 
 class CLIPS_OT_mouse(Operator):
-    """Select, move, resize, and open menus for Clips."""
+    """Click to select, drag to move, or drag an edge to resize. Right-click for more options"""
     bl_idname = "clips.mouse"
     bl_label = "Clips"
     bl_options = {'UNDO', 'INTERNAL'}
@@ -282,27 +282,8 @@ class CLIPS_OT_mouse(Operator):
         return {'CANCELLED'}
 
     def _create_with_prompt(self, context, hit):
-        scene = context.scene
-        track = find_track(context)
-        clips = () if track is None else track.clips
-        if tracks.new_range(clips, hit.frame, scene.clip_data.default_length) is None:
-            self.report({'WARNING'}, "No free space here")
-            return {'CANCELLED'}
-        try:
-            track = track or ensure_track(context)
-        except ValueError as exc:
-            self.report({'WARNING'}, str(exc))
-            return {'CANCELLED'}
-        clip = operations.create_clip(
-            track, hit.frame, scene.clip_data.default_length, stick_previous=True,
-        )
-        if clip is None:
-            self.report({'WARNING'}, "No free space here")
-            return {'CANCELLED'}
-        tag_redraw()
-        clip.prompt = scene.clip_data.new_clip_prompt
-        bpy.ops.clips.edit_prompt(
-            'INVOKE_DEFAULT', clip_uid=clip.uid, name_from_prompt=True,
+        bpy.ops.clips.create(
+            'INVOKE_DEFAULT', frame=math.floor(hit.frame), stick_previous=True,
         )
         return {'FINISHED'}
 

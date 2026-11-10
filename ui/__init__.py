@@ -25,7 +25,7 @@ from ..timeline.operations import cancel_generation
 from .track_panels import (
     CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
 )
-from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene
+from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene, migrate_clip_prompts
 from ..timeline.runtime import runtime
 from ..timeline.generation_status import is_pending, set_status
 from ..core.storage import Storage
@@ -84,6 +84,7 @@ def _on_load_post(_=None):
     _state()
     # Saved pending requests cannot resume after loading a file or re-enabling.
     for scene in bpy.data.scenes:
+        migrate_clip_prompts(scene)
         for track in scene.clip_data.tracks:
             for clip in track.clips:
                 for take in clip.takes:

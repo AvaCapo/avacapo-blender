@@ -28,7 +28,9 @@ class BlenderTrackStore:
         return self.data.clips
 
     def allocate_clip(self):
-        return self.clips.add()
+        clip = self.clips.add()
+        clip["_prompt_version"] = 1
+        return clip
 
     def remove_clip_record(self, uid):
         for index, clip in enumerate(self.clips):
@@ -165,6 +167,16 @@ def edit_track(data, operation, *args, **kwargs):
         _writing_properties = previous
 
 
+def migrate_clip_prompts(scene):
+    """Preserve the full legacy prompt as the editable clip name, once per record."""
+    for track in scene.clip_data.tracks:
+        for clip in track.clips:
+            if clip.get("_prompt_version", 0) < 1:
+                clip.name = clip.prompt.strip() or clip.name.strip() or f"Clip {clip.uid}"
+                clip.prompt = ""
+                clip["_prompt_version"] = 1
+
+
 class CT_Take(PropertyGroup):
     uid: IntProperty(options={'HIDDEN'})
     name: StringProperty(name="Name", default="Take")
@@ -225,10 +237,16 @@ class CT_Take(PropertyGroup):
 
 class CT_Clip(PropertyGroup):
     uid: IntProperty()
-    name: StringProperty(name="Name", default="Clip")
-    # Editable defaults for the next generation. Take fields are immutable
-    # history; switching Takes copies their values here.
-    prompt: StringProperty(name="Prompt")
+    name: StringProperty(
+        name="Prompt", default="Clip",
+        description="Full clip prompt and timeline label. Editing it affects future takes only",
+    )
+    # Optional prompt override and editable settings for the next generation.
+    # Take fields retain the actual request; selecting a Take restores its settings.
+    prompt: StringProperty(
+        name="Override",
+        description="Optional prompt for the next take. Leave empty to use the clip's prompt",
+    )
     seed: IntProperty(name="Seed", min=-1, default=-1, description="-1 = random")
     # This is the editable choice for the next generation. CT_Take.generation_model
     # is immutable history of the model that created that Take.
@@ -237,10 +255,14 @@ class CT_Clip(PropertyGroup):
     )
     generation_temperature: FloatProperty(
         name="Temperature", min=0.001, default=Config.DEFAULT_TEMPERATURE,
+        description="Sampling temperature for text generation",
     )
-    generation_cycled: BoolProperty(name="Cycled")
-    generation_in_place: BoolProperty(name="In Place")
-    generation_enhance_prompt: BoolProperty(name="Enhance Prompt", default=True)
+    generation_cycled: BoolProperty(name="Cycled", description="Request a looping motion")
+    generation_in_place: BoolProperty(name="In Place", description="Request motion in place")
+    generation_enhance_prompt: BoolProperty(
+        name="Enhance Prompt", default=True,
+        description="Ask the service to enhance the submitted prompt",
+    )
     show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
     show_takes: BoolProperty(default=True, options={'HIDDEN'})
     show_clip_settings: BoolProperty(default=False, options={'HIDDEN'})
@@ -340,7 +362,7 @@ class CT_Scene(PropertyGroup):
     )
     tracks: CollectionProperty(type=CT_Track)
     new_clip_prompt: StringProperty(
-        name="Prompt", description="Motion prompt for the new clip",
+        name="Prompt", description="Required motion prompt, stored as the new clip's full name",
     )
     default_length: IntProperty(
         name="Default Length", min=TimelineConfig.MIN_CLIP_LENGTH,

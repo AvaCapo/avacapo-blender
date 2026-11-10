@@ -1,28 +1,20 @@
 """Timeline commands, generation dialogs, and user-facing reports."""
 
+import math
+
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 
-from ..common.config import Config
+from ..common.config import Config, TimelineConfig
 from ..core import takes, tracks
 from ..core.generation_models import GenerationCommand, TextParameters
 from ..server import models
 from . import operations
+from .generation_status import take_description
 from .properties import edit_track, ensure_track, find_track
-from .runtime import runtime, tag_redraw
+from .runtime import has_selected_armature, runtime, tag_redraw
 from .track_style import STYLE
-
-
-def clip_name_from_prompt(prompt):
-    """Keep timeline labels short while preserving the full generation prompt."""
-    name = " ".join(prompt.split())
-    if len(name) <= 48:
-        return name
-    prefix = name[:45]
-    if " " in prefix:
-        prefix = prefix.rsplit(" ", 1)[0]
-    return prefix.rstrip() + "..."
 
 
 class _ClipOp:
@@ -42,8 +34,12 @@ class _ClipOp:
     def _generate_take(self, context, track, clip, *, command=None):
         scene_fps = float(context.scene.render.fps) / float(context.scene.render.fps_base)
         if command is None:
+            prompt = clip.prompt.strip() or clip.name.strip()
+            if not prompt:
+                self.report({'WARNING'}, "Enter a prompt in Clip Settings or an override.")
+                return False
             command = GenerationCommand(
-                prompt=clip.prompt,
+                prompt=prompt,
                 model=clip.generation_model,
                 in_place=clip.generation_in_place,
                 enhance_prompt=clip.generation_enhance_prompt,
@@ -73,19 +69,46 @@ class _ClipOp:
         return True
 
 
-class CLIPS_OT_create(_ClipOp, Operator):
-    """Create a clip and generate its first Take from the new clip prompt"""
-    bl_idname = "clips.create"
-    bl_label = "Create Clip"
-    bl_options = {'UNDO'}
+class _ClipCreation:
+    """Collect a prompt before either creation operator mutates the timeline."""
     frame: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    prompt: StringProperty(
+        name="Prompt", description="Describe the motion; this also names the new clips",
+        options={'SKIP_SAVE'},
+    )
 
     @classmethod
     def poll(cls, context):
-        return bool(context.scene.clip_data.new_clip_prompt.strip()) and runtime.generation_ready()
+        return has_selected_armature(context)
+
+    def invoke(self, context, event):
+        self.prompt = ""
+        return context.window_manager.invoke_props_dialog(self, width=STYLE.prompt_dialog_width)
+
+    def draw(self, context):
+        row = self.layout.row()
+        row.activate_init = True
+        row.prop(self, "prompt", text="", placeholder="prompt")
+
+    def _prompt(self):
+        prompt = self.prompt.strip()
+        if not prompt:
+            self.report({'WARNING'}, "Enter a prompt for the clip.")
+        return prompt
+
+
+class CLIPS_OT_create(_ClipCreation, Operator):
+    """Create a clip for your motion prompt. Then click Generate Take to animate it"""
+    bl_idname = "clips.create"
+    bl_label = "Create Clip"
+    bl_options = {'UNDO'}
+    stick_previous: BoolProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def execute(self, context):
         scene = context.scene
+        prompt = self._prompt()
+        if not prompt:
+            return {'CANCELLED'}
         track = find_track(context)
         clips = () if track is None else track.clips
         if tracks.new_range(clips, self.frame, scene.clip_data.default_length) is None:
@@ -96,30 +119,35 @@ class CLIPS_OT_create(_ClipOp, Operator):
         except ValueError as exc:
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
-        clip = operations.create_clip(track, self.frame, scene.clip_data.default_length)
+        clip = operations.create_clip(
+            track, self.frame, scene.clip_data.default_length,
+            prompt=prompt, stick_previous=self.stick_previous,
+        )
         if clip is None:
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
-        clip.prompt = scene.clip_data.new_clip_prompt
-        clip.name = clip_name_from_prompt(clip.prompt) or clip.name
-        self._generate_take(context, track, clip)
+        scene.clip_data.new_clip_prompt = ""
         tag_redraw()
         return {'FINISHED'}
 
 
-class CLIPS_OT_fill_gap(Operator):
-    """Fill the empty space under the cursor with clips of about the default length"""
+class CLIPS_OT_fill_gap(_ClipCreation, Operator):
+    """Fill the empty space with clips sharing one prompt. Select each clip to generate its animation"""
     bl_idname = "clips.fill_gap"
     bl_label = "Fill In"
     bl_options = {'UNDO'}
-    frame: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def execute(self, context):
         scene = context.scene
+        prompt = self._prompt()
+        if not prompt:
+            return {'CANCELLED'}
+        scene_fps = scene.render.fps / scene.render.fps_base
+        max_length = max(1, math.floor(TimelineConfig.RECOMMENDED_MAX_SECONDS * scene_fps))
         track = find_track(context)
         clips = () if track is None else track.clips
         if not tracks.fill_ranges(
-            clips, self.frame, scene.clip_data.default_length, scene.frame_start, scene.frame_end,
+            clips, self.frame, max_length, scene.frame_start, scene.frame_end,
         ):
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
@@ -129,17 +157,18 @@ class CLIPS_OT_fill_gap(Operator):
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
         if not edit_track(
-            track, tracks.fill_gap, self.frame, scene.clip_data.default_length,
-            scene.frame_start, scene.frame_end,
+            track, tracks.fill_gap, self.frame, max_length,
+            scene.frame_start, scene.frame_end, prompt=prompt,
         ):
             self.report({'WARNING'}, "No free space here")
             return {'CANCELLED'}
+        scene.clip_data.new_clip_prompt = ""
         tag_redraw()
         return {'FINISHED'}
 
 
 class CLIPS_OT_shrink_neighbors(Operator):
-    """Cut the clips next to this empty space back to the current frame"""
+    """Make more room by trimming a neighboring clip to the current frame. Place the current frame inside that clip first"""
     bl_idname = "clips.shrink_neighbors"
     bl_label = "Shrink Neighbors to Current Frame"
     bl_options = {'UNDO'}
@@ -161,21 +190,36 @@ class CLIPS_OT_shrink_neighbors(Operator):
 
 
 class CLIPS_OT_edit_prompt(_ClipOp, Operator):
-    """Collect generation settings and create a Take."""
+    """Adjust the settings and generate a take. Leave Override empty to use the clip's prompt"""
     bl_idname = "clips.edit_prompt"
     bl_label = "Generate Take"
     bl_options = {'UNDO'}
-    prompt: StringProperty(name="Prompt", options={'SKIP_SAVE'})
-    name_from_prompt: BoolProperty(options={'HIDDEN', 'SKIP_SAVE'})
-    seed: IntProperty(name="Seed", min=-1, default=-1, options={'SKIP_SAVE'})
+    prompt: StringProperty(
+        name="Override", options={'SKIP_SAVE'},
+        description="Optional prompt for this take. Leave empty to use the clip's prompt",
+    )
+    seed: IntProperty(
+        name="Seed", min=-1, default=-1, description="-1 chooses a new random seed",
+        options={'SKIP_SAVE'},
+    )
     model: EnumProperty(
         name="Model", description="Generation model", items=models.get_model_enum_items,
         options={'SKIP_SAVE'},
     )
-    temperature: FloatProperty(name="Temperature", min=0.001, options={'SKIP_SAVE'})
-    cycled: BoolProperty(name="Cycled", options={'SKIP_SAVE'})
-    in_place: BoolProperty(name="In Place", options={'SKIP_SAVE'})
-    enhance_prompt: BoolProperty(name="Enhance Prompt", default=True, options={'SKIP_SAVE'})
+    temperature: FloatProperty(
+        name="Temperature", min=0.001, default=Config.DEFAULT_TEMPERATURE,
+        description="Sampling temperature for text generation", options={'SKIP_SAVE'},
+    )
+    cycled: BoolProperty(
+        name="Cycled", description="Request a looping motion", options={'SKIP_SAVE'},
+    )
+    in_place: BoolProperty(
+        name="In Place", description="Request motion in place", options={'SKIP_SAVE'},
+    )
+    enhance_prompt: BoolProperty(
+        name="Enhance Prompt", default=True,
+        description="Ask the service to enhance the submitted prompt", options={'SKIP_SAVE'},
+    )
 
     def invoke(self, context, event):
         _, clip = self._get_clip(context)
@@ -192,9 +236,10 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
 
     def draw(self, context):
         col = self.layout.column()
+        _, clip = self._get_clip(context)
         row = col.row()
         row.activate_init = True
-        row.prop(self, "prompt", text="")
+        row.prop(self, "prompt", placeholder=clip.name if clip is not None else "")
         col.prop(self, "seed")
         row = col.row(align=True)
         row.prop(self, "model")
@@ -208,9 +253,7 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
         track, clip = self._get_clip(context)
         if clip is None:
             return {'CANCELLED'}
-        clip.prompt = self.prompt
-        if self.name_from_prompt:
-            clip.name = clip_name_from_prompt(self.prompt) or clip.name
+        clip.prompt = self.prompt.strip()
         clip.seed = self.seed
         clip.generation_model = self.model
         clip.generation_temperature = self.temperature
@@ -224,10 +267,9 @@ class CLIPS_OT_edit_prompt(_ClipOp, Operator):
 
 
 class CLIPS_OT_new_take(_ClipOp, Operator):
-    """Generate a new Take from this Clip's editable generation defaults."""
+    """Create an animation for this clip. Watch its progress and compare results in Takes"""
     bl_idname = "clips.new_take"
     bl_label = "New Take"
-    bl_description = ""
     bl_options = {'UNDO'}
 
     @classmethod
@@ -245,7 +287,7 @@ class CLIPS_OT_new_take(_ClipOp, Operator):
 
 
 class CLIPS_OT_cancel_take(_ClipOp, Operator):
-    """Cancel generation locally and send cancellation to the server."""
+    """Stop this generation. Click Generate Take when you want to try again"""
     bl_idname = "clips.cancel_take"
     bl_label = "Cancel Take"
     take_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
@@ -260,7 +302,7 @@ class CLIPS_OT_cancel_take(_ClipOp, Operator):
 
 
 class CLIPS_OT_delete_takes(_ClipOp, Operator):
-    """Delete all takes of the clip"""
+    """Remove all takes and animation in this clip, including your edits. Keep the clip and prompt to start again"""
     bl_idname = "clips.delete_takes"
     bl_label = "Delete All Takes"
     bl_options = {'UNDO'}
@@ -279,10 +321,9 @@ class CLIPS_OT_delete_takes(_ClipOp, Operator):
 
 
 class CLIPS_OT_delete_take(_ClipOp, Operator):
-    """Delete one Take from this Clip."""
+    """Remove this take. If it is selected and no finished take remains, the clip's animation is cleared, including your edits"""
     bl_idname = "clips.delete_take"
     bl_label = "Delete Take"
-    bl_description = "Delete this Take from the Clip"
     bl_options = {'UNDO'}
     take_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
@@ -300,7 +341,7 @@ class CLIPS_OT_delete_take(_ClipOp, Operator):
 
 
 class CLIPS_OT_delete_clip(_ClipOp, Operator):
-    """Delete the clip"""
+    """Remove this clip and its animation, including your edits. Use Bake Clip to keep the animation"""
     bl_idname = "clips.delete_clip"
     bl_label = "Delete Clip"
     bl_options = {'UNDO'}
@@ -319,7 +360,7 @@ class CLIPS_OT_delete_clip(_ClipOp, Operator):
 
 
 class CLIPS_OT_bake_clip(_ClipOp, Operator):
-    """Keep visible animation and remove the Clip and its Takes."""
+    """Keep the animation you see and remove the clip and its takes. Continue editing the animation in Blender"""
     bl_idname = "clips.bake_clip"
     bl_label = "Bake Clip"
     bl_options = {'UNDO'}
@@ -338,7 +379,7 @@ class CLIPS_OT_bake_clip(_ClipOp, Operator):
 
 
 class CLIPS_OT_copy_clip(_ClipOp, Operator):
-    """Copy the clip with its takes"""
+    """Copy this clip and its finished takes. Right-click empty space and choose Paste Clip"""
     bl_idname = "clips.copy_clip"
     bl_label = "Copy Clip"
     bl_options = set()
@@ -356,7 +397,7 @@ class CLIPS_OT_copy_clip(_ClipOp, Operator):
 
 
 class CLIPS_OT_paste_clip(Operator):
-    """Paste the copied clip here if there is enough free space"""
+    """Place a copy of the clip here. There must be enough empty space to fit it"""
     bl_idname = "clips.paste_clip"
     bl_label = "Paste Clip"
     bl_options = {'UNDO'}
@@ -381,11 +422,22 @@ class CLIPS_OT_paste_clip(Operator):
 
 
 class CLIPS_OT_set_take(_ClipOp, Operator):
-    """Make this take the visible one"""
+    """Use this take and its settings. Select other takes to compare animations"""
     bl_idname = "clips.set_take"
     bl_label = "Choose Take"
     bl_options = {'UNDO'}
     take_uid: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def description(cls, context, properties):
+        track = find_track(context)
+        clip = tracks.find_clip(
+            track.clips, properties.clip_uid or track.active_clip_uid,
+        ) if track is not None else None
+        take = takes.find_take(clip, properties.take_uid) if clip is not None else None
+        if take is None:
+            return cls.__doc__
+        return cls.__doc__ + "\n\nGeneration history:\n" + take_description(take)
 
     def execute(self, context):
         track, clip = self._get_clip(context)
@@ -402,7 +454,7 @@ class CLIPS_OT_set_take(_ClipOp, Operator):
 
 
 class CLIPS_OT_stick(_ClipOp, Operator):
-    """Stretch the clip to its neighbours and generate a new take"""
+    """Join this clip to its neighbors and automatically generate a take for its new length"""
     bl_idname = "clips.stick"
     bl_label = "Stick to Neighbors"
     bl_options = {'UNDO'}
@@ -425,7 +477,7 @@ class CLIPS_OT_stick(_ClipOp, Operator):
 
 
 class CLIPS_OT_set_frame(_ClipOp, Operator):
-    """Set the clip border to the current frame"""
+    """Use the current frame as the start or end. Start moves the clip; End changes its length"""
     bl_idname = "clips.set_frame"
     bl_label = "Set to Current Frame"
     bl_options = {'UNDO'}

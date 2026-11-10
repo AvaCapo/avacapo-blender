@@ -19,6 +19,7 @@ class CLIPS_MT_empty(Menu):
 
     def draw(self, context):
         layout = self.layout
+        layout.operator_context = 'INVOKE_DEFAULT'
         frame = math.floor(runtime.menu_target.frame)
         layout.operator("clips.create", text="Create Clip",
                         icon='ADD').frame = frame
@@ -165,10 +166,14 @@ class CLIPS_PT_panel(Panel):
 
         new_clip_box = layout.box()
         new_clip_box.label(text="New clip")
-        new_clip_box.prop(data, "new_clip_prompt", text="Prompt")
+        new_clip_box.prop(data, "new_clip_prompt", text="", placeholder="prompt")
         new_clip_box.prop(data, "default_length", text="Duration (frames)")
-        new_clip_box.operator("clips.create", text="New Clip at Current Frame",
-                              icon='ADD').frame = scene.frame_current
+        row = new_clip_box.row()
+        row.enabled = bool(data.new_clip_prompt.strip())
+        row.operator_context = 'EXEC_DEFAULT'
+        op = row.operator("clips.create", text="New Clip at Current Frame", icon='ADD')
+        op.frame = scene.frame_current
+        op.prompt = data.new_clip_prompt
 
         track = find_track(context)
         clip = tracks.active_clip(track) if track is not None else None
@@ -195,7 +200,7 @@ class CLIPS_PT_panel(Panel):
         )
         if clip.show_advanced_generation:
             col = generation_box.column()
-            col.prop(clip, "prompt")
+            col.prop(clip, "prompt", placeholder=clip.name)
             col.prop(clip, "generation_model")
             col.prop(clip, "seed")
             col.prop(clip, "generation_temperature")
@@ -255,7 +260,6 @@ class CLIPS_PT_panel(Panel):
         if not clip.show_clip_settings:
             return
         clip_prop_box.prop(clip, "name")
-
         col = clip_prop_box.column(align=True)
         row = col.row(align=True)
         row.prop(clip, "start")
