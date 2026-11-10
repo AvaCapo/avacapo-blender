@@ -51,20 +51,20 @@ class Style:
     track_border: tuple[float, ...] = (0.22, 0.22, 0.22, 1.0)
 
     idle: Palette = Palette(
-        clip=(0.32, 0.32, 0.32, 1.0),
-        take_done=(0.25, 0.29, 0.32, 1.0),
-        take_rest=(0.21, 0.21, 0.21, 1.0),
-        stripe=(0.45, 0.58, 0.68, 1.0),
+        clip=(0.335, 0.310, 0.355, 1.0),
+        take_done=(0.275, 0.275, 0.340, 1.0),
+        take_rest=(0.215, 0.205, 0.230, 1.0),
+        stripe=(0.525, 0.550, 0.705, 1.0),
         text=(0.80, 0.80, 0.80, 1.0),
-        chevron=(0.16, 0.16, 0.16, 1.0),
+        chevron=(0.165, 0.150, 0.185, 1.0),
     )
     selected: Palette = Palette(
-        clip=(0.49, 0.49, 0.49, 1.0),
-        take_done=(0.36, 0.42, 0.46, 1.0),
-        take_rest=(0.33, 0.33, 0.33, 1.0),
-        stripe=(0.60, 0.73, 0.83, 1.0),
+        clip=(0.505, 0.475, 0.540, 1.0),
+        take_done=(0.400, 0.400, 0.485, 1.0),
+        take_rest=(0.340, 0.320, 0.360, 1.0),
+        stripe=(0.680, 0.705, 0.860, 1.0),
         text=(0.96, 0.96, 0.96, 1.0),
-        chevron=(0.20, 0.20, 0.20, 1.0),
+        chevron=(0.205, 0.190, 0.230, 1.0),
     )
     warning_idle: Palette = Palette(
         clip=(0.48, 0.25, 0.23, 1.0),
@@ -83,8 +83,8 @@ class Style:
         chevron=(0.29, 0.15, 0.13, 1.0),
     )
     hover_tint: tuple[float, ...] = (1.0, 1.0, 1.0, 0.16)
-    dot_ring: tuple[float, ...] = (0.78, 0.78, 0.78, 1.0)
-    dot_fill: tuple[float, ...] = (0.30, 0.30, 0.30, 1.0)
+    dot_ring: tuple[float, ...] = (0.795, 0.770, 0.820, 1.0)
+    dot_fill: tuple[float, ...] = (0.315, 0.290, 0.340, 1.0)
     tooltip_background: tuple[float, ...] = (0.08, 0.08, 0.08, 1.0)
     tooltip_border: tuple[float, ...] = (0.28, 0.28, 0.28, 1.0)
     tooltip_text: tuple[float, ...] = (0.90, 0.90, 0.90, 1.0)
