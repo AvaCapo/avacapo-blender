@@ -16,28 +16,27 @@ class Palette:
 @dataclass
 class Style:
     clip_height: float = 30.0
-    y_margin: float = 10.0
-    handle_width: float = 15.0
-    take_inset: float = 3.0
-    corner_radius: float = 3.0
+    y_margin: float = 13.0
+    handle_width: float = 18.0
+    take_inset: float = 4.0
+    corner_radius: float = 4.0
     clip_gap: float = 0.8
-    chevron_size: float = 5.0
+    chevron_size: float = 4.5
     chevron_width: float = 2.0
-    dot_radius: float = 5.0
+    dot_radius: float = 6.0
     sync_max_gap: int = 0         # frames between clips that still get a sync dot
 
-    font_size: float = 14.0
-    text_padding: float = 10.0
+    font_size: float = 13.0
+    text_padding: float = 7.0
 
     prompt_dialog_width: int = 440
-    take_list_rows: int = 3
     max_handle_fraction: float = 0.3
     sync_hit_padding: float = 2.0
     dot_ring_width: float = 2.0
     stripe_min_pixels: float = 2.0
     stripe_width: float = 3.0
     min_chevron_handle_width: float = 9.0
-    track_padding: float = 4.0
+    track_padding: float = 5.0
 
     tooltip_delay: float = 0.5
     hover_timer_interval: float = 0.1
@@ -60,7 +59,7 @@ class Style:
     )
     selected: Palette = Palette(
         clip=(0.505, 0.475, 0.540, 1.0),
-        take_done=(0.400, 0.400, 0.485, 1.0),
+        take_done=(0.390, 0.380, 0.475, 1.0),
         take_rest=(0.340, 0.320, 0.360, 1.0),
         stripe=(0.680, 0.705, 0.860, 1.0),
         text=(0.96, 0.96, 0.96, 1.0),
@@ -82,8 +81,8 @@ class Style:
         text=(1.0, 0.93, 0.90, 1.0),
         chevron=(0.29, 0.15, 0.13, 1.0),
     )
-    hover_tint: tuple[float, ...] = (1.0, 1.0, 1.0, 0.16)
-    dot_ring: tuple[float, ...] = (0.795, 0.770, 0.820, 1.0)
+    hover_tint: tuple[float, ...] = (1.0, 1.0, 1.0, 0.40)
+    dot_ring: tuple[float, ...] = (0.795, 0.770, 0.820, 0.7)
     dot_fill: tuple[float, ...] = (0.315, 0.290, 0.340, 1.0)
     tooltip_background: tuple[float, ...] = (0.08, 0.08, 0.08, 1.0)
     tooltip_border: tuple[float, ...] = (0.28, 0.28, 0.28, 1.0)

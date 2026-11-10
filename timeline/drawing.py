@@ -67,7 +67,7 @@ class ClipMetrics:
         self.scale = scale
         self.top = (STYLE.clip_height + STYLE.y_margin) * scale
         self.bottom = self.top - STYLE.clip_height * scale
-        self.track_bottom = max(0.0, self.bottom - STYLE.track_padding * scale)
+        self.track_bottom = 0.0
         self.track_top = self.top + STYLE.track_padding * scale
         self.handle_width = STYLE.handle_width * scale
         self.radius = STYLE.corner_radius * scale
