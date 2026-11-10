@@ -155,13 +155,12 @@ class CLIPS_PT_panel(Panel):
         _, status_icon = ui_retargeting.retarget_mapping_status(armature)
         retarget_header = retarget_box.row(align=True)
         retarget_header.alert = status_icon == 'ERROR'
-        retarget_header.prop(
-            data,
-            "show_retargeting",
+        retarget_header.operator(
+            "clips.toggle_section",
             text="Set up retargeting",
             emboss=False,
             icon='TRIA_DOWN' if data.show_retargeting else 'TRIA_RIGHT',
-        )
+        ).section = 'show_retargeting'
         status = retarget_header.row(align=True)
         status.alignment = 'RIGHT'
         status.operator(
@@ -199,13 +198,13 @@ class CLIPS_PT_panel(Panel):
             "clips.new_take", text="Generate Take", icon='SHADERFX',
         ).clip_uid = clip.uid
         row = generation_box.row()
-        row.prop(
-            clip,
-            "show_advanced_generation",
+        op = row.operator(
+            "clips.toggle_section",
             text="Advanced Generation Settings",
             emboss=False,
             icon='TRIA_DOWN' if clip.show_advanced_generation else 'TRIA_RIGHT',
         )
+        op.section, op.clip_uid = 'show_advanced_generation', clip.uid
         if clip.show_advanced_generation:
             col = generation_box.column()
             col.prop(clip, "generation_model")
@@ -223,13 +222,13 @@ class CLIPS_PT_panel(Panel):
         # Takes
         takes_box = clip_col.box()
         row = takes_box.row()
-        row.prop(
-            clip,
-            "show_takes",
+        op = row.operator(
+            "clips.toggle_section",
             text="Takes",
             emboss=False,
             icon='TRIA_DOWN' if clip.show_takes else 'TRIA_RIGHT',
         )
+        op.section, op.clip_uid = 'show_takes', clip.uid
         if clip.show_takes:
             take_list = takes_box.column(align=True)
             for take in clip.takes:
@@ -261,13 +260,13 @@ class CLIPS_PT_panel(Panel):
         # Clip Props
         clip_prop_box = clip_col.box()
         row = clip_prop_box.row()
-        row.prop(
-            clip,
-            "show_clip_settings",
+        op = row.operator(
+            "clips.toggle_section",
             text="Clip Settings",
             emboss=False,
             icon='TRIA_DOWN' if clip.show_clip_settings else 'TRIA_RIGHT',
         )
+        op.section, op.clip_uid = 'show_clip_settings', clip.uid
         if not clip.show_clip_settings:
             return
         clip_prop_box.prop(clip, "name")
