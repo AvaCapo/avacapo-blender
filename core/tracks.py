@@ -54,10 +54,14 @@ def gap_at(clips, frame: int) -> tuple | None:
 
 def new_range(clips, frame: float, default_length: int) -> tuple[int, int] | None:
     frame = math.floor(frame)
+    length = max(TimelineConfig.MIN_CLIP_LENGTH, default_length)
     gap = gap_at(clips, frame)
     if gap is None:
-        return None
-    end = frame + max(TimelineConfig.MIN_CLIP_LENGTH, default_length)
+        # Ends are exclusive: this is the first frame after the occupied clip.
+        start = max(clip.end for clip in clips if clip.start <= frame < clip.end)
+        end = start + length
+        return (start, end) if is_free(clips, start, end) else None
+    end = frame + length
     if gap[1] is not None:
         end = min(end, gap[1])
     return (frame, end) if end > frame else None
