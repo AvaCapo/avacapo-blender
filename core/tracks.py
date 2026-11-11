@@ -54,30 +54,35 @@ def gap_at(clips, frame: int) -> tuple | None:
 
 def new_range(clips, frame: float, default_length: int) -> tuple[int, int] | None:
     frame = math.floor(frame)
+    length = max(TimelineConfig.MIN_CLIP_LENGTH, default_length)
     gap = gap_at(clips, frame)
     if gap is None:
-        return None
-    end = frame + max(TimelineConfig.MIN_CLIP_LENGTH, default_length)
+        # Ends are exclusive: this is the first frame after the occupied clip.
+        start = max(clip.end for clip in clips if clip.start <= frame < clip.end)
+        end = start + length
+        return (start, end) if is_free(clips, start, end) else None
+    end = frame + length
     if gap[1] is not None:
         end = min(end, gap[1])
     return (frame, end) if end > frame else None
 
 
 def fill_ranges(
-    clips, frame: float, default_length: int, scene_start: int, scene_end: int,
+    clips, frame: float, max_length: int, scene_start: int, scene_end: int,
 ) -> list[tuple[int, int]]:
+    """Cover the gap with balanced clips no longer than ``max_length`` frames."""
     frame = math.floor(frame)
     gap = gap_at(clips, frame)
     if gap is None:
         return []
     left, right = gap
-    default_length = max(TimelineConfig.MIN_CLIP_LENGTH, default_length)
+    max_length = max(TimelineConfig.MIN_CLIP_LENGTH, max_length)
     start = left if left is not None else min(scene_start, frame)
-    end = right if right is not None else max(scene_end + 1, start + default_length)
+    end = right if right is not None else scene_end + 1
     if end <= frame:
-        start, end = frame, frame + default_length
+        start, end = frame, frame + max_length
     total = end - start
-    count = max(1, min(total, round(total / default_length)))
+    count = (total + max_length - 1) // max_length
     base_length, remainder = divmod(total, count)
     ranges = []
     cursor = start
@@ -158,13 +163,24 @@ def restore_snapshot(store, initial: dict[int, ClipSnapshot]) -> None:
                 take.offset = offsets[take.uid]
 
 
+def clip_name_from_prompt(prompt):
+    """Keep timeline labels short while preserving the full generation prompt."""
+    name = " ".join(prompt.split())
+    if len(name) <= 48:
+        return name
+    prefix = name[:45]
+    if " " in prefix:
+        prefix = prefix.rsplit(" ", 1)[0]
+    return prefix.rstrip() + "..."
+
+
 def add_clip(store, start: int, end: int, name: str | None = None):
     if end - start < TimelineConfig.MIN_CLIP_LENGTH:
         raise ValueError("A clip must span at least one frame")
     clip = store.allocate_clip()
     clip.uid = store.data.next_clip_uid
     store.data.next_clip_uid += 1
-    clip.name = name or f"Clip {clip.uid}"
+    clip.name = (name or "").strip()
     clip.start, clip.end = start, end
     return clip
 
@@ -190,6 +206,7 @@ def serialize_clip(clip) -> ClipData:
         length=clip.end - clip.start,
         prompt=clip.prompt,
         seed=clip.seed,
+        randomize_seed=clip.randomize_seed,
         generation_model=clip.generation_model,
         generation_temperature=clip.generation_temperature,
         generation_cycled=clip.generation_cycled,
@@ -233,6 +250,7 @@ def restore_clip(store, payload: ClipData, start: int):
     clip = add_clip(store, start, start + payload.length, name=payload.name)
     clip.prompt = payload.prompt
     clip.seed = payload.seed
+    clip.randomize_seed = payload.randomize_seed
     clip.generation_model = payload.generation_model
     clip.generation_temperature = payload.generation_temperature
     clip.generation_cycled = payload.generation_cycled
@@ -245,19 +263,24 @@ def restore_clip(store, payload: ClipData, start: int):
     return clip
 
 
-def create_clip_at(store, frame: float, default_length: int):
+def create_clip_at(store, frame: float, default_length: int, *, name: str = ""):
     interval = new_range(store.clips, frame, default_length)
     if interval is None:
         return None
-    clip = add_clip(store, *interval)
+    clip = add_clip(store, *interval, name=name)
     store.data.active_clip_uid = clip.uid
     apply_bindings(store)
     return clip
 
 
-def fill_gap(store, frame: float, default_length: int, scene_start: int, scene_end: int) -> list:
-    ranges = fill_ranges(store.clips, frame, default_length, scene_start, scene_end)
-    return [add_clip(store, start, end) for start, end in ranges]
+def fill_gap(
+    store, frame: float, max_length: int, scene_start: int, scene_end: int,
+) -> list:
+    ranges = fill_ranges(store.clips, frame, max_length, scene_start, scene_end)
+    clips = [add_clip(store, start, end) for start, end in ranges]
+    if clips:
+        store.data.active_clip_uid = clips[0].uid
+    return clips
 
 
 def shrink_neighbors(store, cursor_frame: int, current_frame: int) -> int:

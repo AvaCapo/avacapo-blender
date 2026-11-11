@@ -16,6 +16,12 @@ from .runtime import tag_redraw
 
 _writing_properties = False
 
+RANDOMIZE_SEED_DESCRIPTION = (
+    "Choose a new seed on every Generate Take for a new animation variation. "
+    "Disable to reuse the previous seed for consistent take regeneration, "
+    "including when changing the timeframe or frame rate"
+)
+
 
 class BlenderTrackStore:
     """Allocation only; UID assignment and timeline rules belong to core."""
@@ -225,11 +231,23 @@ class CT_Take(PropertyGroup):
 
 class CT_Clip(PropertyGroup):
     uid: IntProperty()
-    name: StringProperty(name="Name", default="Clip")
-    # Editable defaults for the next generation. Take fields are immutable
-    # history; switching Takes copies their values here.
-    prompt: StringProperty(name="Prompt")
-    seed: IntProperty(name="Seed", min=-1, default=-1, description="-1 = random")
+    name: StringProperty(
+        name="Clip Name",
+        description="Timeline name; if blank, the first queued take prompt supplies a short name",
+    )
+    # Editable prompt and settings for the next generation.
+    # Take fields retain the actual request; selecting a Take restores its settings.
+    prompt: StringProperty(
+        name="Prompt",
+        description="Motion for the next take. Selecting a take restores its saved prompt",
+    )
+    seed: IntProperty(
+        name="Seed", min=-1, default=-1,
+        description="Seed for take generation; -1 chooses an initial random seed",
+    )
+    randomize_seed: BoolProperty(
+        name="Randomize Seed", default=True, description=RANDOMIZE_SEED_DESCRIPTION,
+    )
     # This is the editable choice for the next generation. CT_Take.generation_model
     # is immutable history of the model that created that Take.
     generation_model: EnumProperty(
@@ -237,13 +255,14 @@ class CT_Clip(PropertyGroup):
     )
     generation_temperature: FloatProperty(
         name="Temperature", min=0.001, default=Config.DEFAULT_TEMPERATURE,
+        description="Sampling temperature for text generation",
     )
-    generation_cycled: BoolProperty(name="Cycled")
-    generation_in_place: BoolProperty(name="In Place")
-    generation_enhance_prompt: BoolProperty(name="Enhance Prompt", default=True)
-    show_advanced_generation: BoolProperty(default=False, options={'HIDDEN'})
-    show_takes: BoolProperty(default=True, options={'HIDDEN'})
-    show_clip_settings: BoolProperty(default=False, options={'HIDDEN'})
+    generation_cycled: BoolProperty(name="Cycled", description="Request a looping motion")
+    generation_in_place: BoolProperty(name="In Place", description="Request motion in place")
+    generation_enhance_prompt: BoolProperty(
+        name="Enhance Prompt", default=True,
+        description="Ask the service to enhance the submitted prompt",
+    )
 
     def _get_start(self):
         return self.get("_start", 0)
@@ -316,32 +335,14 @@ class CT_Track(PropertyGroup):
     clips: CollectionProperty(type=CT_Clip)
 
 
-def _show_retargeting_changed(data, context):
-    if not data.show_retargeting or context is None:
-        return
-    armature = context.active_object
-    if (
-        armature is not None
-        and armature.type == 'ARMATURE'
-        and hasattr(context.scene, "avacapo_retarget_target")
-    ):
-        context.scene.avacapo_retarget_target = armature
-
-
 class CT_Scene(PropertyGroup):
     active_track_uid: IntProperty(default=0, options={'HIDDEN'})
     next_track_uid: IntProperty(default=1, options={'HIDDEN'})
-    show_retargeting: BoolProperty(
-        default=False, options={'HIDDEN'}, update=_show_retargeting_changed,
-    )
     token_input: StringProperty(
         name="Token", description="Paste your API token here", subtype='PASSWORD',
         options={'SKIP_SAVE'},
     )
     tracks: CollectionProperty(type=CT_Track)
-    new_clip_prompt: StringProperty(
-        name="Prompt", description="Motion prompt for the new clip",
-    )
     default_length: IntProperty(
         name="Default Length", min=TimelineConfig.MIN_CLIP_LENGTH,
         default=TimelineConfig.DEFAULT_CLIP_LENGTH,

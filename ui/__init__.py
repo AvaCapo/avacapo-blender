@@ -14,7 +14,7 @@ from .connection import (
 from ..timeline.drawing import draw_callback
 from ..timeline.interaction import CLIPS_OT_hover, CLIPS_OT_mouse
 from ..timeline.operators import (
-    CLIPS_OT_create, CLIPS_OT_fill_gap,
+    CLIPS_OT_create, CLIPS_OT_fill_gap, CLIPS_OT_rename,
     CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take, CLIPS_OT_cancel_take,
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
@@ -39,7 +39,7 @@ CLASSES = (
     CT_Take, CT_Clip, CT_Track, CT_Scene,
     AVACAPO_OT_login_browser, AVACAPO_OT_paste_token,
     AVACAPO_OT_disconnect,
-    CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap,
+    CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap, CLIPS_OT_rename,
     CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take, CLIPS_OT_cancel_take,
     CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
     CLIPS_OT_copy_clip,
@@ -73,6 +73,7 @@ def _state():
 
 @persistent
 def _on_load_pre(_):
+    runtime.clear_hover()
     cancel_generation()
     cancel_model_catalog_refresh(_state().get("timers", set()))
     stop_update_notice(_state().get("update_timers", set()))
@@ -191,8 +192,6 @@ def register():
                 ("clips.mouse", 'LEFTMOUSE', 'PRESS'),
                 ("clips.mouse", 'LEFTMOUSE', 'DOUBLE_CLICK'),
                 ("clips.mouse", 'RIGHTMOUSE', 'PRESS'),
-                ("clips.mouse", 'RIGHTMOUSE', 'DOUBLE_CLICK'),
-                ("clips.mouse", 'W', 'PRESS'),
                 ("clips.hover", 'MOUSEMOVE', 'ANY'),
             ):
                 item = keymap.keymap_items.new(operator, button, value)

@@ -20,6 +20,7 @@ def find_take(clip, take_uid: int):
 def add_take(
     store, clip, *, command: GenerationCommand | None = None,
     uid: int | None = None, activate: bool = True,
+    scene_fps: float = Config.DEFAULT_FPS,
 ):
     """Allocate a Take owned by ``clip`` and optionally select it."""
     if uid is None:
@@ -34,8 +35,8 @@ def add_take(
     take.name = f"Take {len(clip.takes)}"
     take.length = clip.end - clip.start
     _set_generation_request(take, command or GenerationCommand(
-        parameters=TextParameters(duration=(clip.end - clip.start) / Config.DEFAULT_FPS),
-    ))
+        parameters=TextParameters(duration=(clip.end - clip.start) / scene_fps),
+    ), scene_fps=scene_fps)
     take.offset = 0
     take.progress = 0.0
     if activate:
@@ -51,10 +52,14 @@ def select_take(clip, take_uid: int) -> bool:
 
 
 def delete_takes(store, clip) -> None:
+    """Reset generation settings, retaining the selected Take's prompt for reuse."""
+    selected = current_take(clip)
+    prompt = selected.prompt if selected is not None else clip.prompt
     store.clear_take_records(clip)
     clip.active_take_uid = 0
-    clip.prompt = ""
+    clip.prompt = prompt
     clip.seed = -1
+    clip.randomize_seed = True
     clip.generation_model = Config.DEFAULT_MODEL_TYPE
     clip.generation_temperature = Config.DEFAULT_TEMPERATURE
     clip.generation_cycled = False
@@ -94,7 +99,7 @@ def restore_take(store, clip, payload: TakeData):
     return take
 
 
-def _set_generation_request(take, command: GenerationCommand) -> None:
+def _set_generation_request(take, command: GenerationCommand, *, scene_fps: float) -> None:
     """Store scalar request inputs; binary context files are intentionally excluded."""
     if not isinstance(command, GenerationCommand):
         raise ValueError("A GenerationCommand is required.")
@@ -127,8 +132,9 @@ def _set_generation_request(take, command: GenerationCommand) -> None:
         return
     if isinstance(command.parameters, ConstraintsParameters):
         parameters = command.parameters
-        take.duration_seconds = parameters.num_frames / Config.DEFAULT_FPS
-        take.fps = Config.DEFAULT_FPS
+        # Constraint targets and frame counts are expressed on the scene grid.
+        take.duration_seconds = parameters.num_frames / scene_fps
+        take.fps = scene_fps
         take.seed = parameters.seed
         take.cycled = parameters.cycled
         take.constraint_frames = json.dumps([item.target_frame for item in parameters.constraints])

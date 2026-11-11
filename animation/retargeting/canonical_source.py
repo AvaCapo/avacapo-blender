@@ -40,7 +40,6 @@ CANONICAL_SOURCE_TOPOLOGY = tuple(
 
 CANONICAL_SOURCE_ROOT_NAME = "Hips"
 SOURCE_ACTION_FPS_PROPERTY = "avacapo_source_fps"
-DEFAULT_SOURCE_ACTION_FPS = 30.0 #TODO: check
 
 
 def parent_name(parent_index: int) -> str | None:

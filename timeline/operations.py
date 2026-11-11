@@ -39,7 +39,7 @@ DEBUG_REPLACE_USER_KEYS_WITH_GENERATED = False
 
 # Switch for comparing ordinary mapped retargeting with SpaceTime refinement.
 # TODO: move to UI
-USE_SPACETIME_REFINEMENT = True
+USE_SPACETIME_REFINEMENT = False # keep false untill merge with post-processing branch
 
 
 @dataclass
@@ -161,13 +161,20 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         _generation_service_token = Storage.api_token
 
     command = command.resolve_seed()
-    take = edit_track(track, takes.add_take, clip, command=command, activate=False)
+    take = edit_track(
+        track, takes.add_take, clip, command=command, activate=False, scene_fps=scene_fps,
+    )
     set_status(take, TaskStatus.QUEUED)
     try:
         task_id = _generation_service.submit(command)
     except Exception:
         edit_track(track, takes.remove_take, clip, take.uid)
         raise
+    if not clip.name.strip():
+        clip.name = tracks.clip_name_from_prompt(command.prompt)
+    # Retain the submitted seed immediately, so disabling randomization also
+    # reuses it while this Take is pending or if generation later fails.
+    clip.seed = command.parameters.seed
     _pending_generations[task_id] = _PendingGeneration(
         scene=scene,
         track_uid=track.uid,
@@ -178,7 +185,6 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
         root_offset=root_offset,
         start_from_previous=start_from_previous,
     )
-    clip.show_takes = True
     runtime.generation_cooldown_until = monotonic() + 1.0
     tag_redraw()
     log.info("Queued server generation %s for Clip %s.", task_id[:8], clip.uid)
@@ -403,7 +409,9 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         source_record = _new_source_text(clip.uid, take_uid, source_text)
 
         if take is None:
-            take = edit_track(track, takes.add_take, clip, command=command, activate=False)
+            take = edit_track(
+                track, takes.add_take, clip, command=command, activate=False, scene_fps=scene_fps,
+            )
         take.take_action = action
         take.take_slot_handle = int(slot.handle)
         take.source_motion_text = source_record
@@ -417,6 +425,9 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
             take.uid,
             preserve_manual=not DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
         )
+        # The overlay must describe the stored Action, including when the Clip
+        # was resized while generation was pending. Clip ends are exclusive.
+        take.length = max(1, math.ceil(prepared.frame_times[-1]) + 1)
         set_status(take, TaskStatus.SUCCEEDED, error="")
         return take
     except Exception:
@@ -571,7 +582,8 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
         return False
 
     working_action, working_slot = _working_binding(track, track.object)
-    bindings = []
+    trims = []
+    extensions = []
     for clip, take, previous in changed:
         action, slot = _take_binding(take)
         if action == working_action:
@@ -579,16 +591,19 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
         previous_offsets = dict(previous.take_offsets)
         if take.uid not in previous_offsets:
             raise ValueError("Active Take is missing from the drag snapshot.")
-        bindings.append((
-            clip,
-            action,
-            slot,
-            previous.start,
-            previous.end,
-            previous.start + previous_offsets[take.uid],
+        origin = previous.start + previous_offsets[take.uid]
+        overlap_start = max(previous.start, clip.start)
+        overlap_end = max(overlap_start, min(previous.end, clip.end))
+        trims.append((
+            action, slot, previous.start, previous.end, overlap_start, overlap_end, origin,
+        ))
+        extensions.append((
+            action, slot, overlap_start, overlap_end, clip.start, clip.end, origin,
         ))
 
-    for clip, action, slot, old_start, old_end, origin in bindings:
+    # Clips share the Working Action. Remove every trimmed range before adding
+    # keys, or a shrinking neighbour can erase frames another Clip just restored.
+    for action, slot, old_start, old_end, new_start, new_end, origin in trims + extensions:
         actions.apply_resize_delta(
             working_action,
             working_slot,
@@ -596,17 +611,17 @@ def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
             slot,
             old_start,
             old_end,
-            clip.start,
-            clip.end,
+            new_start,
+            new_end,
             origin,
         )
     return True
 
 
-def create_clip(track, frame, default_length, *, stick_previous=False):
+def create_clip(track, frame, default_length, *, name="", stick_previous=False):
     """Create a Clip and apply automatic binding resizes to Working Actions."""
     initial = edit_track(track, tracks.snapshot)
-    clip = edit_track(track, tracks.create_clip_at, frame, default_length)
+    clip = edit_track(track, tracks.create_clip_at, frame, default_length, name=name)
     if clip is not None:
         if stick_previous:
             edit_track(track, tracks.stick_to_neighbors, clip.uid, 'PREV')

@@ -64,7 +64,7 @@ def motion_from_avacapo_action(source_armature, action, scene):
     return broom.Motion(
         hierarchy,
         np.asarray(values, dtype=np.float64),
-        _action_frame_time(action),
+        _action_frame_time(action, scene),
     )
 
 
@@ -185,10 +185,12 @@ def _integer_action_range(action) -> tuple[int, int]:
     return first, last
 
 
-def _action_frame_time(action) -> float:
+def _action_frame_time(action, scene) -> float:
+    # Untagged Action keys are sampled on the scene's frame grid. An explicit
+    # source rate still takes precedence for Actions imported without retiming.
     fps = float(action.get(
         canonical_source.SOURCE_ACTION_FPS_PROPERTY,
-        canonical_source.DEFAULT_SOURCE_ACTION_FPS,
+        float(scene.render.fps) / float(scene.render.fps_base),
     ))
     if not math.isfinite(fps) or fps <= 0.0:
         raise ValueError(
