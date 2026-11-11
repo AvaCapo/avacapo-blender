@@ -39,7 +39,7 @@ DEBUG_REPLACE_USER_KEYS_WITH_GENERATED = False
 
 # Switch for comparing ordinary mapped retargeting with SpaceTime refinement.
 # TODO: move to UI
-USE_SPACETIME_REFINEMENT = True
+USE_SPACETIME_REFINEMENT = False # keep false untill merge with post-processing branch
 
 
 @dataclass
