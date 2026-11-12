@@ -24,9 +24,6 @@ from .runtime import ClipboardClip, ClipboardTake, runtime, tag_redraw
 
 GENERATION_TIMER_CALLBACKS = set()
 GENERATION_POLL_INTERVAL = 0.1
-PUBLICATION_INTERVAL = 0.01
-# Yield to Blender after roughly half a 60 Hz frame. A curve write is indivisible.
-PUBLICATION_TIME_BUDGET = 0.008
 _generation_service = None
 _generation_service_token = ""
 _pending_generations = {}
@@ -245,14 +242,14 @@ def _finish_generation() -> float | None:
         return None
 
     changed = False
-    deadline = monotonic() + PUBLICATION_TIME_BUDGET
+    publication_advanced = False
     if runtime.generation_cooldown_until and runtime.generation_ready():
         runtime.generation_cooldown_until = 0.0
         changed = True
     for task_id, pending in tuple(_pending_generations.items()):
         take = _pending_take(pending)
         if take is None:
-            _generation_service.cancel(task_id)
+            _generation_service.cancel(task_id, reason="The Clip or Take was removed.")
             if pending.publication is not None:
                 pending.publication.close()
         task = _generation_service.get_task(task_id)
@@ -271,42 +268,45 @@ def _finish_generation() -> float | None:
             continue
 
         if task.status == TaskStatus.SUCCEEDED and take is not None:
-            if pending.publication is None and monotonic() >= deadline:
-                continue
+            publication_advanced = True
             result = _generation_service.get_result(task_id)
             try:
-                if not _advance_publication(pending, result, deadline):
-                    continue
+                if not _advance_publication(pending, result):
+                    break
             except Exception as exc:
                 log.error("Could not create Take from generated animation: %s", exc)
                 set_status(take, TaskStatus.FAILED, error=str(exc))
             _generation_service.release_result(task_id)
         elif task.status == TaskStatus.FAILED:
             log.error("Animation generation failed: %s", task.error or "unknown error")
+        elif task.status == TaskStatus.CANCELLED:
+            log.warning("Generation %s cancelled: %s", task_id[:8], task.error or "Cancelled locally.")
         elif task.status == TaskStatus.SUCCEEDED:
             _generation_service.release_result(task_id)
         _pending_generations.pop(task_id)
         changed = True
+        if publication_advanced:
+            break
 
     if changed:
         tag_redraw()
-    if any(item.publication is not None for item in _pending_generations.values()):
-        return PUBLICATION_INTERVAL
+    if publication_advanced and _pending_generations:
+        # Continue on Blender's next timer pass, after giving input a turn.
+        return 0.0
     if _pending_generations or runtime.generation_cooldown_until:
         return GENERATION_POLL_INTERVAL
     GENERATION_TIMER_CALLBACKS.discard(_finish_generation)
     return None
 
 
-def _advance_publication(pending, result, deadline):
+def _advance_publication(pending, result):
     """Return True when publication finishes, False when it needs another tick."""
     if result is None:
         raise RuntimeError("Generation completed without an animation result.")
     if pending.publication is None:
         pending.publication = _publish_generation(pending, result.bvh_bytes, result.resolved_seed)
     try:
-        while monotonic() < deadline:
-            next(pending.publication)
+        next(pending.publication)
     except StopIteration:
         return True
     return False
