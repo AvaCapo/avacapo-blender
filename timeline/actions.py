@@ -410,6 +410,57 @@ def apply_resize_delta(
     return changed
 
 
+def snapshot_key_translation(curves):
+    """Capture coordinates once, keeping selected and stationary keys separate."""
+    snapshot = []
+    for curve in curves:
+        if curve.lock or curve.hide:
+            continue
+        points = curve.keyframe_points
+        selected = np.empty(len(points), dtype=bool)
+        points.foreach_get("select_control_point", selected)
+        if not selected.any():
+            continue
+        coordinates = {}
+        for field in COORD_FIELDS:
+            values = np.empty((len(points), 2), dtype=np.float32)
+            points.foreach_get(field, values.ravel())
+            coordinates[field] = values[selected], values[~selected]
+        snapshot.append((curve, coordinates))
+    return snapshot
+
+
+def apply_key_translation(snapshot, delta):
+    """Translate from the initial coordinates, including handles; zero restores."""
+    for curve, coordinates in snapshot:
+        points = curve.keyframe_points
+        selected = np.empty(len(points), dtype=bool)
+        points.foreach_get("select_control_point", selected)
+        values = np.empty((len(points), 2), dtype=np.float32)
+        for field, (moving, stationary) in coordinates.items():
+            # Sorting can interleave moving and stationary keys differently, but
+            # the order within each group stays the same under a translation.
+            values[selected] = moving
+            values[selected, 0] += delta
+            values[~selected] = stationary
+            points.foreach_set(field, values.ravel())
+        # FCurve.update() also deduplicates keys. Keep temporary collisions
+        # intact so reversing or cancelling a drag cannot lose animation.
+        points.sort()
+        points.handles_recalc()
+
+
+def finish_key_translation(snapshot):
+    """Resolve collisions only on confirmation, keeping the moved keys."""
+    for curve, _ in snapshot:
+        points = curve.keyframe_points
+        moved_frames = {key.co.x for key in points if key.select_control_point}
+        for key in reversed(points):
+            if not key.select_control_point and key.co.x in moved_frames:
+                points.remove(key, fast=True)
+        curve.update()
+
+
 def translate_take_window(
     working_action,
     working_slot,
@@ -420,8 +471,6 @@ def translate_take_window(
     delta,
 ):
     """Move active-Take keys in one Working Action window by whole frames."""
-    #NOTE: This is a separate realization of translate clip. 
-    # Faster Blender-native function is realized for a clip drag operation in the timeline.
     if not delta or end <= start:
         return False
 

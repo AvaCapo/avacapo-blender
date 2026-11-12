@@ -1,4 +1,4 @@
-"""Timeline hover, mouse input, and native Clip drag."""
+"""Timeline hover, mouse input, and Clip drag."""
 
 import math
 from dataclasses import replace
@@ -94,7 +94,7 @@ def _select_all_pose_bones(armature):
 
 
 def _restore_pose_bone_selection(armature, selection):
-    """Restore the user's bone selection after native Clip drag."""
+    """Restore the user's bone selection after Clip drag."""
     if selection is None:
         return
 
@@ -119,7 +119,6 @@ def _select_clip_keys(context, data, clip, *, clear_selection):
     if slot is None:
         raise ValueError("Working Action binding is incomplete.")
 
-    anchor = None
     for curve in blender_actions.iter_slot_fcurves(action, slot):
         points = curve.keyframe_points
 
@@ -132,11 +131,6 @@ def _select_clip_keys(context, data, clip, *, clear_selection):
             key.select_control_point = True
             key.select_left_handle = True
             key.select_right_handle = True
-
-            if anchor is None:
-                anchor = key, float(key.co.x)
-
-    return action, anchor
 
 
 def _clear_working_key_selection(data):
@@ -313,28 +307,32 @@ class CLIPS_OT_mouse(Operator):
         self._track = track
         self._start_mouse_x = event.mouse_region_x
         self._pixels_per_frame = view.pixels_per_frame
-        self._native_drag = False
-        self._animation_snap_settings = None
+        self._key_translations = []
         self._bone_selection = None
         if self._session.kind == 'BODY':
             self._bone_selection = _select_all_pose_bones(track.object)
         try:
-            selected = _select_clip_keys(
+            _select_clip_keys(
                 context, track, hit.clip, clear_selection=not event.shift,
             )
+            if self._session.kind == 'BODY':
+                seen = set()
+                for armature in context.selected_objects:
+                    animation = armature.animation_data
+                    if armature.type != 'ARMATURE' or animation is None:
+                        continue
+                    action, slot = animation.action, animation.action_slot
+                    if slot is None or (action, slot.handle) in seen:
+                        continue
+                    seen.add((action, slot.handle))
+                    self._key_translations.append((action, actions.snapshot_key_translation(
+                        blender_actions.iter_slot_fcurves(action, slot),
+                    )))
         except ValueError as exc:
             _restore_pose_bone_selection(track.object, self._bone_selection)
             self._bone_selection = None
             self.report({'WARNING'}, str(exc))
             return {'CANCELLED'}
-        if self._session.kind == 'BODY' and selected is not None:
-            try:
-                self._start_native_drag(context, selected)
-            except ValueError as exc:
-                _restore_pose_bone_selection(track.object, self._bone_selection)
-                self._bone_selection = None
-                self.report({'WARNING'}, str(exc))
-                return {'CANCELLED'}
         runtime.hover = HoverTarget(hit.kind, track.uid, self._session.uid, self._session.other_uid)
         context.window.cursor_modal_set('MOVE_X')
         context.window_manager.modal_handler_add(self)
@@ -350,17 +348,24 @@ class CLIPS_OT_mouse(Operator):
         if clip is None or context.scene != self._scene:
             self.cancel(context)
             return {'CANCELLED'}
-        if self._native_drag:
-            return self._modal_native_drag(context, track, event)
-        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
-            delta = round((event.mouse_region_x - self._start_mouse_x) / self._pixels_per_frame)
+        if event.type == 'MOUSEMOVE' or (
+            self._session.kind != 'BODY' and event.type == 'INBETWEEN_MOUSEMOVE'
+        ):
+            movement = (event.mouse_region_x - self._start_mouse_x) / self._pixels_per_frame
+            delta = math.floor(movement + 0.5) if self._session.kind == 'BODY' else round(movement)
+            previous_delta = self._session.last_valid_delta
             edit_track(track, tracks.update_drag, self._session, delta)
+            if self._session.kind == 'BODY' and self._session.last_valid_delta != previous_delta:
+                self._translate_keys(self._session.last_valid_delta)
             tag_redraw()
             return {'RUNNING_MODAL'}
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
             if not self._finish_resize_drag():
                 self._finish(context)
                 return {'CANCELLED'}
+            for action, snapshot in self._key_translations:
+                actions.finish_key_translation(snapshot)
+                action.update_tag()
             self._finish(context)
             return {'FINISHED'}
         if event.value == 'PRESS' and event.type in {'ESC', 'RIGHTMOUSE'}:
@@ -372,73 +377,10 @@ class CLIPS_OT_mouse(Operator):
             return {'PASS_THROUGH'}
         return {'RUNNING_MODAL'}
 
-    def _start_native_drag(self, context, selected):
-        """Start Blender's native key transform for the active Take."""
-        _action, anchor = selected
-        if anchor is None:
-            return
-
-        tool_settings = context.scene.tool_settings
-        self._animation_snap_settings = (
-            tool_settings,
-            tool_settings.snap_anim_element,
-            tool_settings.use_snap_time_absolute,
-        )
-        tool_settings.snap_anim_element = 'FRAME'
-        tool_settings.use_snap_time_absolute = False
-        try:
-            result = bpy.ops.transform.transform(
-                'INVOKE_DEFAULT',
-                mode='TIME_TRANSLATE',
-                use_proportional_edit=False,
-                snap=True,
-                release_confirm=True,
-            )
-        except Exception as exc:
-            self._restore_animation_snapping()
-            raise ValueError(f"Could not start native Time Translate: {exc}") from None
-        if 'RUNNING_MODAL' not in result:
-            self._restore_animation_snapping()
-            raise ValueError("Native Time Translate did not start a modal operation.")
-
-        self._native_drag = True
-
-    def _restore_animation_snapping(self):
-        settings = self._animation_snap_settings
-        if settings is None:
-            return
-        tool_settings, snap_anim_element, use_snap_time_absolute = settings
-        tool_settings.snap_anim_element = snap_anim_element
-        tool_settings.use_snap_time_absolute = use_snap_time_absolute
-        self._animation_snap_settings = None
-
-    def _modal_native_drag(self, context, track, event):
-        """Pass a mouse move to TIME_TRANSLATE only when it fits."""
-        if event.type == 'MOUSEMOVE':
-            delta = math.floor(
-                (event.mouse_region_x - self._start_mouse_x)
-                / self._pixels_per_frame + 0.5
-            )
-            edit_track(track, tracks.update_drag, self._session, delta)
-            tag_redraw()
-            if self._session.last_valid_delta == delta:
-                return {'PASS_THROUGH'}
-            return {'RUNNING_MODAL'}
-        if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
-            self._restore_animation_snapping()
-            self._native_drag = False
-            if not self._finish_resize_drag():
-                self._finish(context)
-                return {'CANCELLED', 'PASS_THROUGH'}
-            self._finish(context)
-            return {'FINISHED', 'PASS_THROUGH'}
-        if event.value == 'PRESS' and event.type in {'ESC', 'RIGHTMOUSE'}:
-            edit_track(track, tracks.cancel_drag, self._session)
-            self._restore_animation_snapping()
-            self._native_drag = False
-            self._finish(context)
-            return {'CANCELLED', 'PASS_THROUGH'}
-        return {'RUNNING_MODAL', 'PASS_THROUGH'}
+    def _translate_keys(self, delta):
+        for action, snapshot in self._key_translations:
+            actions.apply_key_translation(snapshot, delta)
+            action.update_tag()
 
     def _finish_resize_drag(self):
         try:
@@ -449,23 +391,16 @@ class CLIPS_OT_mouse(Operator):
         return True
 
     def cancel(self, context):
-        if self._native_drag:
-            try:
-                edit_track(self._track, tracks.cancel_drag, self._session)
-            except ReferenceError:
-                pass
-            self._restore_animation_snapping()
-            self._native_drag = False
-            self._finish(context)
-            return
         try:
             edit_track(self._track, tracks.cancel_drag, self._session)
+            self._translate_keys(0)
         except ReferenceError:
             pass
         finally:
             self._finish(context)
 
     def _finish(self, context):
+        self._key_translations = []
         _restore_pose_bone_selection(self._track.object, self._bone_selection)
         self._bone_selection = None
         context.window.cursor_modal_restore()
