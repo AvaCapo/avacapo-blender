@@ -414,7 +414,7 @@ class CLIPS_OT_mouse(Operator):
 
     def _modal_native_drag(self, context, track, event):
         """Pass a mouse move to TIME_TRANSLATE only when it fits."""
-        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
+        if event.type == 'MOUSEMOVE':
             delta = math.floor(
                 (event.mouse_region_x - self._start_mouse_x)
                 / self._pixels_per_frame + 0.5
