@@ -1,4 +1,23 @@
-ADDON_VERSION = (0, 1, 0)
+from pathlib import Path
+import tomllib
+
+
+def _manifest_version() -> tuple[int, ...]:
+    """Read the add-on version from blender_manifest.toml."""
+    manifest_path = Path(__file__).resolve().parents[1] / "blender_manifest.toml"
+    with manifest_path.open("rb") as manifest_file:
+        version = tomllib.load(manifest_file).get("version")
+    if not isinstance(version, str) or not version:
+        raise ValueError("blender_manifest.toml must define a version string.")
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError as error:
+        raise ValueError(
+            f"Invalid add-on version in blender_manifest.toml: {version!r}."
+        ) from error
+
+
+ADDON_VERSION = _manifest_version()
 
 
 def normalize_version(version: tuple[int, ...], *, minimum_parts: int = 3) -> tuple[int, ...]:
