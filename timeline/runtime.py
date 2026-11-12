@@ -67,6 +67,19 @@ class TimelineRuntimeState:
     def generation_ready(self):
         return monotonic() >= self.generation_cooldown_until
 
+    def publication_blocked(self, scene):
+        if self.active_drags or scene != bpy.context.scene:
+            return True
+        if any(track.object is not None and track.object.mode == 'EDIT'
+               for track in scene.clip_data.tracks):
+            return True
+        # Native key transforms retain pointers to the keys until they finish.
+        return any(
+            operator.bl_idname.startswith('TRANSFORM_OT_')
+            for window in bpy.context.window_manager.windows
+            for operator in window.modal_operators
+        )
+
     def set_clipboard(self, clipboard: ClipboardClip):
         if isinstance(self.clipboard, ClipboardClip):
             self.clipboard.release()

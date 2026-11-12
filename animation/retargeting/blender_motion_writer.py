@@ -297,7 +297,15 @@ def _rotation_samples(motion, joint_index, rotation_columns, rotation_mode):
 
 
 def _write_prepared_curves(channelbag, prepared, *, keyframe_type: str) -> None:
+    for _ in write_prepared_curves_steps(channelbag, prepared, keyframe_type=keyframe_type):
+        pass
+
+
+def write_prepared_curves_steps(channelbag, prepared, *, keyframe_type: str):
+    """Write and yield each detached scalar curve, ready for materialization."""
+    properties = bpy.types.Keyframe.bl_rna.properties
     for prepared_curve in prepared.curves:
+        samples = np.asarray(prepared_curve.samples)
         for axis in range(len(prepared_curve.samples[0])):
             curve = channelbag.fcurves.new(
                 data_path=prepared_curve.data_path,
@@ -305,12 +313,14 @@ def _write_prepared_curves(channelbag, prepared, *, keyframe_type: str) -> None:
                 group_name=prepared_curve.group_name,
             )
             curve.keyframe_points.add(len(prepared.frame_times))
-            for index, frame in enumerate(prepared.frame_times):
-                point = curve.keyframe_points[index]
-                point.co = (frame, float(prepared_curve.samples[index][axis]))
-                point.interpolation = "LINEAR"
-                point.type = keyframe_type
+            values = np.column_stack((prepared.frame_times, samples[:, axis])).astype(np.float32)
+            curve.keyframe_points.foreach_set('co', values.ravel())
+            for field, value in (('interpolation', 'LINEAR'), ('type', keyframe_type)):
+                curve.keyframe_points.foreach_set(field, np.full(
+                    len(values), properties[field].enum_items[value].value, dtype=np.int32,
+                ))
             curve.update()
+            yield curve
 
 
 def _snapshot_curves(channelbag) -> tuple[_CurveSnapshot, ...]:

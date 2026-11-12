@@ -1,6 +1,7 @@
 """Read and write one known Action Slot for Timeline Take operations."""
 
 import numpy as np
+import bpy
 import bpy_extras.anim_utils
 
 
@@ -318,6 +319,65 @@ def replace_range(curve, incoming, start, end, *, keyframe_type=None, preserve_m
         curve.update()
 
 
+def read_key_arrays(curve):
+    """Read complete key properties through RNA's bulk interface."""
+    result = {}
+    count = len(curve.keyframe_points) if curve is not None else 0
+    for field in COORD_FIELDS + ENUM_FIELDS + FLOAT_FIELDS + BOOL_FIELDS:
+        dtype = np.float32
+        if field in ENUM_FIELDS:
+            dtype = np.int32
+        elif field in BOOL_FIELDS:
+            dtype = bool
+        width = 2 if field in COORD_FIELDS else 1
+        values = np.empty(count * width, dtype=dtype)
+        if count:
+            curve.keyframe_points.foreach_get(field, values)
+        result[field] = values.reshape(-1, 2) if field in COORD_FIELDS else values
+    return result
+
+
+def _replace_range_bulk(curve, incoming, start, end, keyframe_type, preserve_manual):
+    times = curve_times(curve)
+    if not np.all(np.diff(times) > 0):
+        raise ValueError("Existing keyframes must be sorted and unique.")
+    generated = bpy.types.Keyframe.bl_rna.properties['type'].enum_items['GENERATED'].value
+    inside = (times >= start) & (times < end)
+    manual = np.zeros(len(times), dtype=bool)
+    if preserve_manual:
+        types = np.empty(len(times), dtype=np.int32)
+        curve.keyframe_points.foreach_get('type', types)
+        manual = inside & (types != generated)
+    keep = ~inside | manual
+    retained = read_key_arrays(None)
+    if keep.any():
+        retained = {field: values[keep] for field, values in read_key_arrays(curve).items()}
+    incoming = {field: values.copy() for field, values in incoming.items()}
+    incoming['type'][:] = bpy.types.Keyframe.bl_rna.properties['type'].enum_items[keyframe_type].value
+    use = ~np.isin(incoming['co'][:, 0], times[manual])
+    merged = {field: np.concatenate((retained[field], values[use]))
+              for field, values in incoming.items()}
+    order = np.argsort(merged['co'][:, 0], kind='stable')
+    # Preserve the same immediate boundary guards as replace_range.
+    left = int(np.searchsorted(times, start)) - 1
+    right = int(np.searchsorted(times, end))
+    guards = [_read_one(curve.keyframe_points[i]) for i in (left, right) if 0 <= i < len(times)]
+    points = curve.keyframe_points
+    points.clear()
+    points.add(len(order))
+    for field in ENUM_FIELDS + FLOAT_FIELDS + COORD_FIELDS + BOOL_FIELDS:
+        points.foreach_set(field, merged[field][order].ravel())
+    curve.update()
+    for state in guards:
+        index = _lower_bound(points, state['co'][0])
+        # Retained coordinates round-trip as float32 without any time arithmetic.
+        if index >= len(points) or points[index].co.x != state['co'][0]:
+            raise RuntimeError('Boundary key missing after materialization.')
+        _restore_one(points[index], state)
+    if guards:
+        curve.update()
+
+
 def materialize_take(
     working_action,
     working_slot,
@@ -328,11 +388,14 @@ def materialize_take(
     take_offset,
     *,
     keyframe_type="GENERATED",
-    preserve_manual=True
+    preserve_manual=True,
+    prepared_keys=None,
 ):
     """Copy a local Take window into the Working Action across the full channel scope."""
     working = _slot_curves(working_action, working_slot)
     take = _slot_curves(take_action, take_slot)
+    if prepared_keys is None:
+        prepared_keys = {identity: read_key_arrays(curve) for identity, curve in take.items()}
     origin = clip_start + take_offset
     local_start, local_end = clip_start - origin, clip_end - origin
     for identity in sorted(working.keys() | take.keys()):
@@ -340,15 +403,15 @@ def materialize_take(
         source = take.get(identity)
         if target is None:
             target = _create_curve(working_action, working_slot, identity, source)
-        keys = _empty_keys() if source is None else shift_keys(read_keys_range(source, local_start, local_end), origin)
-        replace_range(
-            target,
-            keys,
-            clip_start,
-            clip_end,
-            keyframe_type=keyframe_type,
-            preserve_manual=preserve_manual,
-        )
+        keys = read_key_arrays(None)
+        if source is not None:
+            source_keys = prepared_keys[identity]
+            times = source_keys['co'][:, 0]
+            inside = (times >= local_start) & (times < local_end)
+            keys = {field: values[inside].copy() for field, values in source_keys.items()}
+        for field in COORD_FIELDS:
+            keys[field][:, 0] += origin
+        _replace_range_bulk(target, keys, clip_start, clip_end, keyframe_type, preserve_manual)
 
 
 def apply_resize_delta(
