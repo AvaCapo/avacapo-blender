@@ -164,7 +164,7 @@ class AnimationJobs:
             if status == "ready":
                 return
             if status == "cancelled":
-                raise GenerationCancelled()
+                raise GenerationCancelled("The server reported that this job was cancelled.")
             if status == "failed":
                 raise GenerationError("Animation generation failed on the server.")
             self._pause(Config.POLL_INTERVAL, deadline, "status", cancel_event)

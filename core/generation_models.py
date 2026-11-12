@@ -19,6 +19,7 @@ class TaskStatus(str, Enum):
     SERVER_PENDING = "server_pending"
     SERVER_PROCESSING = "server_processing"
     DOWNLOADING = "downloading"
+    APPLYING = "applying"
     SUCCEEDED = "done"
     CANCELLED = "aborted"
     FAILED = "error"

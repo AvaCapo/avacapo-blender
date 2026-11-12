@@ -132,8 +132,8 @@ class GenerationQueue:
             if len(content) > Config.MAX_DOWNLOAD_BYTES:
                 raise GenerationError("Animation exceeds the size limit.")
             status = TaskStatus.SUCCEEDED
-        except GenerationCancelled:
-            status = TaskStatus.CANCELLED
+        except GenerationCancelled as exc:
+            status, error = TaskStatus.CANCELLED, str(exc) or None
         except GenerationError as exc:
             status, error = TaskStatus.FAILED, str(exc)
         except Exception:
@@ -161,7 +161,7 @@ class GenerationQueue:
         with self._lock:
             job_id = self._tasks[task_id].server_job_id
         try:
-            AnimationJobs(base_url=self.base_url).cancel_job(token, job_id)
+            AnimationJobs().cancel_job(token, job_id)
         except GenerationError as exc:
             with self._lock:
                 self._set_task(task_id, error=str(exc))
@@ -198,12 +198,12 @@ class GenerationQueue:
             self.update_cycle()
             self._changed.notify_all()
 
-    def cancel(self, task_id: str) -> bool:
+    def cancel(self, task_id: str, *, reason="Cancelled by user.") -> bool:
         with self._lock:
             if self._tasks[task_id].status in TERMINAL_STATUSES:
                 return False
             self._cancel_events[task_id].set()
-            self._set_task(task_id, status=TaskStatus.CANCELLED, finished_at=time.time())
+            self._set_task(task_id, status=TaskStatus.CANCELLED, error=reason, finished_at=time.time())
             self._pending.pop(task_id, None)
             if self._tasks[task_id].server_job_id:
                 # Send immediately, even while the worker is blocked in a status/download GET.
@@ -265,7 +265,7 @@ class GenerationQueue:
             self._accepting = False
             executor = self._executor
             for uid in tuple(self._tasks):
-                self.cancel(uid)
+                self.cancel(uid, reason="Generation service stopped.")
         joined = False
         try:
             if executor is not None:
