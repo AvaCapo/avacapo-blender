@@ -62,6 +62,7 @@ class TimelineRuntimeState:
     menu_target: MenuTarget = field(default_factory=MenuTarget)
     clipboard: ClipboardClip | None = None
     generation_cooldown_until: float = 0.0
+    active_drags: set[int] = field(default_factory=set)
 
     def generation_ready(self):
         return monotonic() >= self.generation_cooldown_until
@@ -83,6 +84,7 @@ class TimelineRuntimeState:
 
     def reset(self):
         self.generation_cooldown_until = 0.0
+        self.active_drags.clear()
         self.clear_hover()
         self.menu_target = MenuTarget()
         if isinstance(self.clipboard, ClipboardClip):

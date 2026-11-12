@@ -336,6 +336,7 @@ class CLIPS_OT_mouse(Operator):
         runtime.hover = HoverTarget(hit.kind, track.uid, self._session.uid, self._session.other_uid)
         context.window.cursor_modal_set('MOVE_X')
         context.window_manager.modal_handler_add(self)
+        runtime.active_drags.add(id(self._session))
         tag_redraw()
         return {'RUNNING_MODAL'}
 
@@ -400,6 +401,7 @@ class CLIPS_OT_mouse(Operator):
             self._finish(context)
 
     def _finish(self, context):
+        runtime.active_drags.discard(id(self._session))
         self._key_translations = []
         _restore_pose_bone_selection(self._track.object, self._bone_selection)
         self._bone_selection = None

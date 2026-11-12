@@ -237,6 +237,9 @@ def _finish_generation() -> float | None:
         if take is None:
             _generation_service.cancel(task_id)
         task = _generation_service.get_task(task_id)
+        # A drag owns a snapshot of the Working Action until it finishes.
+        if runtime.active_drags and task.status == TaskStatus.SUCCEEDED and take is not None:
+            continue
         if task.status != pending.status:
             log.info("Generation %s: %s", task_id[:8], task.status.value)
             pending.status = task.status
