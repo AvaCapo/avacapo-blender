@@ -1,0 +1,1010 @@
+"""Compound Timeline commands that keep Track metadata and Action windows consistent."""
+
+import math
+from dataclasses import dataclass, replace
+from time import monotonic
+
+import bpy
+
+from ..animation import bvh_npz
+from ..common.logger import log
+from ..core import takes, tracks
+from ..core.generation_models import (
+    ConstraintsParameters, GenerationCommand, PoseConstraint, TaskStatus, TextParameters,
+    TERMINAL_STATUSES,
+)
+from ..core.generation_service import GenerationService
+from ..core.storage import Storage
+from ..animation.retargeting import blender_motion_writer, blender_retarget_service, workflow
+from .generation_status import is_pending, set_status
+from . import actions
+from .properties import edit_track
+from .runtime import ClipboardClip, ClipboardTake, runtime, tag_redraw
+
+
+GENERATION_TIMER_CALLBACKS = set()
+_generation_service = None
+_generation_service_token = ""
+_pending_generations = {}
+
+# Hardcoded debug toggle. Move to UI only if this comparison remains useful.
+# The copied armature holds the user-authored, non-GENERATED keyframes captured
+# immediately before the request. The original armature receives the generated Take,
+# so both can be compared in the scene.
+DEBUG_SHOW_ARMATURE = False
+
+# DEBUG ONLY: replace user-authored keys with generated keys in the original
+# armature. The normal contract preserves user keys, so keep this disabled.
+DEBUG_REPLACE_USER_KEYS_WITH_GENERATED = False
+
+# Switch for comparing ordinary mapped retargeting with SpaceTime refinement.
+# TODO: move to UI
+USE_SPACETIME_REFINEMENT = False # keep false untill merge with post-processing branch
+
+
+@dataclass
+class _PendingGeneration:
+    scene: object
+    track_uid: int
+    clip_uid: int
+    take_uid: int
+    command: GenerationCommand
+    scene_fps: float
+    status: TaskStatus = TaskStatus.QUEUED
+    root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    start_from_previous: bool = False
+
+
+def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_fps: float) -> str:
+    """Queue one server request and publish its result as a Take when it is ready."""
+    global _generation_service
+    global _generation_service_token
+
+    if not Storage.api_token:
+        raise ValueError("Connect to AvaCapo before generating a Take.")
+    if not runtime.generation_ready():
+        raise ValueError("Wait one second before generating another Take.")
+    root_offset = (0.0, 0.0, 0.0)
+    start_from_previous = _can_align_previous_start(command.parameters)
+    if isinstance(command.parameters, TextParameters):
+        armature = _working_armature(track)
+        working_action, working_slot = _working_binding(track, armature)
+        frames = actions.manual_pose_frames(
+            working_action, working_slot, clip.start, clip.end
+        )
+        # Store source and target separately: neighbour poses belong to other
+        # Clips, but constrain the first or last frame of this request.
+        samples = [(frame, frame - clip.start) for frame in frames]
+        start_from_previous = not any(target == 0 for _, target in samples)
+        heading_frame = clip.start
+        previous, following = tracks.neighbors(track.clips, clip.uid)
+        # Interior constraints must not suppress continuity at the start.
+        if (previous is not None and previous.end == clip.start
+                and not any(target == 0 for _, target in samples)
+                and actions.has_pose_keys(
+                    working_action, working_slot, previous.start, previous.end,
+                )):
+            heading_frame = previous.end - 1
+            samples.append((heading_frame, 0))
+        # Keep an authored ending pose (or the start pose of a one-frame Clip).
+        last_target = clip.end - clip.start - 1
+        if (following is not None and following.start == clip.end
+                and not any(target == last_target for _, target in samples)
+                and actions.has_pose_keys(
+                    working_action, working_slot, following.start, following.end,
+                )):
+            samples.append((following.start, last_target))
+        if samples:
+            from ..animation.constraint_utils import (
+                pose_heading_at_frame, rebase_constraint_payloads,
+            )
+            from ..animation.retargeting.constraint_capture import (
+                raw_constraint_npz_from_canonical_motion,
+                user_pose_to_canonical_motion,
+            )
+            if any(abs(frame - round(frame)) > 1e-4 for frame, _ in samples):
+                raise ValueError("Move manual pose keys to whole frames before generating a Take.")
+            samples = sorted({(int(round(frame)), int(round(target)))
+                              for frame, target in samples})
+            joint_map = blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping)
+            blender_retarget_service.current_retarget_build(armature, joint_map)
+            
+            #TODO: remove later after all debugging is done
+            if DEBUG_SHOW_ARMATURE:
+                from ..animation.retargeting.constraint_debug import copy_user_key_armature
+
+                copy_user_key_armature(scene, armature, working_action, working_slot)
+            constraints = []
+            # Sampling uses the actual Working Action, including evaluated IK.
+            # The immutable byte payload is captured before the background job starts.
+            with bpy.context.temp_override(scene=scene, object=armature, active_object=armature):
+                animation_data = armature.animation_data
+                previous_action, previous_slot = animation_data.action, animation_data.action_slot
+                try:
+                    animation_data.action = working_action
+                    animation_data.action_slot = working_slot
+                    first_heading = pose_heading_at_frame(
+                        bpy.context, armature, heading_frame, source_to_bone=joint_map,
+                    )
+                    for frame, target_frame in samples:
+                        _user_motion, canonical_motion = user_pose_to_canonical_motion(
+                            bpy.context, armature, [frame],
+                        )
+                        constraints.append(PoseConstraint(
+                            motion_file=bvh_npz.create_npz_bytes(
+                                raw_constraint_npz_from_canonical_motion(canonical_motion),
+                            ),
+                            source_frame=0,
+                            target_frame=target_frame,
+                        ))
+                finally:
+                    animation_data.action = previous_action
+                    animation_data.action_slot = previous_slot
+                    bpy.context.view_layer.update()
+            payloads, root_offset = rebase_constraint_payloads(item.motion_file for item in constraints)
+            command = replace(command, parameters=ConstraintsParameters(
+                num_frames=clip.end - clip.start,
+                constraints=tuple(replace(item, motion_file=payload)
+                                  for item, payload in zip(constraints, payloads)),
+                seed=command.parameters.seed, cycled=command.parameters.cycled,
+                first_heading=first_heading,
+            ))
+    if _generation_service is None:
+        _generation_service = GenerationService(
+            api_token=Storage.api_token,
+            max_concurrent=1,
+        )
+        _generation_service.start()
+        _generation_service_token = Storage.api_token
+    elif _generation_service_token != Storage.api_token:
+        _generation_service.set_api_token(Storage.api_token)
+        _generation_service_token = Storage.api_token
+
+    command = command.resolve_seed()
+    take = edit_track(
+        track, takes.add_take, clip, command=command, activate=False, scene_fps=scene_fps,
+    )
+    set_status(take, TaskStatus.QUEUED)
+    try:
+        task_id = _generation_service.submit(command)
+    except Exception:
+        edit_track(track, takes.remove_take, clip, take.uid)
+        raise
+    if not clip.name.strip():
+        clip.name = tracks.clip_name_from_prompt(command.prompt)
+    # Retain the submitted seed immediately, so disabling randomization also
+    # reuses it while this Take is pending or if generation later fails.
+    clip.seed = command.parameters.seed
+    _pending_generations[task_id] = _PendingGeneration(
+        scene=scene,
+        track_uid=track.uid,
+        clip_uid=clip.uid,
+        take_uid=take.uid,
+        command=command,
+        scene_fps=scene_fps,
+        root_offset=root_offset,
+        start_from_previous=start_from_previous,
+    )
+    runtime.generation_cooldown_until = monotonic() + 1.0
+    tag_redraw()
+    log.info("Queued server generation %s for Clip %s.", task_id[:8], clip.uid)
+    if not bpy.app.timers.is_registered(_finish_generation):
+        bpy.app.timers.register(_finish_generation, first_interval=0.1)
+        GENERATION_TIMER_CALLBACKS.add(_finish_generation)
+    return task_id
+
+
+def _pending_take(pending):
+    track = next((item for item in pending.scene.clip_data.tracks
+                  if item.uid == pending.track_uid), None)
+    clip = None if track is None else tracks.find_clip(track.clips, pending.clip_uid)
+    return None if clip is None else takes.find_take(clip, pending.take_uid)
+
+
+def cancel_take_generation(track, clip, take_uid) -> bool:
+    """Stop observing this Take and request cancellation of its server job."""
+    for task_id, pending in _pending_generations.items():
+        if (pending.scene == track.id_data and pending.track_uid == track.uid
+                and pending.clip_uid == clip.uid and pending.take_uid == take_uid):
+            if not _generation_service.cancel(task_id):
+                return False
+            take = takes.find_take(clip, take_uid)
+            if take is not None:
+                set_status(take, TaskStatus.CANCELLED)
+            tag_redraw()
+            return True
+    return False
+
+
+def _cancel_clip_generations(track, clip):
+    for take in clip.takes:
+        if is_pending(take):
+            cancel_take_generation(track, clip, take.uid)
+
+
+def _finish_generation() -> float | None:
+    if _generation_service is None:
+        _pending_generations.clear()
+        GENERATION_TIMER_CALLBACKS.discard(_finish_generation)
+        return None
+
+    changed = False
+    if runtime.generation_cooldown_until and runtime.generation_ready():
+        runtime.generation_cooldown_until = 0.0
+        changed = True
+    for task_id, pending in tuple(_pending_generations.items()):
+        take = _pending_take(pending)
+        if take is None:
+            _generation_service.cancel(task_id)
+        task = _generation_service.get_task(task_id)
+        if task.status != pending.status:
+            log.info("Generation %s: %s", task_id[:8], task.status.value)
+            pending.status = task.status
+            if take is not None:
+                set_status(take, task.status, error=task.error or "")
+            changed = True
+        if task.status not in TERMINAL_STATUSES:
+            continue
+
+        _pending_generations.pop(task_id)
+        changed = True
+        if task.status == TaskStatus.SUCCEEDED and take is not None:
+            result = _generation_service.get_result(task_id)
+            try:
+                if result is None:
+                    raise RuntimeError("Generation completed without an animation result.")
+                _publish_generation(pending, result.bvh_bytes, result.resolved_seed)
+            except Exception as exc:
+                log.error("Could not create Take from generated animation: %s", exc)
+                set_status(take, TaskStatus.FAILED, error=str(exc))
+            finally:
+                _generation_service.release_result(task_id)
+        elif task.status == TaskStatus.FAILED:
+            log.error("Animation generation failed: %s", task.error or "unknown error")
+        elif task.status == TaskStatus.SUCCEEDED:
+            _generation_service.release_result(task_id)
+
+    if changed:
+        tag_redraw()
+    if _pending_generations or runtime.generation_cooldown_until:
+        return 0.1
+    GENERATION_TIMER_CALLBACKS.discard(_finish_generation)
+    return None
+
+
+def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_seed: int | None) -> None:
+    """Retarget one completed server result on Blender's main thread."""
+    from broom.io import load_bvh_from_bytes
+
+    track = next(
+        (item for item in pending.scene.clip_data.tracks if item.uid == pending.track_uid),
+        None,
+    )
+    if track is None:
+        raise ValueError("The Track was deleted while the animation was generating.")
+    clip = tracks.find_clip(track.clips, pending.clip_uid)
+    if clip is None:
+        raise ValueError("The Clip was deleted while the animation was generating.")
+
+    command = pending.command
+    if resolved_seed is not None and hasattr(command.parameters, "seed"):
+        command = replace(command, parameters=replace(command.parameters, seed=resolved_seed))
+    apply_generated_motion(
+        track,
+        clip,
+        command=command,
+        source_motion=load_bvh_from_bytes(bvh_bytes),
+        source_text=bvh_bytes.decode("utf-8"),
+        scene_fps=pending.scene_fps,
+        root_offset=pending.root_offset,
+        start_from_previous=pending.start_from_previous,
+        take_uid=pending.take_uid,
+    )
+
+
+def cancel_generation() -> None:
+    """Cancel server work without waiting for a network request to return."""
+    global _generation_service
+    global _generation_service_token
+
+    for callback in tuple(GENERATION_TIMER_CALLBACKS):
+        if bpy.app.timers.is_registered(callback):
+            bpy.app.timers.unregister(callback)
+    GENERATION_TIMER_CALLBACKS.clear()
+    for pending in _pending_generations.values():
+        take = _pending_take(pending)
+        if take is not None:
+            set_status(take, TaskStatus.CANCELLED)
+    _pending_generations.clear()
+    runtime.generation_cooldown_until = 0.0
+    if _generation_service is not None:
+        _generation_service.stop(wait=False)
+        _generation_service = None
+    _generation_service_token = ""
+
+
+def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
+                           root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                           take_uid: int | None = None,
+                           start_from_previous: bool | None = None):
+    """Retarget one source Motion and publish its Take only after it is usable."""
+    armature = _working_armature(track)
+    if not isinstance(source_text, str) or not source_text:
+        raise ValueError("Generated source text is missing.")
+    if not math.isfinite(scene_fps) or scene_fps <= 0.0:
+        raise ValueError("Scene FPS must be positive and finite.")
+    if any(root_offset):
+        # Undo request normalization before retargeting so its scale conversion
+        # also applies to the restored translation. Keep the raw server BVH intact.
+        values = source_motion.values.copy()
+        for axis, offset in zip("XYZ", root_offset):
+            if offset:
+                column = source_motion.hierarchy.channel_index(
+                    source_motion.hierarchy.root_name, f"{axis}position",
+                )
+                values[:, column] += offset
+        source_motion = replace(source_motion, values=values)
+
+    frame_step = scene_fps * source_motion.frame_time
+    if isinstance(command.parameters, TextParameters):
+        source_motion = workflow.resample_motion(
+            source_motion, scene_fps, duration_seconds=command.parameters.duration,
+        )
+        frame_step = 1.0
+    elif isinstance(command.parameters, ConstraintsParameters):
+        # Constraint targets are clip-relative frame indices. Keep those indices
+        # on the scene grid even when the returned BVH uses a different FPS.
+        source_motion = workflow.resample_motion(
+            source_motion, scene_fps,
+            duration_seconds=command.parameters.num_frames / scene_fps,
+        )
+        frame_step = 1.0
+
+    target, joint_map, canonical_from_armature = blender_retarget_service.current_retarget_build(
+        armature,
+        blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
+    )
+    retargeted_motion = workflow.retarget_mapped_motion(source_motion, target, joint_map)
+    if USE_SPACETIME_REFINEMENT:
+        retargeted_motion, _constraints = workflow.refine_motion_spacetime(
+            source_motion,
+            retargeted_motion, # used as an initial guess
+            joint_map,
+            settings=workflow.SpaceTimeSettings(), # Default setting, TODO: move to UI if necessary
+        )
+    prepared = blender_motion_writer.prepare_retargeted_motion(
+        armature,
+        retargeted_motion,
+        canonical_from_armature=canonical_from_armature,
+        frame_start=0.0,
+        frame_step=frame_step,
+    )
+    if start_from_previous is None:
+        start_from_previous = _can_align_previous_start(command.parameters)
+    if start_from_previous:
+        prepared = _align_generated_start(
+            track, clip, armature, command, prepared, scene_fps,
+            root_bone_name=joint_map[source_motion.hierarchy.root_name],
+        )
+
+    # Resolve this before creating any resource owned by the new Take.
+    _working_binding(track, armature)
+
+    existing_take = None if take_uid is None else takes.find_take(clip, take_uid)
+    if take_uid is not None and existing_take is None:
+        raise ValueError("The pending Take was deleted.")
+    take_uid = clip.take_counter + 1 if take_uid is None else take_uid
+    action = source_record = None
+    take = existing_take
+    try:
+        action, slot = _new_take_action(armature, clip.uid, take_uid)
+        blender_motion_writer.apply_prepared_motion(
+            armature,
+            action,
+            slot,
+            prepared,
+            assign_to_skeleton=False,
+            keyframe_type="GENERATED",
+        )
+        source_record = _new_source_text(clip.uid, take_uid, source_text)
+
+        if take is None:
+            take = edit_track(
+                track, takes.add_take, clip, command=command, activate=False, scene_fps=scene_fps,
+            )
+        take.take_action = action
+        take.take_slot_handle = int(slot.handle)
+        take.source_motion_text = source_record
+
+        # TODO(debug-generated-only): enable this temporary debug mode to
+        # replace user keys with pure generated animation in the Clip window.
+        # switch_take(track, clip, take.uid)
+        switch_take(
+            track,
+            clip,
+            take.uid,
+            preserve_manual=not DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
+        )
+        # The overlay must describe the stored Action, including when the Clip
+        # was resized while generation was pending. Clip ends are exclusive.
+        take.length = max(1, math.ceil(prepared.frame_times[-1]) + 1)
+        set_status(take, TaskStatus.SUCCEEDED, error="")
+        return take
+    except Exception:
+        if take is not None:
+            if existing_take is None:
+                edit_track(track, takes.remove_take, clip, take.uid)
+            else:
+                take.take_action = None
+                take.take_slot_handle = 0
+                take.source_motion_text = None
+        _remove_if_unused(bpy.data.actions, action)
+        _remove_if_unused(bpy.data.texts, source_record)
+        raise
+
+
+def _can_align_previous_start(parameters):
+    if isinstance(parameters, TextParameters):
+        return True
+    if isinstance(parameters, ConstraintsParameters):
+        return not any(item.target_frame == 0 for item in parameters.constraints)
+    return False
+
+
+def _align_generated_start(track, clip, armature, command, prepared, scene_fps, *, root_bone_name):
+    """Use the current neighbour pose rather than trusting the server's first sample."""
+    previous, _ = tracks.neighbors(track.clips, clip.uid)
+    if previous is None or previous.end != clip.start:
+        return prepared
+    working_action, working_slot = _working_binding(track, armature)
+    if not actions.has_pose_keys(working_action, working_slot, previous.start, previous.end):
+        return prepared
+    manual_frames = actions.manual_pose_frames(
+        working_action, working_slot, clip.start, clip.end
+    )
+    # An explicit starting pose takes priority over automatic continuity.
+    if clip.start in manual_frames:
+        return prepared
+    later_constraints = [frame - clip.start for frame in manual_frames if frame > clip.start]
+    if isinstance(command.parameters, ConstraintsParameters):
+        later_constraints.extend(item.target_frame for item in command.parameters.constraints
+                                 if item.target_frame > 0)
+
+    scene = track.id_data
+    previous_frame, previous_subframe = scene.frame_current, scene.frame_subframe
+    animation_data = armature.animation_data
+    previous_action, previous_slot = animation_data.action, animation_data.action_slot
+    with bpy.context.temp_override(scene=scene, object=armature, active_object=armature):
+        try:
+            animation_data.action = working_action
+            animation_data.action_slot = working_slot
+            scene.frame_set(previous.end - 1)
+            bpy.context.view_layer.update()
+            start_pose = {curve.data_path: tuple(armature.path_resolve(curve.data_path))
+                          for curve in prepared.curves}
+        finally:
+            animation_data.action = previous_action
+            animation_data.action_slot = previous_slot
+            scene.frame_set(previous_frame, subframe=previous_subframe)
+            bpy.context.view_layer.update()
+    return blender_motion_writer.align_prepared_motion_start(
+        armature, prepared, start_pose,
+        root_bone_name=root_bone_name,
+        blend_frames=max(1, round(scene_fps * 0.25)),
+        next_constraint_frame=min(later_constraints, default=None),
+    )
+
+
+def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_manual=True):
+    """Make one immutable Take visible in the Working Action."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+
+    target_take = takes.find_take(clip, take_uid)
+    if target_take is None:
+        raise ValueError(f"Take {take_uid} does not belong to this Clip.")
+    active_take = takes.current_take(clip)
+    if active_take is not None and active_take.uid == target_take.uid:
+        return target_take
+
+    working_action = track.working_action
+    if working_action is None:
+        raise ValueError("Working Action binding is incomplete.")
+    working_slot = actions.find_slot(
+        working_action, track.working_slot_handle, "Working Action",
+    )
+    target_action, target_slot = _take_binding(target_take)
+    if target_action == working_action:
+        raise ValueError("A Take Action cannot also be the Working Action.")
+
+    # Preflight the destination before any Working Action key is changed.
+    actions.read_slot_curves(working_action, working_slot)
+    actions.read_slot_curves(target_action, target_slot)
+    if active_take is not None and active_take.take_action == target_action:
+        raise ValueError("Different Takes cannot share one Take Action.")
+    if active_take is not None and preserve_manual:
+        #TODO: if we decide to keep user changes, here is the place to function call 
+        #for promouting changed GENERATED keys to KEYFRAME type
+        pass
+
+    working_snapshot = None
+    if backup_working_area:
+        working_snapshot = actions.snapshot_range(
+            working_action, working_slot, clip.start, clip.end,
+        )
+
+    try:
+        actions.materialize_take(
+            working_action, working_slot, target_action, target_slot,
+            clip.start, clip.end, target_take.offset,
+            preserve_manual=preserve_manual,
+        )
+    except Exception:
+        if working_snapshot is not None:
+            try:
+                actions.restore_range(
+                    working_action, working_slot, working_snapshot, clip.start, clip.end,
+                )
+            except Exception as rollback_error:
+                raise RuntimeError("Could not restore Working Action after switching Take.") from rollback_error
+        raise
+
+    clip.active_take_uid = target_take.uid
+    clip.prompt = target_take.prompt
+    clip.seed = target_take.seed
+    clip.generation_model = target_take.generation_model
+    clip.generation_temperature = target_take.temperature
+    clip.generation_cycled = target_take.cycled
+    clip.generation_in_place = target_take.generation_in_place
+    clip.generation_enhance_prompt = target_take.generation_enhance_prompt
+    return target_take
+
+
+def _apply_resize_deltas(track, initial, *, skip_clip_uids=()):
+    """Apply Working Action resize deltas from one Track snapshot."""
+    # TODO(investigate-binding-propagation): Binding should affect at most one
+    # neighbour per operation. Once that invariant is explicit, replace this
+    # Track-wide metadata scan with the known affected Clip.
+    skipped = set(skip_clip_uids)
+    changed = []
+    for clip in track.clips:
+        if clip.uid in skipped:
+            continue
+        previous = initial.get(clip.uid)
+        if previous is None or (
+            previous.start == clip.start and previous.end == clip.end
+        ):
+            continue
+        take = takes.current_take(clip)
+        if take is not None:
+            changed.append((clip, take, previous))
+    if not changed:
+        return False
+
+    working_action, working_slot = _working_binding(track, track.object)
+    trims = []
+    extensions = []
+    for clip, take, previous in changed:
+        action, slot = _take_binding(take)
+        if action == working_action:
+            raise ValueError("A Take Action cannot also be the Working Action.")
+        previous_offsets = dict(previous.take_offsets)
+        if take.uid not in previous_offsets:
+            raise ValueError("Active Take is missing from the drag snapshot.")
+        origin = previous.start + previous_offsets[take.uid]
+        overlap_start = max(previous.start, clip.start)
+        overlap_end = max(overlap_start, min(previous.end, clip.end))
+        trims.append((
+            action, slot, previous.start, previous.end, overlap_start, overlap_end, origin,
+        ))
+        extensions.append((
+            action, slot, overlap_start, overlap_end, clip.start, clip.end, origin,
+        ))
+
+    # Clips share the Working Action. Remove every trimmed range before adding
+    # keys, or a shrinking neighbour can erase frames another Clip just restored.
+    for action, slot, old_start, old_end, new_start, new_end, origin in trims + extensions:
+        actions.apply_resize_delta(
+            working_action,
+            working_slot,
+            action,
+            slot,
+            old_start,
+            old_end,
+            new_start,
+            new_end,
+            origin,
+        )
+    return True
+
+
+def create_clip(track, frame, default_length, *, name="", stick_previous=False):
+    """Create a Clip and apply automatic binding resizes to Working Actions."""
+    initial = edit_track(track, tracks.snapshot)
+    clip = edit_track(track, tracks.create_clip_at, frame, default_length, name=name)
+    if clip is not None:
+        if stick_previous:
+            edit_track(track, tracks.stick_to_neighbors, clip.uid, 'PREV')
+        _apply_resize_deltas(track, initial)
+    return clip
+
+
+def resize_clip(track, clip_uid, operation, value):
+    """Resize from a panel command and immediately update the Working Action."""
+    initial = edit_track(track, tracks.snapshot)
+    if not edit_track(track, operation, clip_uid, value):
+        return False
+    return _apply_resize_deltas(track, initial)
+
+
+def move_clip(track, clip_uid, requested_start):
+    """Move one Clip and its active-Take keys from a panel Start edit."""
+    clip = tracks.find_clip(track.clips, clip_uid)
+    if clip is None:
+        return False
+    initial = edit_track(track, tracks.snapshot)
+    old_start, old_end = clip.start, clip.end
+    if not edit_track(track, tracks.move_clip, clip_uid, requested_start):
+        return False
+
+    delta = clip.start - old_start
+    take = takes.current_take(clip)
+    if take is not None and delta:
+        working_action, working_slot = _working_binding(track, track.object)
+        take_action, take_slot = _take_binding(take)
+        if take_action == working_action:
+            raise ValueError("A Take Action cannot also be the Working Action.")
+        actions.translate_take_window(
+            working_action,
+            working_slot,
+            take_action,
+            take_slot,
+            old_start,
+            old_end,
+            delta,
+        )
+    _apply_resize_deltas(track, initial, skip_clip_uids=(clip.uid,))
+    return True
+
+
+def finalize_resize_drag(track, session):
+    """Apply Action changes caused by one completed Timeline drag."""
+    if session.kind == 'BODY':
+        return _apply_resize_deltas(
+            track, session.initial, skip_clip_uids=(session.uid,),
+        )
+    if session.kind not in {'LEFT', 'RIGHT', 'SYNC'}:
+        return False
+    return _apply_resize_deltas(track, session.initial)
+
+
+def set_take_offset(track, clip, requested_offset):
+    """Move the active Take window without rebuilding the whole Clip range."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    take = takes.current_take(clip)
+    if take is None:
+        raise ValueError("Clip has no active Take.")
+
+    old_offset = int(take.offset)
+    new_offset = int(requested_offset)
+    if new_offset == old_offset:
+        return False
+
+    working_action, working_slot = _working_binding(track, track.object)
+    take_action, take_slot = _take_binding(take)
+    if take_action == working_action:
+        raise ValueError("A Take Action cannot also be the Working Action.")
+
+    actions.apply_offset_delta(
+        working_action,
+        working_slot,
+        take_action,
+        take_slot,
+        clip.start,
+        clip.end,
+        old_offset,
+        new_offset,
+    )
+    edit_track(track, _set_take_offset, clip.uid, take.uid, new_offset)
+    return True
+
+
+def delete_takes(track, clip):
+    """Remove all Take-owned resources and clear this Clip's Working window."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    _cancel_clip_generations(track, clip)
+    resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
+    cleared = _clear_clip_window(track, clip)
+    try:
+        edit_track(track, takes.delete_takes, clip)
+    except Exception:
+        _restore_cleared_window(cleared, clip)
+        raise
+    _remove_take_resources(track.working_action, resources)
+
+
+def delete_take(track, clip, take_uid):
+    """Delete one Take and keep the Clip's visible Action window valid."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    target = takes.find_take(clip, take_uid)
+    if target is None:
+        raise ValueError(f"Take {take_uid} does not belong to this Clip.")
+    if is_pending(target):
+        cancel_take_generation(track, clip, take_uid)
+
+    resource = (target.take_action, target.source_motion_text)
+    active_take = takes.current_take(clip)
+    if active_take is not None and active_take.uid == target.uid:
+        replacement = next((take for take in clip.takes
+                            if take.uid != target.uid and take.take_action is not None), None)
+        if replacement is not None:
+            switch_take(track, clip, replacement.uid)
+        else:
+            cleared = _clear_clip_window(track, clip)
+            try:
+                if len(clip.takes) == 1:
+                    edit_track(track, takes.delete_takes, clip)
+                else:
+                    edit_track(track, takes.remove_take, clip, target.uid)
+            except Exception:
+                _restore_cleared_window(cleared, clip)
+                raise
+            _remove_take_resources(track.working_action, (resource,))
+            return
+
+    if not edit_track(track, takes.remove_take, clip, target.uid):
+        raise RuntimeError("Could not remove Take metadata.")
+    _remove_take_resources(track.working_action, (resource,))
+
+
+def delete_clip(track, clip):
+    """Clear this Clip's Working window, then remove its Takes and metadata."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    _cancel_clip_generations(track, clip)
+    resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
+    cleared = _clear_clip_window(track, clip)
+    try:
+        edit_track(track, takes.delete_takes, clip)
+        if not edit_track(track, tracks.remove_clip, clip.uid):
+            raise RuntimeError("Could not remove Clip metadata.")
+    except Exception:
+        _restore_cleared_window(cleared, clip)
+        raise
+    _remove_take_resources(track.working_action, resources)
+
+
+def bake_clip(track, clip):
+    """Keep visible Working Action keys and remove this Clip's Take ownership."""
+    if not any(candidate == clip for candidate in track.clips):
+        raise ValueError("Clip does not belong to this Track.")
+    _cancel_clip_generations(track, clip)
+    working_action, working_slot = _working_binding(track, track.object)
+    actions.bake_generated_range(
+        working_action,
+        working_slot,
+        clip.start,
+        clip.end,
+    )
+    resources = [(take.take_action, take.source_motion_text) for take in clip.takes]
+    edit_track(track, takes.delete_takes, clip)
+    if not edit_track(track, tracks.remove_clip, clip.uid):
+        raise RuntimeError("Could not remove Clip metadata.")
+    _remove_take_resources(track.working_action, resources)
+
+
+def copy_clip(clip):
+    """Copy Clip metadata and independent Take resources into the runtime clipboard."""
+    copied_takes = {}
+    try:
+        for take in clip.takes:
+            if take.take_action is None:
+                continue
+            action, slot = _take_binding(take)
+            copied_action, copied_slot_handle, copied_text = _copy_take_resource(
+                action, slot, take.source_motion_text, f"Copied Take {take.uid}",
+            )
+            copied_takes[take.uid] = ClipboardTake(
+                copied_action, copied_slot_handle, copied_text,
+            )
+        data = tracks.serialize_clip(clip)
+        data = replace(data, takes=tuple(take for take in data.takes if take.uid in copied_takes))
+        return ClipboardClip(data, copied_takes)
+    except Exception:
+        _remove_take_resources(None, (
+            (item.action, item.source_text) for item in copied_takes.values()
+        ))
+        raise
+
+
+def paste_clip(track, clipboard, start):
+    """Paste a ClipboardClip with new, independent Take Actions and Text records."""
+    if not isinstance(clipboard, ClipboardClip):
+        raise ValueError("Timeline clipboard has no Take Action content.")
+    payload = clipboard.data
+    if not tracks.is_free(track.clips, start, start + payload.length):
+        raise ValueError("Not enough free space for the copied Clip.")
+
+    working_action, working_slot = _working_binding(track, track.object)
+    actions.read_slot_curves(working_action, working_slot)
+    copied_resources = {}
+    clip = None
+    try:
+        for take_data in payload.takes:
+            template = clipboard.takes.get(take_data.uid)
+            if template is None:
+                raise ValueError(f"Clipboard is missing Take {take_data.uid} resources.")
+            action, slot_handle, text = _copy_take_resource(
+                template.action,
+                actions.find_slot(
+                    template.action, template.slot_handle, f"Clipboard Take {take_data.uid}",
+                ),
+                template.source_text,
+                f"Pasted Take {take_data.uid}",
+            )
+            copied_resources[take_data.uid] = (action, slot_handle, text)
+
+        clip = edit_track(track, tracks.paste_clip, payload, start)
+        if clip is None:
+            raise ValueError("Not enough free space for the copied Clip.")
+        for take in clip.takes:
+            action, slot_handle, text = copied_resources[take.uid]
+            take.take_action = action
+            take.take_slot_handle = slot_handle
+            take.source_motion_text = text
+
+        active_take = takes.current_take(clip)
+        if active_take is not None:
+            action, slot = _take_binding(active_take)
+            actions.read_slot_curves(action, slot)
+            working_snapshot = actions.snapshot_range(
+                working_action, working_slot, clip.start, clip.end,
+            )
+            actions.materialize_take(
+                working_action, working_slot, action, slot,
+                clip.start, clip.end, active_take.offset,
+            )
+        return clip
+    except Exception:
+        try:
+            if 'working_snapshot' in locals():
+                actions.restore_range(
+                    working_action, working_slot, working_snapshot, clip.start, clip.end,
+                )
+            if clip is not None:
+                edit_track(track, tracks.remove_clip, clip.uid)
+            _remove_take_resources(
+                working_action,
+                ((action, text) for action, _slot_handle, text in copied_resources.values()),
+            )
+        except Exception as rollback_error:
+            raise RuntimeError("Could not restore Timeline after pasting Clip.") from rollback_error
+        raise
+
+
+def _set_take_offset(store, clip_uid, take_uid, offset):
+    clip = tracks.find_clip(store.clips, clip_uid)
+    take = takes.find_take(clip, take_uid) if clip is not None else None
+    if take is None:
+        raise ValueError("Take does not belong to this Clip.")
+    take.offset = int(offset)
+
+
+def _clear_clip_window(track, clip):
+    """Clear one Clip range with rollback if Blender rejects the write."""
+    working_action, working_slot = _working_binding(track, track.object)
+    actions.read_slot_curves(working_action, working_slot)
+    snapshot = actions.snapshot_range(
+        working_action, working_slot, clip.start, clip.end,
+    )
+    try:
+        actions.clear_range(working_action, working_slot, clip.start, clip.end)
+    except Exception:
+        try:
+            actions.restore_range(
+                working_action, working_slot, snapshot, clip.start, clip.end,
+            )
+        except Exception as rollback_error:
+            raise RuntimeError("Could not restore Working Action after clearing Clip.") from rollback_error
+        raise
+    return working_action, working_slot, snapshot
+
+
+def _restore_cleared_window(cleared, clip):
+    working_action, working_slot, snapshot = cleared
+    try:
+        actions.restore_range(
+            working_action, working_slot, snapshot, clip.start, clip.end,
+        )
+    except Exception as rollback_error:
+        raise RuntimeError("Could not restore Working Action after deleting Clip.") from rollback_error
+
+
+def _remove_take_resources(working_action, resources):
+    """Remove only unreferenced Take resources, never the Working Action."""
+    actions_to_remove = []
+    texts_to_remove = []
+    for action, text in resources:
+        if action is not None and action != working_action and action not in actions_to_remove:
+            actions_to_remove.append(action)
+        if text is not None and text not in texts_to_remove:
+            texts_to_remove.append(text)
+    for action in actions_to_remove:
+        _remove_if_unused(bpy.data.actions, action)
+    for text in texts_to_remove:
+        _remove_if_unused(bpy.data.texts, text)
+
+
+def _slot_index(action, slot):
+    for index, candidate in enumerate(action.slots):
+        if candidate.handle == slot.handle:
+            return index
+    raise ValueError("Take Action Slot is missing.")
+
+
+def _slot_at_index(action, index, label):
+    try:
+        return action.slots[index]
+    except IndexError:
+        raise ValueError(f"{label} Slot is missing.") from None
+
+
+def _copy_take_resource(action, slot, source_text, label):
+    copied_action = copied_text = None
+    try:
+        copied_action = action.copy()
+        copied_slot = _slot_at_index(copied_action, _slot_index(action, slot), label)
+        copied_text = None if source_text is None else source_text.copy()
+        return copied_action, int(copied_slot.handle), copied_text
+    except Exception:
+        _remove_if_unused(bpy.data.actions, copied_action)
+        _remove_if_unused(bpy.data.texts, copied_text)
+        raise
+
+
+def _take_binding(take):
+    if take.take_action is None:
+        raise ValueError(f"Take {take.uid} has no Take Action.")
+    return take.take_action, actions.find_slot(
+        take.take_action, take.take_slot_handle, f"Take {take.uid}",
+    )
+
+
+def _working_armature(track):
+    armature = track.object
+    if armature is None or armature.type != "ARMATURE":
+        raise ValueError("Working Object must be an armature.")
+    errors = blender_retarget_service.confirmed_mapping_errors(armature)
+    if errors:
+        raise ValueError(errors[0])
+    return armature
+
+
+def _working_binding(track, armature):
+    if track.object != armature or track.working_action is None:
+        raise ValueError("Working Action binding is incomplete.")
+    return track.working_action, actions.find_slot(
+        track.working_action, track.working_slot_handle, "Working Action",
+    )
+
+
+def _new_take_action(armature, clip_uid, take_uid):
+    action = bpy.data.actions.new(name=f"AvaCapo Take {clip_uid}.{take_uid}")
+    slot = action.slots.new(armature.id_type, name=armature.name)
+    return action, slot
+
+
+def _new_source_text(clip_uid, take_uid, source_text):
+    # TODO(source-motion-storage): test raw bytes saving. For now source BVH is
+    # stored as Text so it is saved inside the .blend without a JSON key payload.
+    record = bpy.data.texts.new(name=f"AvaCapo Source {clip_uid}.{take_uid}")
+    record.write(source_text)
+    return record
+
+
+def _remove_if_unused(collection, datablock):
+    if datablock is not None and datablock.users == 0:
+        collection.remove(datablock)

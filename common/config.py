@@ -1,0 +1,89 @@
+import os
+
+
+class Config:
+    """Configuration for the AvaCapo addon."""
+
+    ADDON_NAME = "avacapo"
+    ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
+    PLATFORM_URL = "https://service.avacapo.com/"
+    FRONTEND_URL = "https://app.avacapo.com/"
+    ADDON_DOWNLOAD_URL = "https://github.com/AvaCapo/avacapo-blender"
+    SERVER_URL = os.getenv("AVACAPO_BASE_URL", PLATFORM_URL).rstrip("/")
+    PUBLIC_BASE_URL = f"{SERVER_URL}/api/v1/public"
+    GENERATION_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt/"
+    GENERATION_CONSTRAINTS_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt-with-constraints/"
+    INBETWEENING_URL = f"{PUBLIC_BASE_URL}/api-avacapo-prompt-inbetween/"
+    STATUS_URL = f"{PUBLIC_BASE_URL}/api-avacapo-status/"
+    DOWNLOAD_URL = f"{PUBLIC_BASE_URL}/api-avacapo-download/"
+    CANCEL_URL = f"{PUBLIC_BASE_URL}/api-avacapo-cancel/"
+    GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
+    GET_MODELS_NAMES_URL = GET_MODELS_URL
+    GET_ADDON_VERSION_URL = f"{PLATFORM_URL}api/v1/get-addon-version/"
+
+    BLEND_NAME = "rigs.blend"
+    BLEND_PATH = os.path.join(ADDON_DIR, BLEND_NAME)
+    RIGS_DIR = os.path.join(ADDON_DIR, "rigs")
+    MIXAMO_BVH_NAME = "mixamo.bvh"
+    MIXAMO_BVH_PATH = os.path.join(RIGS_DIR, MIXAMO_BVH_NAME)
+
+    STORAGE = "storage.json"
+    STORAGE_PATH = os.path.join(ADDON_DIR, STORAGE)
+
+    AVACAPO_RIG_NAME = "avacapo_bvh_v1"
+
+    DEFAULT_MODEL_TYPE = "gen2"
+    DEFAULT_MODELS = ["gen2", "asm", "kimodo"]
+    DEFAULT_MODEL_DETAILS = {
+        "gen2": {
+            "name": "Advanced",
+            "description": "Fast, high-quality motion generation.",
+        },
+        "asm": {
+            "name": "Constructor",
+            "description": "Motion construction from a high-quality animation database.",
+        },
+        "kimodo": {
+            "name": "Kimodo",
+            "description": "Motion generation powered by NVIDIA's model.",
+        }
+    }
+    REQUEST_TIMEOUT = 120
+    POLL_INTERVAL = 3
+    GENERATION_WAIT_TIMEOUT = 30 * 60
+    DOWNLOAD_WAIT_TIMEOUT = 5 * 60
+    CONNECT_TIMEOUT = 10
+    STATUS_REQUEST_TIMEOUT = 30
+    DOWNLOAD_REQUEST_TIMEOUT = 240
+    GET_RETRY_ATTEMPTS = 3
+    RETRY_BACKOFF = 1.0
+    MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
+    DEFAULT_TEMPERATURE = 1.0
+    DEFAULT_DURATION = 5
+    DEFAULT_FPS = 24
+    ROOT_TRANSLATION_SCALE = 1.0
+    KEEP_Y_UP = False
+    GENDER = "neutral"
+    CONSTRAINT_TYPES = frozenset(
+        {
+            "fullbody",
+            "end-effector",
+            "left-hand",
+            "right-hand",
+            "left-foot",
+            "right-foot",
+        }
+    )
+    END_EFFECTOR_JOINTS = frozenset(
+        {"LeftFoot", "RightFoot", "LeftHand", "RightHand", "Hips"}
+    )
+
+
+class TimelineConfig:
+    """Frame rules and defaults for timeline clips, independent of the backend."""
+
+    MIN_CLIP_LENGTH = 1
+    MIN_TAKE_LENGTH = 1
+    DEFAULT_CLIP_LENGTH = 60
+    RECOMMENDED_MIN_SECONDS = 0.25
+    RECOMMENDED_MAX_SECONDS = 10.0

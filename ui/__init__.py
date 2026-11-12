@@ -1,0 +1,205 @@
+"""Register Blender UI resources for the add-on."""
+
+import bpy
+from bpy.app.handlers import persistent
+from bpy.props import PointerProperty
+
+from .track_generation import (
+    MODEL_CATALOG_TIMER_CALLBACKS, cancel_model_catalog_refresh, refresh_model_catalog,
+)
+from .connection import (
+    AVACAPO_OT_disconnect, AVACAPO_OT_login_browser,
+    AVACAPO_OT_paste_token,
+)
+from ..timeline.drawing import draw_callback
+from ..timeline.interaction import CLIPS_OT_hover, CLIPS_OT_mouse
+from ..timeline.operators import (
+    CLIPS_OT_create, CLIPS_OT_fill_gap, CLIPS_OT_rename,
+    CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take, CLIPS_OT_cancel_take,
+    CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
+    CLIPS_OT_copy_clip,
+    CLIPS_OT_paste_clip,
+    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
+)
+from ..timeline.operations import cancel_generation
+from .track_panels import (
+    CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
+)
+from ..timeline.properties import CT_Take, CT_Clip, CT_Track, CT_Scene
+from ..timeline.runtime import runtime
+from ..timeline.generation_status import is_pending, set_status
+from ..core.storage import Storage
+from ..core.generation_models import TaskStatus
+from .update_notice import TIMER_CALLBACKS as UPDATE_TIMER_CALLBACKS, stop_update_notice
+from . import ui_retargeting
+from ..animation.retargeting import blender_retarget_watcher
+
+
+CLASSES = (
+    CT_Take, CT_Clip, CT_Track, CT_Scene,
+    AVACAPO_OT_login_browser, AVACAPO_OT_paste_token,
+    AVACAPO_OT_disconnect,
+    CLIPS_OT_hover, CLIPS_OT_mouse, CLIPS_OT_create, CLIPS_OT_fill_gap, CLIPS_OT_rename,
+    CLIPS_OT_shrink_neighbors, CLIPS_OT_edit_prompt, CLIPS_OT_new_take, CLIPS_OT_cancel_take,
+    CLIPS_OT_delete_takes, CLIPS_OT_delete_take, CLIPS_OT_delete_clip, CLIPS_OT_bake_clip,
+    CLIPS_OT_copy_clip,
+    CLIPS_OT_paste_clip,
+    CLIPS_OT_set_take, CLIPS_OT_stick, CLIPS_OT_set_frame,
+    CLIPS_MT_empty, CLIPS_MT_takes, CLIPS_MT_stick, CLIPS_MT_clip, CLIPS_PT_panel,
+)
+
+
+_STATE_KEY = "timeline_clips_state"
+_LEGACY_STATE_KEY = "timeline_clip_track_state"
+_registration_state = globals().get("_registration_state")
+
+
+def _state():
+    global _registration_state
+    namespace = bpy.app.driver_namespace
+    if _STATE_KEY in namespace:
+        _registration_state = namespace[_STATE_KEY]
+    elif _registration_state is None:
+        _registration_state = {
+            "handle": None, "keymaps": [], "classes": [],
+            "timers": MODEL_CATALOG_TIMER_CALLBACKS,
+            "reset_runtime": runtime.reset,
+            "update_timers": UPDATE_TIMER_CALLBACKS,
+        }
+    # driver_namespace is reset when a .blend is loaded; keep the resource registry alive.
+    namespace[_STATE_KEY] = _registration_state
+    return _registration_state
+
+
+@persistent
+def _on_load_pre(_):
+    runtime.clear_hover()
+    cancel_generation()
+    cancel_model_catalog_refresh(_state().get("timers", set()))
+    stop_update_notice(_state().get("update_timers", set()))
+
+
+@persistent
+def _on_load_post(_=None):
+    _state()
+    # Saved pending requests cannot resume after loading a file or re-enabling.
+    for scene in bpy.data.scenes:
+        for track in scene.clip_data.tracks:
+            for clip in track.clips:
+                for take in clip.takes:
+                    if is_pending(take):
+                        set_status(take, TaskStatus.CANCELLED)
+
+
+def _unregister_retargeting():
+    """Remove Retarget handlers before their UI properties and classes."""
+    blender_retarget_watcher.unregister()
+    ui_retargeting.unregister()
+
+
+def _register_class(cls):
+    """Replace a stale RNA class left behind by an extension hot-reload."""
+    for base_class in (bpy.types.PropertyGroup, bpy.types.Operator, bpy.types.Menu, bpy.types.Panel):
+        lookup = getattr(base_class, "bl_rna_get_subclass_py", None)
+        if lookup is None:
+            continue
+        stale = lookup(cls.__name__, None)
+        if stale is None:
+            continue
+        try:
+            bpy.utils.unregister_class(stale)
+        except (RuntimeError, ValueError):
+            pass
+    bpy.utils.register_class(cls)
+
+
+def unregister():
+    _unregister_retargeting()
+    states = [_state()]
+    legacy = bpy.app.driver_namespace.get(_LEGACY_STATE_KEY)
+    if legacy is not None and legacy is not states[0]:
+        states.append(legacy)
+    for state in states:
+        callback = state.pop("initialization_timer", None)
+        if callback is not None and bpy.app.timers.is_registered(callback):
+            bpy.app.timers.unregister(callback)
+        cancel_generation()
+        cancel_model_catalog_refresh(state.get("timers", set()))
+        stop_update_notice(state.get("update_timers", set()))
+        for handler_list, callback in state.get("handlers", []):
+            if callback in handler_list:
+                handler_list.remove(callback)
+        state.get("handlers", []).clear()
+        if state.get("handle") is not None:
+            try:
+                bpy.types.SpaceDopeSheetEditor.draw_handler_remove(state["handle"], 'WINDOW')
+            except (RuntimeError, ValueError, ReferenceError):
+                pass
+            state["handle"] = None
+        for keymap, item in state.get("keymaps", []):
+            try:
+                keymap.keymap_items.remove(item)
+            except (RuntimeError, ReferenceError):
+                pass
+        state.get("keymaps", []).clear()
+        if state.get("reset_runtime"):
+            state["reset_runtime"]()
+
+    # Remove pointers before unregistering the PropertyGroups they reference.
+    for property_name in ("clip_data", "clip_track"):
+        if hasattr(bpy.types.Scene, property_name):
+            delattr(bpy.types.Scene, property_name)
+    for state in states:
+        for cls in reversed(state.get("classes", [])):
+            try:
+                bpy.utils.unregister_class(cls)
+            except (RuntimeError, ValueError):
+                pass
+        state.get("classes", []).clear()
+    bpy.app.driver_namespace.pop(_LEGACY_STATE_KEY, None)
+    runtime.reset()
+
+
+def register():
+    unregister()
+    Storage.load()
+    state = _state()
+    state.update(
+        timers=MODEL_CATALOG_TIMER_CALLBACKS,  reset_runtime=runtime.reset,
+        update_timers=UPDATE_TIMER_CALLBACKS,
+    )
+    try:
+        for cls in CLASSES:
+            _register_class(cls)
+            state["classes"].append(cls)
+        bpy.types.Scene.clip_data = PointerProperty(type=CT_Scene)
+        state["initialization_timer"] = _on_load_post
+        bpy.app.timers.register(_on_load_post, first_interval=0.0)
+        state.setdefault("handlers", [])
+        for handler_list, callback in (
+            (bpy.app.handlers.load_pre, _on_load_pre),
+            (bpy.app.handlers.load_post, _on_load_post),
+        ):
+            handler_list.append(callback)
+            state["handlers"].append((handler_list, callback))
+        state["handle"] = bpy.types.SpaceDopeSheetEditor.draw_handler_add(
+            draw_callback, (), 'WINDOW', 'POST_PIXEL',
+        )
+        keyconfig = bpy.context.window_manager.keyconfigs.addon
+        if keyconfig is not None:
+            keymap = keyconfig.keymaps.new(name="Dopesheet", space_type='DOPESHEET_EDITOR')
+            for operator, button, value in (
+                ("clips.mouse", 'LEFTMOUSE', 'PRESS'),
+                ("clips.mouse", 'LEFTMOUSE', 'DOUBLE_CLICK'),
+                ("clips.mouse", 'RIGHTMOUSE', 'PRESS'),
+                ("clips.hover", 'MOUSEMOVE', 'ANY'),
+            ):
+                item = keymap.keymap_items.new(operator, button, value)
+                state["keymaps"].append((keymap, item))
+        ui_retargeting.register()
+        blender_retarget_watcher.register()
+        blender_retarget_watcher.schedule_target_initialization()
+        refresh_model_catalog()
+    except Exception:
+        unregister()
+        raise
