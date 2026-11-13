@@ -1,216 +1,229 @@
 # AvaCapo Blender Add-on
 
-AvaCapo Blender add-on for generating character animation from text prompts and
-assembling it directly on your Blender timeline.
+AvaCapo is a Blender add-on that animates your character from a text description.
+You write what the character should do, for example `a person walks forward and
+waves`, and AvaCapo generates the motion and puts it on your character's timeline.
 
-Describe a motion, and AvaCapo animates your own character with it. Every result is
-kept as a separate take, so you can try again, compare, and pick the one you like.
+You can generate as many versions as you like and keep the one you prefer, chain
+several motions into one longer performance, and guide the result with your own poses.
+Mixamo characters and Rigify metarigs work out of the box, and other humanoid
+characters need only a short one-time setup.
 
-## Highlights
-
-- Generate motion from text prompts inside Blender
-- Lay out clips directly on the timeline, one prompt per clip
-- Keep several takes for each clip and switch between them
-- New clips continue from where the previous clip ends
-- Guide the motion with your own keyframed poses
-- Animate your own character: Mixamo and Rigify rigs are recognized automatically,
-  other humanoid rigs can be set up by matching bones
-- Authenticate from the UI with browser login or a pasted API token
+Generation runs on the AvaCapo online service, so you need an AvaCapo account and an
+internet connection.
 
 ## Requirements
 
 - Blender 5.1 or newer
-- An AvaCapo API token or browser login
-- Internet access to the AvaCapo service
-- `Allow Online Access` enabled in Blender Preferences (the add-on downloads a
-  required component the first time it starts)
-
-## Current Scope
-
-The current add-on is focused on a simple, fast, artist-facing workflow:
-
-- one clip -> one time range on the timeline
-- one generation -> one take of that clip
-- the selected take is the animation you see
-
-## Current Limitations
-
-- Generation depends on the online AvaCapo service and does not work offline
-- Characters must be humanoid (hips, spine, head, arms and legs)
-- The add-on is designed around short clips, roughly 0.25 to 10 seconds each
+- An AvaCapo account
+- Internet access
+- `Allow Online Access` enabled in `Edit -> Preferences -> System`. The add-on
+  downloads a required component the first time it starts.
 
 ## Installation
 
-This repository root is the add-on root. `__init__.py` and `blender_manifest.toml`
-must stay at the top level.
-
-### Install in Blender
-
-1. Download this repository as a ZIP, or create a ZIP from this folder.
+1. Download this repository as a ZIP.
 2. In Blender, open `Edit -> Preferences -> Get Extensions`.
-3. Click `Install from Disk`.
-4. Select the ZIP archive.
-5. Enable `AvaCapo AI animation` if Blender does not enable it automatically.
+3. Click `Install from Disk` and select the ZIP.
+4. Enable `AvaCapo AI animation` if Blender does not enable it automatically.
 
-## Quick Start
+## Getting Started
 
-1. Open Blender and go to `3D View -> Sidebar -> AvaCapo`. Keep a Timeline open as well:
-   that is where your clips appear.
-2. Connect with `Login via Browser`, or paste an API token manually.
-3. Select your character's armature. If you do not have one yet, click
-   `New Armature` to add the AvaCapo character.
-4. Check the icon next to `Set up retargeting`. A check mark means your character is
-   ready. Otherwise, open it and match the bones (see [Character Setup](#character-setup)).
-5. Set `Frames` and click `New from Current Frame` to create a clip, or double-click
-   an empty spot on the timeline.
-6. Type a prompt, for example `a person walks forward and waves`, and click
-   `Generate Take`.
-7. Wait a moment. The take appears in the clip and plays on your character.
-8. Add more clips after the first one to build a longer performance.
+### Open the panel
 
-## Workflow Concepts
+The add-on lives in the 3D View sidebar: press `N` in the 3D View and open the
+`AvaCapo` tab. Keep a Timeline open as well, because that is where your animation
+will appear.
 
-### Clip
+### Log in
 
-A clip is one segment of your animation, shown as a bar on the timeline. Each clip
-has its own prompt.
+Click `Login via Browser`. Your browser opens the AvaCapo website; log in there and
+return to Blender. The panel now shows `Connected`.
 
-Use clips when you want to build a longer animation from short generated chunks such as:
+If browser login does not suit you, copy an API token from your AvaCapo account,
+paste it into the field below the button, and click `Connect`.
 
-- idle -> turn -> walk
-- step back -> recover -> point
-- look around -> react -> run
+To log out, click the `X` next to `Connected`. Your login is stored on your computer,
+in `storage.json` inside the add-on folder.
 
-When clips touch, each new take continues smoothly from the end of the previous
-clip and leads into the start of the next one.
+### Choose your character
 
-### Take
+Select your character's armature. Its name appears in the panel.
 
-A take is one generated version of a clip. Every time you click `Generate Take`, a
-new take is added; older takes are kept.
+If you do not have a character yet, click `New Armature`. It adds the AvaCapo
+character to the scene, ready to use.
 
-This means you can:
+### Connect AvaCapo to your character's bones
 
-- generate a different version with the same prompt
-- change the prompt and try again without losing earlier results
-- switch between takes at any time to compare them
+AvaCapo needs to know which bone of your character is the hips, which is the head,
+the left hand, and so on. This is called bone mapping, and it lives in the
+`Set up retargeting` section of the panel. The icon next to it shows whether your
+character is ready:
 
-### Your own poses
+- A check mark: the mapping is done. Mixamo characters and Rigify metarigs are
+  mapped automatically, and so is the AvaCapo character.
+- Any other icon: open `Set up retargeting` and click `Auto Mapping`. Each AvaCapo
+  bone on the left now needs a bone of your character on the right. Fix any empty or
+  wrong rows by hand. Rows in normal text are required, dimmed rows are optional.
+  Then click `Confirm Mapping`. When the section shows `Mapping saved`, you are ready.
 
-You can guide the generation with your own keyframes. Pose the character on any
-frame inside a clip, insert a keyframe, then click `Generate Take`. The new take
-will pass through your pose.
+You only need to do this once per character.
 
-Generated keyframes are marked with the `Generated` keyframe type, so you can tell
-them apart from yours. Your own keyframes are never overwritten by a new take.
+## Your First Animation
 
-## Character Setup
+### Create a clip
 
-AvaCapo needs to know which bone of your character is the hips, the head, the left
-hand, and so on.
+Your animation is built from clips. A clip is a stretch of time on the timeline,
+shown as a bar, and it holds one motion.
 
-- Mixamo and Rigify characters are recognized automatically. Nothing to do.
-- For other characters, open `Set up retargeting`, click `Auto Mapping`, and check
-  the list. Each AvaCapo bone on the left needs a bone of your character on the right.
-  Fix any empty or wrong rows by hand, then click `Confirm Mapping`.
+To create one, set `Frames` to the length you want and click
+`New from Current Frame`. You can also double-click an empty spot on the Timeline.
 
-Rows shown in normal text are required; the dimmed ones are optional. When the
-status shows `Mapping saved`, your character is ready.
+Clips work best between a quarter of a second and ten seconds long.
 
-## Working on the Timeline
+### Write a prompt and generate
 
-Select your armature to see its clips on the timeline.
+The description of the motion is called the prompt. Type it into the field under
+`Current Clip`, then click `Generate Take`.
 
-- Double-click empty space: create a clip and enter a prompt for it
-- Double-click a clip: rename it
-- Click a clip: make it the current clip in the sidebar
-- Drag a clip to move it, or drag its edges to change its length
-- Right-click empty space: `Create Clip`, `Fill In` (fill the gap with empty clips),
-  `Shrink Neighbors to Current Frame`, `Paste Clip`
-- Right-click a clip: `Generate Take`, `Change Prompt / Settings...`, `Change Take`,
-  `Stick to Neighbors`, `Copy Clip`, `Bake Clip`, `Delete All Takes`, `Delete Clip`
+After a short wait, the motion appears in the clip and plays on your character.
 
-`Bake Clip` keeps the animation you see as regular keyframes and removes the clip
-and its takes. `Delete Clip` removes the clip together with its animation, including
-keyframes you added inside it.
+### Takes
 
-## Panel Overview
+Each generated result is called a take. Click `Generate Take` again and you get a new,
+different take; the earlier ones are kept. All takes of the clip are listed under
+`Takes`:
 
-The main panel lives in `3D View -> Sidebar -> AvaCapo`.
+- click a take to show it on your character
+- hover over a take to see the prompt and settings it was made with
+- click the trash button to delete a take
+- click the cancel button to stop a take that is still generating
 
-### Connection
+You can also change the prompt and generate again. Takes made with the old prompt stay
+in the list.
 
-- `Login via Browser`: opens the AvaCapo web app and completes login in the add-on
-- `Connect`: saves a manually pasted API token
-- `Disconnect` (the `X` next to `Connected`): logs out
+## Building a Longer Animation
 
-The token is stored locally in `storage.json` inside the add-on folder.
+### Add more clips
 
-### Character
+Add the next clip right after the first one and give it its own prompt, for example
+`idle`, then `turn around`, then `walk away`. When two clips touch, a new take
+continues smoothly from where the previous clip ends and leads into the start of the
+next one.
 
-- The name of the selected armature
-- `New Armature`: adds the AvaCapo character when no armature is selected
-- `Set up retargeting`: bone matching for your character (see
-  [Character Setup](#character-setup))
+### Arrange clips on the Timeline
 
-### New Clip
+Your clips are visible on the Timeline while your armature is selected.
 
-- `Frames`: length of the new clip
-- `New from Current Frame`: creates a clip at the current frame
+- Click a clip to make it the current clip in the panel.
+- Drag a clip to move it, or drag its edges to change its length.
+- Double-click a clip to rename it.
+- Double-click empty space to create a clip and type its prompt straight away.
 
-### Current Clip
+Clips do not support native hotkeys like `G`, `S`, `A`, `X` or `Delete` (yet).
+Clips support mouse clicks (selecting with left-click, dragging, resizing,
+right-click for options).
 
-- Prompt: describe the motion you want
-- `Generate Take`: creates a new take for the clip
-- `Advanced Generation Settings`:
-  - `Model`: which AvaCapo model generates the motion
-  - `Seed`: the same seed and prompt give a similar result; the clock button picks a
-    new seed every time
-  - `Temperature`: lower is calmer and more predictable, higher is more varied
-  - `Cycled`: ask for a looping motion
-  - `In Place`: keep the character in place instead of moving through the scene
-  - `Enhance Prompt`: let AvaCapo improve your prompt before generating
-- `Takes`: click a take to show it, hover over it to see the prompt and settings
-  it was made with. Use the trash button to delete it, or the cancel button to
-  stop one that is still generating.
-- `Clip Settings`: name, start, end and duration of the clip. The link buttons
-  keep a clip attached to its neighbor when either one is resized.
+Right-click empty space for:
 
-### Seed Randomiztion:
-By default seed is randomized every new generated take, which gives you _different_
-animation every time, however, if you press on a clock button it stays the same:
-its usable if you like particular motion variant and want to extend it:
-expand clip, add new keyframes in the middle and still get the same motion variant
-on "Generate new Take". clicking on previos takes in this mode sets their seed
-as active.
+- `Create Clip`: add an empty clip
+- `Fill In`: fill the gap with empty clips
+- `Shrink Neighbors to Current Frame`: make room by trimming the neighboring clip
+  that the current frame is inside
+- `Paste Clip`: paste a copied clip
 
-### Your Keyframes Are Different from generated ones
-you dont need to manualy delete generated keyframes, its done automatically on 
-new take generation. Feel Free to operate your keyframes how you want.
-Your keyframes are used to guide future generated animations.
+Right-click a clip for:
+
+- `Generate Take`: generate a new take with the clip's prompt
+- `Change Prompt / Settings...`: edit the prompt and settings, then generate
+- `Change Take`: switch to another take
+- `Stick to Neighbors`: stretch the clip until it touches the previous clip, the
+  next one, or both, keep it attached to them, and generate a take for the new length
+- `Copy Clip`: copy the clip with its takes, to paste elsewhere
+
+### Clip settings
+
+The `Clip Settings` section in the panel shows the name, start, end and duration of
+the current clip. The link buttons next to start and end turn the attachment to the
+neighboring clip on or off: an attached clip follows its neighbor when that neighbor
+is resized.
+
+## Guiding the Motion with Your Own Keyframes
+
+You can tell AvaCapo how the character should look at a certain moment. Pose the
+character on any frame inside a clip, insert a keyframe, then click `Generate Take`.
+The new take will pass through your pose.
+
+Your keyframes are different from generated ones. Generated keyframes are marked with
+the `Generated` keyframe type and are replaced automatically on every new take, so you
+never need to delete them by hand. Your own keyframes are never overwritten: edit them
+however you like, and they will guide future takes.
+
+## Advanced Generation Settings
+
+Open `Advanced Generation Settings` under the prompt to fine-tune the next take:
+
+- `Model`: which AvaCapo model generates the motion
+- `Seed`: a number that picks one variant of the motion (see below)
+- `Temperature`: lower gives calmer, more predictable motion; higher gives more
+  variety
+- `Cycled`: ask for a looping motion
+- `In Place`: keep the character on the spot instead of moving through the scene
+- `Enhance Prompt`: let AvaCapo improve your prompt before generating
+
+### Seed randomization
+
+By default, the seed changes for every new take, which gives you a _different_
+animation every time.
+
+Click the clock button next to `Seed` to keep the seed the same. This is useful when
+you like a particular motion variant and want to build on it: extend the clip, add new
+keyframes in the middle, and still get the same motion variant on `Generate Take`. In
+this mode, clicking an earlier take makes its seed the active one.
+
+## Finishing Up
+
+When a clip is the way you want it:
+
+- `Bake Clip` keeps the animation you see as regular keyframes and removes the clip
+  and its takes.
+- `Delete All Takes` removes the takes but keeps the clip, so you can start over.
+- `Delete Clip` removes the clip together with its animation, including keyframes you
+  added inside it.
+
+All three are in the clip's right-click menu.
+
+*However*, these operations are not recommended. The AvaCapo add-on supports a fully
+_non-destructive_ workflow: clips, takes and settings stay in the .blend file and can
+be edited afterwards.
+
+If you need to clean up the file from AvaCapo properties, the "clear properties"
+button is available in the AvaCapo developer options in Properties -> Scene. It will
+bake all the clips and clear up take data and all AvaCapo properties.
+This is also useful if you update the add-on to a new major version in which data
+schemas changed.
 
 ## Troubleshooting
 
 ### The panel says "Not Connected"
 
-Use `Login via Browser` or paste a valid API token manually.
+Click `Login via Browser`, or paste a valid API token and click `Connect`.
 
 ### The icon next to "Set up retargeting" shows an error
 
-Your character's bones are not matched yet. Open `Set up retargeting`, fix the rows
-marked in red, and click `Confirm Mapping`. You can also click `New Armature` to try
-the add-on with the AvaCapo character.
+Your character's bones are not mapped yet. Open `Set up retargeting`, fix the rows
+marked in red, and click `Confirm Mapping`. To try the add-on without your own
+character, click `New Armature`.
+
+Ensure the armature does not have additional bones, like a root bone (known bug) or
+some other bones violating the basic character structure.
 
 ### Generation fails
 
-Check:
+Hover over the failed take to see the error message, then check:
 
-- your API token
 - your internet connection
-- AvaCapo service availability
-- whether the selected model is available for your account
-
-Hover over the failed take to see the error message.
+- your bone structure is correct and set up for retargeting
 
 ### The transition between clips does not look right
 
@@ -219,3 +232,22 @@ Try:
 - making sure the clips touch, with no gap between them
 - generating a new take of the later clip
 - keyframing a pose at the start of the later clip to guide it
+
+### Hands are behind the body, or other weird positioning
+
+Check your armature rest pose: it should be a *T-pose*.
+
+### Interface lags
+
+- check your clip length: it should be under 10 seconds for generation; split your
+  motion into smaller chunks
+- you are trying to apply too many animations at once; in this case it is expected
+  behavior
+
+## Current Limitations
+
+- Generation needs the online AvaCapo service and does not work offline
+- Characters must be humanoid (hips, spine, head, arms and legs)
+- Clips work best between 0.25 and 10 seconds long
+- Root bones (known bug) or structural changes to the armature are not supported yet
+- IK rigs are not supported yet.
