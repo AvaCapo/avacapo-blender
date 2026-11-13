@@ -96,7 +96,7 @@ def load_bone_tree(rig_name: str) -> BoneTree:
 
     with bpy.data.libraries.load(config.BLEND_PATH, link=False) as (data_from, data_to):
         if rig_name not in data_from.objects:
-            raise ValueError(f"Object '{rig_name}' not found in '{config.BLEND_NAME}'")
+            raise ValueError(f"Object '{rig_name}' not found in '{config.BLEND_PATH}'")
         data_to.objects = [rig_name]
 
     rig_obj = data_to.objects[0]
