@@ -20,6 +20,19 @@ BOOL_FIELDS = (
     "select_right_handle"
 )
 
+# used for converting enum values to integers and vice versa
+_ENUM_TO_INT = {
+    field: {
+        item.identifier: item.value
+        for item in bpy.types.Keyframe.bl_rna.properties[field].enum_items
+    }
+    for field in ENUM_FIELDS
+}
+_INT_TO_ENUM = {
+    field: {value: identifier for identifier, value in values.items()}
+    for field, values in _ENUM_TO_INT.items()
+}
+
 
 def find_slot(action, handle, label):
     """Read one unambiguous Slot by its saved handle without creating anything."""
@@ -177,7 +190,7 @@ def manual_pose_frames_old(working_action, working_slot, start, end, *,
 def _empty_keys():
     return {
         **{field: np.empty((0, 2), dtype=np.float32) for field in COORD_FIELDS},
-        **{field: [] for field in ENUM_FIELDS},
+        **{field: np.empty(0, dtype=np.int32) for field in ENUM_FIELDS},
         **{field: np.empty(0, dtype=np.float32) for field in FLOAT_FIELDS},
         **{field: np.empty(0, dtype=bool) for field in BOOL_FIELDS},
     }
@@ -189,19 +202,18 @@ def read_keys_range(curve, start, end):
     left = _lower_bound(points, start)
     right = _lower_bound(points, end)
     count = right - left
-    data = _empty_keys()
-    for field in COORD_FIELDS:
-        data[field] = np.empty((count, 2), dtype=np.float32)
-    for field in FLOAT_FIELDS:
-        data[field] = np.empty(count, dtype=np.float32)
-    for field in BOOL_FIELDS:
-        data[field] = np.empty(count, dtype=bool)
+    data = {
+        **{field: np.empty((count, 2), dtype=np.float32) for field in COORD_FIELDS},
+        **{field: np.empty(count, dtype=np.int32) for field in ENUM_FIELDS},
+        **{field: np.empty(count, dtype=np.float32) for field in FLOAT_FIELDS},
+        **{field: np.empty(count, dtype=bool) for field in BOOL_FIELDS},
+    }
     for result_index, point_index in enumerate(range(left, right)):
         point = points[point_index]
         for field in COORD_FIELDS:
             data[field][result_index] = getattr(point, field)
         for field in ENUM_FIELDS:
-            data[field].append(getattr(point, field))
+            data[field][result_index] = _ENUM_TO_INT[field][getattr(point, field)]
         for field in FLOAT_FIELDS:
             data[field][result_index] = getattr(point, field)
         for field in BOOL_FIELDS:
@@ -211,20 +223,27 @@ def read_keys_range(curve, start, end):
 
 def shift_keys(data, delta):
     """Copy keys and shift both key and Bezier-handle times by ``delta``."""
-    shifted = {field: value.copy() if isinstance(value, np.ndarray) else list(value) for field, value in data.items()}
+    shifted = {field: value.copy() for field, value in data.items()}
     for field in COORD_FIELDS:
         shifted[field][:, 0] += delta
     return shifted
 
 
 def _write_key(point, data, index, *, keyframe_type=None):
-    point.interpolation = data["interpolation"][index]
-    point.easing = data["easing"][index]
-    point.type = data["type"][index] if keyframe_type is None else keyframe_type
+    point.interpolation = _INT_TO_ENUM["interpolation"][int(data["interpolation"][index])]
+    point.easing = _INT_TO_ENUM["easing"][int(data["easing"][index])]
+    point.type = (
+        _INT_TO_ENUM["type"][int(data["type"][index])]
+        if keyframe_type is None else keyframe_type
+    )
     for field in FLOAT_FIELDS:
         setattr(point, field, float(data[field][index]))
-    point.handle_left_type = data["handle_left_type"][index]
-    point.handle_right_type = data["handle_right_type"][index]
+    point.handle_left_type = _INT_TO_ENUM["handle_left_type"][
+        int(data["handle_left_type"][index])
+    ]
+    point.handle_right_type = _INT_TO_ENUM["handle_right_type"][
+        int(data["handle_right_type"][index])
+    ]
     point.co = data["co"][index]
     point.handle_left = data["handle_left"][index]
     point.handle_right = data["handle_right"][index]
@@ -378,6 +397,41 @@ def _replace_range_bulk(curve, incoming, start, end, keyframe_type, preserve_man
         curve.update()
 
 
+def _matching_topology(curve, incoming, start, end):
+    """Return existing range bounds when its key times match ``incoming`` exactly."""
+    points = curve.keyframe_points
+    left = _lower_bound(points, start)
+    right = _lower_bound(points, end)
+    times = incoming["co"][:, 0]
+    if right - left != len(times):
+        return None
+    for index, frame in enumerate(times):
+        if float(points[left + index].co.x) != float(frame):
+            return None
+    return left, right
+
+
+def _write_matching_range(curve, incoming, bounds, *, keyframe_type, preserve_manual):
+    """Overwrite matching keys in place, retaining manual keys and outer guards."""
+    points = curve.keyframe_points
+    left, right = bounds
+    guards = [ # Preserve immediate keys outside [start, end).
+        (index, _read_one(points[index]))
+        for index in (left - 1, right)
+        if 0 <= index < len(points)
+    ]
+    for incoming_index, point_index in enumerate(range(left, right)):
+        point = points[point_index]
+        if preserve_manual and point.type != "GENERATED":
+            continue
+        _write_key(point, incoming, incoming_index, keyframe_type=keyframe_type)
+    curve.update()
+    for index, state in guards:
+        _restore_one(points[index], state)
+    if guards:
+        curve.update()
+
+
 def materialize_take(
     working_action,
     working_slot,
@@ -394,24 +448,88 @@ def materialize_take(
     """Copy a local Take window into the Working Action across the full channel scope."""
     working = _slot_curves(working_action, working_slot)
     take = _slot_curves(take_action, take_slot)
-    if prepared_keys is None:
-        prepared_keys = {identity: read_key_arrays(curve) for identity, curve in take.items()}
     origin = clip_start + take_offset
     local_start, local_end = clip_start - origin, clip_end - origin
     for identity in sorted(working.keys() | take.keys()):
         target = working.get(identity)
         source = take.get(identity)
-        if target is None:
-            target = _create_curve(working_action, working_slot, identity, source)
-        keys = read_key_arrays(None)
-        if source is not None:
+
+        if source is None:
+            keys = _empty_keys()
+        elif prepared_keys is not None:
             source_keys = prepared_keys[identity]
-            times = source_keys['co'][:, 0]
-            inside = (times >= local_start) & (times < local_end)
+            inside = (
+                (source_keys["co"][:, 0] >= local_start)
+                & (source_keys["co"][:, 0] < local_end)
+            )
             keys = {field: values[inside].copy() for field, values in source_keys.items()}
+        else:
+            source_points = source.keyframe_points
+            left = _lower_bound(source_points, local_start)
+            right = _lower_bound(source_points, local_end)
+            count = right - left
+            total = len(source_points)
+            # Empirical Blender benchmark model: bulk RNA reads become faster
+            # than per-key range reads beyond this measured boundary.
+            if count > 0.323 * total + 6.5:
+                source_keys = read_key_arrays(source)
+                inside = (
+                    (source_keys["co"][:, 0] >= local_start)
+                    & (source_keys["co"][:, 0] < local_end)
+                )
+                keys = {field: values[inside].copy() for field, values in source_keys.items()}
+            else:
+                keys = read_keys_range(source, local_start, local_end)
+
         for field in COORD_FIELDS:
             keys[field][:, 0] += origin
-        _replace_range_bulk(target, keys, clip_start, clip_end, keyframe_type, preserve_manual)
+        if target is None:
+            target = _create_curve(working_action, working_slot, identity, source)
+
+        key_count = len(target.keyframe_points)
+        incoming_count = len(keys["co"])
+        n = key_count / 1000.0
+        m = incoming_count / 100.0
+
+        # Empirical Blender benchmark models for the three writer paths.
+        # They are measured timings, not asymptotic complexity estimates.
+        add_cost = (
+            1.544555 + 0.583664 * n - 0.401957 * m
+            + 0.495189 * n * m + 0.043568 * m * m
+        )
+        bulk_cost = (
+            0.374213 + 2.312586 * n - 0.085498 * m
+            + 0.003637 * n * m + 0.002430 * m * m
+        )
+        inplace_cost = (
+            0.097101 + 0.064047 * n + 1.130298 * m
+            + 0.000698 * n * m - 0.000770 * m * m
+        )
+        topology_check_cost = 0.0137651 + 0.000657961 * incoming_count
+        fallback = replace_range if add_cost < bulk_cost else _replace_range_bulk
+
+        # Check topology only when the empirical model predicts
+        # that INPLACE, including verification, is faster than fallback.
+        if inplace_cost + topology_check_cost < min(add_cost, bulk_cost):
+            bounds = _matching_topology(target, keys, clip_start, clip_end)
+            if bounds is not None:
+                _write_matching_range(
+                    target, keys, bounds,
+                    keyframe_type=keyframe_type,
+                    preserve_manual=preserve_manual,
+                )
+                continue
+
+        if fallback is replace_range:
+            replace_range(
+                target, keys, clip_start, clip_end,
+                keyframe_type=keyframe_type,
+                preserve_manual=preserve_manual,
+            )
+        else:
+            _replace_range_bulk(
+                target, keys, clip_start, clip_end, keyframe_type, preserve_manual,
+            )
 
 
 def apply_resize_delta(
