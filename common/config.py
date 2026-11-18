@@ -5,7 +5,14 @@ class Config:
     """Configuration for the AvaCapo addon."""
 
     ADDON_NAME = "avacapo"
-    ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    # The folder in which the main __init__.py is, escaping common/
+    ADDON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ASSETS_DIR = os.path.join(ADDON_ROOT, "assets")
+    BLEND_PATH = os.path.join(ASSETS_DIR, "rigs", "rigs.blend")
+    MIXAMO_BVH_PATH = os.path.join(ASSETS_DIR, "rigs", "mixamo.bvh")
+    STORAGE_PATH = os.path.join(ADDON_ROOT, "storage.json")
+
     PLATFORM_URL = "https://service.avacapo.com/"
     FRONTEND_URL = "https://app.avacapo.com/"
     ADDON_DOWNLOAD_URL = "https://github.com/AvaCapo/avacapo-blender"
@@ -20,15 +27,6 @@ class Config:
     GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
     GET_MODELS_NAMES_URL = GET_MODELS_URL
     GET_ADDON_VERSION_URL = f"{PLATFORM_URL}api/v1/get-addon-version/"
-
-    BLEND_NAME = "rigs.blend"
-    BLEND_PATH = os.path.join(ADDON_DIR, BLEND_NAME)
-    RIGS_DIR = os.path.join(ADDON_DIR, "rigs")
-    MIXAMO_BVH_NAME = "mixamo.bvh"
-    MIXAMO_BVH_PATH = os.path.join(RIGS_DIR, MIXAMO_BVH_NAME)
-
-    STORAGE = "storage.json"
-    STORAGE_PATH = os.path.join(ADDON_DIR, STORAGE)
 
     AVACAPO_RIG_NAME = "avacapo_bvh_v1"
 

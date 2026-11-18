@@ -57,21 +57,14 @@ class AVACAPO_RetargetMappingState(bpy.types.PropertyGroup):
     rest_skeleton_dirty: bpy.props.BoolProperty(default=False)
 
 
-def _target_changed(scene, _context):
-    armature = scene.avacapo_retarget_target
-    if armature is None:
-        return
-    try:
-        blender_retarget_service.initialize_target_mapping(
-            armature,
-            armature.avacapo_retarget_mapping,
-        )
-    except ValueError as error:
-        armature.avacapo_retarget_mapping.draft_error = str(error)
-
-
 def _armature_poll(_self, obj):
     return obj is not None and obj.type == "ARMATURE"
+
+
+def _active_armature(context):
+    """The retarget target is always the active armature object."""
+    obj = context.active_object
+    return obj if obj is not None and obj.type == "ARMATURE" else None
 
 
 def retarget_mapping_status(armature):
@@ -114,7 +107,10 @@ class AVACAPO_OT_suggest_retarget_mapping(bpy.types.Operator):
     bl_description = "Fill empty mapping rows from bone names"
 
     def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
+        armature = _active_armature(context)
+        if armature is None:
+            self.report({"ERROR"}, "Select an armature first.")
+            return {"CANCELLED"}
         try:
             changed = blender_retarget_service.apply_auto_mapping(
                 armature,
@@ -133,7 +129,10 @@ class AVACAPO_OT_clear_retarget_mapping(bpy.types.Operator):
     bl_description = "Remove all selected character bones from this mapping"
 
     def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
+        armature = _active_armature(context)
+        if armature is None:
+            self.report({"ERROR"}, "Select an armature first.")
+            return {"CANCELLED"}
         try:
             blender_retarget_service.clear_mapping(
                 armature,
@@ -151,7 +150,7 @@ class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
 
     bl_idname = "avacapo.append_avacapo_reference_armature"
     bl_label = "Add the AvaCapo armature"
-    bl_description = "Add the AvaCapo armature and select it as target"
+    bl_description = "Add the AvaCapo armature and make it the active armature"
 
     def execute(self, context):
         try:
@@ -159,9 +158,14 @@ class AVACAPO_OT_append_avacapo_reference_armature(bpy.types.Operator):
         except ValueError as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-        context.scene.avacapo_retarget_target = armature
         armature.select_set(True)
         context.view_layer.objects.active = armature
+        try:
+            blender_retarget_service.initialize_target_mapping(
+                armature, armature.avacapo_retarget_mapping,
+            )
+        except ValueError as error:
+            armature.avacapo_retarget_mapping.draft_error = str(error)
         self.report({"INFO"}, f"AvaCapo reference rig ready: {armature.name!r}.")
         return {"FINISHED"}
 
@@ -172,8 +176,8 @@ class AVACAPO_OT_confirm_retarget_mapping(bpy.types.Operator):
     bl_description = "Validate and approve this mapping for later retargeting"
 
     def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
-        if armature is None or armature.type != "ARMATURE":
+        armature = _active_armature(context)
+        if armature is None:
             self.report({"ERROR"}, "Select an armature first.")
             return {"CANCELLED"}
         state = armature.avacapo_retarget_mapping
@@ -193,8 +197,8 @@ class AVACAPO_OT_retarget_test_bvh(bpy.types.Operator):
     bl_description = "DEBUG ONLY: retarget the bundled local BVH into a new Action"
 
     def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
-        if armature is None or armature.type != "ARMATURE":
+        armature = _active_armature(context)
+        if armature is None:
             self.report({"ERROR"}, "Select an armature first.")
             return {"CANCELLED"}
         errors = blender_retarget_service.confirmed_mapping_errors(armature)
@@ -229,10 +233,10 @@ class AVACAPO_OT_retarget_source_action(bpy.types.Operator):
     bl_description = "Retarget the selected AvaCapo source Action to the character"
 
     def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
+        armature = _active_armature(context)
         source_armature = context.scene.avacapo_retarget_source_armature
         source_action = context.scene.avacapo_retarget_source_action
-        if armature is None or armature.type != "ARMATURE":
+        if armature is None:
             self.report({"ERROR"}, "Select a target armature first.")
             return {"CANCELLED"}
         errors = blender_retarget_service.confirmed_mapping_errors(armature)
@@ -272,7 +276,7 @@ class AVACAPO_OT_retarget_source_action_spacetime(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        armature = scene.avacapo_retarget_target
+        armature = _active_armature(context)
         try:
             action, constraints = spacetime_debug.create_debug_action(
                 context,
@@ -306,8 +310,8 @@ class AVACAPO_OT_retarget_again(bpy.types.Operator):
     bl_description = "Overwrite the active retargeted Action using the current target armature"
 
     def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
-        if armature is None or armature.type != "ARMATURE":
+        armature = _active_armature(context)
+        if armature is None:
             self.report({"ERROR"}, "Select a target armature first.")
             return {"CANCELLED"}
         errors = blender_retarget_service.confirmed_mapping_errors(armature)
@@ -347,8 +351,8 @@ class AVACAPO_OT_refresh_retarget_status(bpy.types.Operator):
     bl_description = "Check whether the active retargeted Action matches the current armature"
 
     def execute(self, context):
-        armature = context.scene.avacapo_retarget_target
-        if armature is None or armature.type != "ARMATURE":
+        armature = _active_armature(context)
+        if armature is None:
             self.report({"ERROR"}, "Select a target armature first.")
             return {"CANCELLED"}
         action = armature.animation_data.action if armature.animation_data else None
@@ -391,7 +395,6 @@ class AVACAPO_PT_spacetime_retarget(bpy.types.Panel):
         scene = context.scene
         layout = self.layout
         layout.label(text="Debug workflow: creates a separate Action", icon="INFO")
-        layout.prop(scene, "avacapo_retarget_target", text="Target Armature")
         layout.prop(scene, "avacapo_retarget_source_armature", text="Source Armature")
         layout.prop(scene, "avacapo_retarget_source_action", text="Source Action")
         layout.separator()
@@ -408,7 +411,7 @@ class AVACAPO_PT_spacetime_retarget(bpy.types.Panel):
         layout.prop(scene, "avacapo_spacetime_max_nfev")
         row = layout.row()
         row.enabled = (
-            scene.avacapo_retarget_target is not None
+            _active_armature(context) is not None
             and scene.avacapo_retarget_source_armature is not None
             and scene.avacapo_retarget_source_action is not None
         )
@@ -421,7 +424,6 @@ def draw_retarget_mapping(layout, context):
     # A failed or incomplete extension registration can leave the panel
     # visible before its Scene properties exist. Do not access them here.
     required_scene_properties = (
-        "avacapo_retarget_target",
         "avacapo_retarget_source_armature",
         "avacapo_retarget_source_action",
     )
@@ -431,10 +433,9 @@ def draw_retarget_mapping(layout, context):
     ):
         layout.label(text="Retarget properties are unavailable; re-enable the extension.", icon="ERROR")
         return
-    layout.prop(scene, "avacapo_retarget_target", text="Target")
-    armature = scene.avacapo_retarget_target
+    armature = _active_armature(context)
     if armature is None:
-        layout.label(text="Choose a custom armature to create a draft.", icon="INFO")
+        layout.label(text="Select an armature to create a draft.", icon="INFO")
         return
     state = armature.avacapo_retarget_mapping
     structural_errors = blender_retarget_service.mapping_status_errors(armature)
@@ -458,7 +459,7 @@ def draw_retarget_mapping(layout, context):
             show_missing_required_errors=state.confirmed,
         )
     else:
-        layout.label(text="Mapping rows are not initialized. Reselect the target armature.", icon="INFO")
+        layout.label(text="Mapping rows are not initialized. Reselect the armature.", icon="INFO")
     if errors:
         box = layout.box()
         box.alert = True
@@ -628,11 +629,6 @@ def register():
             # clean up those partial classes instead of leaving a duplicate.
             bpy.app.driver_namespace[_STATE_KEY] = tuple(registered)
         bpy.types.Object.avacapo_retarget_mapping = bpy.props.PointerProperty(type=AVACAPO_RetargetMappingState)
-        bpy.types.Scene.avacapo_retarget_target = bpy.props.PointerProperty(
-            type=bpy.types.Object,
-            poll=_armature_poll,
-            update=_target_changed,
-        )
         bpy.types.Scene.avacapo_retarget_source_armature = bpy.props.PointerProperty(
             type=bpy.types.Object,
             poll=_armature_poll,
@@ -693,8 +689,6 @@ def unregister():
             delattr(bpy.types.Scene, name)
     if hasattr(bpy.types.Scene, "avacapo_retarget_source_armature"):
         del bpy.types.Scene.avacapo_retarget_source_armature
-    if hasattr(bpy.types.Scene, "avacapo_retarget_target"):
-        del bpy.types.Scene.avacapo_retarget_target
     if hasattr(bpy.types.Object, "avacapo_retarget_mapping"):
         del bpy.types.Object.avacapo_retarget_mapping
     for cls in reversed(registered):

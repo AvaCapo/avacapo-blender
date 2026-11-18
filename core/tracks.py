@@ -410,6 +410,11 @@ def update_drag(store, session: DragSession, delta_frames: int) -> bool:
     original = session.initial[session.uid]
     restore_snapshot(store, session.initial)
     if session.kind == "BODY":
+        previous, following = neighbors(store.clips, session.uid)
+        if previous is not None:
+            delta_frames = max(delta_frames, previous.end - original.start)
+        if following is not None:
+            delta_frames = min(delta_frames, following.start - original.end)
         if move_clip(store, session.uid, original.start + delta_frames):
             session.last_valid_delta = delta_frames
             return True

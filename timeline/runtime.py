@@ -62,9 +62,23 @@ class TimelineRuntimeState:
     menu_target: MenuTarget = field(default_factory=MenuTarget)
     clipboard: ClipboardClip | None = None
     generation_cooldown_until: float = 0.0
+    active_drags: set[int] = field(default_factory=set)
 
     def generation_ready(self):
         return monotonic() >= self.generation_cooldown_until
+
+    def publication_blocked(self, scene):
+        if self.active_drags or scene != bpy.context.scene:
+            return True
+        if any(track.object is not None and track.object.mode == 'EDIT'
+               for track in scene.clip_data.tracks):
+            return True
+        # Native key transforms retain pointers to the keys until they finish.
+        return any(
+            operator.bl_idname.startswith('TRANSFORM_OT_')
+            for window in bpy.context.window_manager.windows
+            for operator in window.modal_operators
+        )
 
     def set_clipboard(self, clipboard: ClipboardClip):
         if isinstance(self.clipboard, ClipboardClip):
@@ -83,6 +97,7 @@ class TimelineRuntimeState:
 
     def reset(self):
         self.generation_cooldown_until = 0.0
+        self.active_drags.clear()
         self.clear_hover()
         self.menu_target = MenuTarget()
         if isinstance(self.clipboard, ClipboardClip):

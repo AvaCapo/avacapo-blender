@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ....common.config import Config
 
-_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
-_AVACAPO_REFERENCE_RIG_PATH = _PLUGIN_ROOT / "assets" / "rigs" / "rigs.blend"
+
+_AVACAPO_REFERENCE_RIG_PATH = Path(Config.BLEND_PATH)
 _AVACAPO_REFERENCE_RIG_OBJECT = "avacapo_bvh_v1"
 
 

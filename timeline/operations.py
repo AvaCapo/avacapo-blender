@@ -23,6 +23,7 @@ from .runtime import ClipboardClip, ClipboardTake, runtime, tag_redraw
 
 
 GENERATION_TIMER_CALLBACKS = set()
+GENERATION_POLL_INTERVAL = 0.1
 _generation_service = None
 _generation_service_token = ""
 _pending_generations = {}
@@ -53,6 +54,7 @@ class _PendingGeneration:
     status: TaskStatus = TaskStatus.QUEUED
     root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
     start_from_previous: bool = False
+    publication: object = None
 
 
 def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_fps: float) -> str:
@@ -195,10 +197,13 @@ def submit_generation(scene, track, clip, command: GenerationCommand, *, scene_f
 
 
 def _pending_take(pending):
-    track = next((item for item in pending.scene.clip_data.tracks
-                  if item.uid == pending.track_uid), None)
-    clip = None if track is None else tracks.find_clip(track.clips, pending.clip_uid)
-    return None if clip is None else takes.find_take(clip, pending.take_uid)
+    try:
+        track = next((item for item in pending.scene.clip_data.tracks
+                      if item.uid == pending.track_uid), None)
+        clip = None if track is None else tracks.find_clip(track.clips, pending.clip_uid)
+        return None if clip is None else takes.find_take(clip, pending.take_uid)
+    except ReferenceError:
+        return None
 
 
 def cancel_take_generation(track, clip, take_uid) -> bool:
@@ -206,8 +211,16 @@ def cancel_take_generation(track, clip, take_uid) -> bool:
     for task_id, pending in _pending_generations.items():
         if (pending.scene == track.id_data and pending.track_uid == track.uid
                 and pending.clip_uid == clip.uid and pending.take_uid == take_uid):
-            if not _generation_service.cancel(task_id):
-                return False
+            if pending.publication is not None:
+                pending.publication.close()
+                _pending_generations.pop(task_id)
+                _generation_service.release_result(task_id)
+            elif not _generation_service.cancel(task_id):
+                if _generation_service.get_task(task_id).status != TaskStatus.SUCCEEDED:
+                    return False
+                # Download may have completed while publication waits for a drag.
+                _pending_generations.pop(task_id)
+                _generation_service.release_result(task_id)
             take = takes.find_take(clip, take_uid)
             if take is not None:
                 set_status(take, TaskStatus.CANCELLED)
@@ -229,51 +242,78 @@ def _finish_generation() -> float | None:
         return None
 
     changed = False
+    publication_advanced = False
     if runtime.generation_cooldown_until and runtime.generation_ready():
         runtime.generation_cooldown_until = 0.0
         changed = True
     for task_id, pending in tuple(_pending_generations.items()):
         take = _pending_take(pending)
         if take is None:
-            _generation_service.cancel(task_id)
+            _generation_service.cancel(task_id, reason="The Clip or Take was removed.")
+            if pending.publication is not None:
+                pending.publication.close()
         task = _generation_service.get_task(task_id)
+        # A drag owns a snapshot of the Working Action until it finishes.
+        if (task.status == TaskStatus.SUCCEEDED and take is not None
+                and runtime.publication_blocked(pending.scene)):
+            continue
         if task.status != pending.status:
             log.info("Generation %s: %s", task_id[:8], task.status.value)
             pending.status = task.status
             if take is not None:
-                set_status(take, task.status, error=task.error or "")
+                set_status(take, TaskStatus.APPLYING if task.status == TaskStatus.SUCCEEDED
+                           else task.status, error=task.error or "")
             changed = True
         if task.status not in TERMINAL_STATUSES:
             continue
 
-        _pending_generations.pop(task_id)
-        changed = True
         if task.status == TaskStatus.SUCCEEDED and take is not None:
+            publication_advanced = True
             result = _generation_service.get_result(task_id)
             try:
-                if result is None:
-                    raise RuntimeError("Generation completed without an animation result.")
-                _publish_generation(pending, result.bvh_bytes, result.resolved_seed)
+                if not _advance_publication(pending, result):
+                    break
             except Exception as exc:
                 log.error("Could not create Take from generated animation: %s", exc)
                 set_status(take, TaskStatus.FAILED, error=str(exc))
-            finally:
-                _generation_service.release_result(task_id)
+            _generation_service.release_result(task_id)
         elif task.status == TaskStatus.FAILED:
             log.error("Animation generation failed: %s", task.error or "unknown error")
+        elif task.status == TaskStatus.CANCELLED:
+            log.warning("Generation %s cancelled: %s", task_id[:8], task.error or "Cancelled locally.")
         elif task.status == TaskStatus.SUCCEEDED:
             _generation_service.release_result(task_id)
+        _pending_generations.pop(task_id)
+        changed = True
+        if publication_advanced:
+            break
 
     if changed:
         tag_redraw()
+    if publication_advanced and _pending_generations:
+        # Continue on Blender's next timer pass, after giving input a turn.
+        return 0.0
     if _pending_generations or runtime.generation_cooldown_until:
-        return 0.1
+        return GENERATION_POLL_INTERVAL
     GENERATION_TIMER_CALLBACKS.discard(_finish_generation)
     return None
 
 
-def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_seed: int | None) -> None:
-    """Retarget one completed server result on Blender's main thread."""
+def _advance_publication(pending, result):
+    """Return True when publication finishes, False when it needs another tick."""
+    if result is None:
+        raise RuntimeError("Generation completed without an animation result.")
+    if pending.publication is None:
+        pending.publication = _publish_generation(pending, result.bvh_bytes, result.resolved_seed)
+    try:
+        next(pending.publication)
+    except StopIteration:
+        return True
+    return False
+
+
+def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_seed: int | None):
+    """Parse a result and return its main-thread publication steps."""
     from broom.io import load_bvh_from_bytes
 
     track = next(
@@ -289,7 +329,7 @@ def _publish_generation(pending: _PendingGeneration, bvh_bytes: bytes, resolved_
     command = pending.command
     if resolved_seed is not None and hasattr(command.parameters, "seed"):
         command = replace(command, parameters=replace(command.parameters, seed=resolved_seed))
-    apply_generated_motion(
+    return apply_generated_motion_steps(
         track,
         clip,
         command=command,
@@ -312,6 +352,8 @@ def cancel_generation() -> None:
             bpy.app.timers.unregister(callback)
     GENERATION_TIMER_CALLBACKS.clear()
     for pending in _pending_generations.values():
+        if pending.publication is not None:
+            pending.publication.close()
         take = _pending_take(pending)
         if take is not None:
             set_status(take, TaskStatus.CANCELLED)
@@ -323,12 +365,55 @@ def cancel_generation() -> None:
     _generation_service_token = ""
 
 
-def apply_generated_motion(track, clip, *, command, source_motion, source_text, scene_fps,
+def apply_generated_motion(track, clip, **kwargs):
+    """Synchronous entry point for scripts; interactive publication uses steps."""
+    steps = apply_generated_motion_steps(track, clip, **kwargs)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+
+
+def _generation_target_state(track):
+    armature = _working_armature(track)
+    animation = armature.animation_data
+    bones = {
+        bone.name: (
+            bone.parent.name if bone.parent else None,
+            tuple(tuple(row) for row in bone.matrix_local),
+            tuple(bone.tail_local),
+            bone.use_connect,
+            armature.pose.bones[bone.name].rotation_mode,
+        )
+        for bone in armature.data.bones
+    }
+    return {
+        'armature': armature,
+        'working_action': track.working_action,
+        'working_slot': track.working_slot_handle,
+        'active_action': animation.action if animation else None,
+        'active_slot': animation.action_slot_handle if animation else 0,
+        'bones': bones,
+        'mapping': blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
+    }
+
+
+def _clip_generation_selection(clip):
+    return tuple(getattr(clip, name) for name in (
+        'active_take_uid', 'prompt', 'seed', 'generation_model', 'generation_temperature',
+        'generation_cycled', 'generation_in_place', 'generation_enhance_prompt',
+    ))
+
+
+def apply_generated_motion_steps(track, clip, *, command, source_motion, source_text, scene_fps,
                            root_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
                            take_uid: int | None = None,
                            start_from_previous: bool | None = None):
-    """Retarget one source Motion and publish its Take only after it is usable."""
+    """Yield after each prepared curve; return the Take after publishing it."""
     armature = _working_armature(track)
+    target_state = _generation_target_state(track)
+    selection = _clip_generation_selection(clip)
     if not isinstance(source_text, str) or not source_text:
         raise ValueError("Generated source text is missing.")
     if not math.isfinite(scene_fps) or scene_fps <= 0.0:
@@ -381,11 +466,6 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
     )
     if start_from_previous is None:
         start_from_previous = _can_align_previous_start(command.parameters)
-    if start_from_previous:
-        prepared = _align_generated_start(
-            track, clip, armature, command, prepared, scene_fps,
-            root_bone_name=joint_map[source_motion.hierarchy.root_name],
-        )
 
     # Resolve this before creating any resource owned by the new Take.
     _working_binding(track, armature)
@@ -398,14 +478,32 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
     take = existing_take
     try:
         action, slot = _new_take_action(armature, clip.uid, take_uid)
-        blender_motion_writer.apply_prepared_motion(
-            armature,
-            action,
-            slot,
-            prepared,
-            assign_to_skeleton=False,
-            keyframe_type="GENERATED",
-        )
+        prepared_keys = {}
+        for curve in blender_motion_writer.write_prepared_curves_steps(
+            actions.ensure_slot_channelbag(action, slot), prepared, keyframe_type="GENERATED",
+        ):
+            identity = curve.data_path, int(curve.array_index)
+            prepared_keys[identity] = actions.read_key_arrays(curve)
+            yield
+        # Resolve live dependencies after yielding. Never publish into a deleted
+        # or rebound target, and never reuse an old snapshot of manual keys.
+        if tracks.find_clip(track.clips, clip.uid) != clip or (
+                existing_take is not None and takes.find_take(clip, take_uid) is None):
+            raise ValueError("The pending Clip or Take was deleted.")
+        if _generation_target_state(track) != target_state:
+            raise ValueError("The target rig or Working Action changed during preparation. Generate again.")
+        if start_from_previous:
+            aligned = _align_generated_start(
+                track, clip, armature, command, prepared, scene_fps,
+                root_bone_name=joint_map[source_motion.hierarchy.root_name],
+            )
+            if aligned is not prepared:
+                blender_motion_writer.apply_prepared_motion(
+                    armature, action, slot, aligned, assign_to_skeleton=False,
+                    keyframe_type="GENERATED",
+                )
+                prepared_keys = {identity: actions.read_key_arrays(curve)
+                                 for identity, curve in actions._slot_curves(action, slot).items()}
         source_record = _new_source_text(clip.uid, take_uid, source_text)
 
         if take is None:
@@ -416,31 +514,34 @@ def apply_generated_motion(track, clip, *, command, source_motion, source_text, 
         take.take_slot_handle = int(slot.handle)
         take.source_motion_text = source_record
 
-        # TODO(debug-generated-only): enable this temporary debug mode to
-        # replace user keys with pure generated animation in the Clip window.
-        # switch_take(track, clip, take.uid)
-        switch_take(
-            track,
-            clip,
-            take.uid,
-            preserve_manual=not DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
-        )
+        if _clip_generation_selection(clip) == selection:
+            switch_take(
+                track, clip, take.uid, prepared_keys=prepared_keys,
+                preserve_manual=not DEBUG_REPLACE_USER_KEYS_WITH_GENERATED,
+            )
         # The overlay must describe the stored Action, including when the Clip
         # was resized while generation was pending. Clip ends are exclusive.
         take.length = max(1, math.ceil(prepared.frame_times[-1]) + 1)
         set_status(take, TaskStatus.SUCCEEDED, error="")
         return take
-    except Exception:
+    except BaseException:
         if take is not None:
             if existing_take is None:
                 edit_track(track, takes.remove_take, clip, take.uid)
-            else:
+            elif _pending_resource_exists(track, clip, take_uid):
                 take.take_action = None
                 take.take_slot_handle = 0
                 take.source_motion_text = None
         _remove_if_unused(bpy.data.actions, action)
         _remove_if_unused(bpy.data.texts, source_record)
         raise
+
+
+def _pending_resource_exists(track, clip, take_uid):
+    try:
+        return tracks.find_clip(track.clips, clip.uid) == clip and takes.find_take(clip, take_uid) is not None
+    except ReferenceError:
+        return False
 
 
 def _can_align_previous_start(parameters):
@@ -495,7 +596,8 @@ def _align_generated_start(track, clip, armature, command, prepared, scene_fps, 
     )
 
 
-def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_manual=True):
+def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_manual=True,
+                prepared_keys=None):
     """Make one immutable Take visible in the Working Action."""
     if not any(candidate == clip for candidate in track.clips):
         raise ValueError("Clip does not belong to this Track.")
@@ -538,6 +640,7 @@ def switch_take(track, clip, take_uid, *, backup_working_area=False, preserve_ma
             working_action, working_slot, target_action, target_slot,
             clip.start, clip.end, target_take.offset,
             preserve_manual=preserve_manual,
+            prepared_keys=prepared_keys,
         )
     except Exception:
         if working_snapshot is not None:

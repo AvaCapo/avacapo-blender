@@ -103,7 +103,7 @@ def _load_reference_rig() -> bpy.types.Object:
     with bpy.data.libraries.load(config.BLEND_PATH, link=False) as (data_from, data_to):
         if config.AVACAPO_RIG_NAME not in data_from.objects:
             raise ValueError(
-                f"Object '{config.AVACAPO_RIG_NAME}' not found in '{config.BLEND_NAME}'"
+                f"Object '{config.AVACAPO_RIG_NAME}' not found in '{config.BLEND_PATH}'"
             )
         data_to.objects = [config.AVACAPO_RIG_NAME]
 
