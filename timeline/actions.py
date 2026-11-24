@@ -151,42 +151,6 @@ def manual_pose_frames(working_action, working_slot, start, end):
 
     return sorted(frames)
 
-
-# NOTE: this function was replaced by new implementation. 
-def manual_pose_frames_old(working_action, working_slot, start, end, *,
-                       take_action=None, take_slot=None, take_origin=0):
-    """Find authored pose keys and promote edited generated values to ordinary keys."""
-    working = read_slot_curves(working_action, working_slot)
-    original = {} if take_action is None else read_slot_curves(take_action, take_slot)
-    frames = set()
-    for identity, curve in working.items():
-        path, _ = identity
-        if not (path.startswith('pose.bones[') or path in {
-            'location', 'rotation_euler', 'rotation_quaternion', 'rotation_axis_angle', 'scale',
-        }):
-            continue
-        source = original.get(identity)
-        source_times = curve_times(source) if source is not None else np.empty(0)
-        times = curve_times(curve)
-        changed = False
-        for index in range(int(np.searchsorted(times, start)), int(np.searchsorted(times, end))):
-            point = curve.keyframe_points[index]
-            if point.type == 'GENERATED' and take_action is not None:
-                local_frame = float(point.co.x) - take_origin
-                source_index = int(np.searchsorted(source_times, local_frame - 1e-4))
-                if (source_index == len(source_times)
-                    or abs(source_times[source_index] - local_frame) > 1e-4
-                    or not np.isclose(point.co.y, source.keyframe_points[source_index].co.y,
-                                      rtol=1e-6, atol=1e-6)):
-                    point.type = 'KEYFRAME'
-                    changed = True
-            if point.type != 'GENERATED':
-                frames.add(float(point.co.x))
-        if changed:
-            curve.update()
-    return sorted(frames)
-
-
 def _empty_keys():
     return {
         **{field: np.empty((0, 2), dtype=np.float32) for field in COORD_FIELDS},
@@ -803,23 +767,6 @@ def _copy_key(target, source, time_offset, keyframe_type):
     )
     for field in BOOL_FIELDS:
         setattr(target, field, getattr(source, field))
-
-
-def checkpoint_take(working_action, working_slot, take_action, take_slot, clip_start, clip_end, take_offset):
-    """Copy a Working Action window back to a local Take across the full channel scope."""
-    # TODO(deprecated-immutable-takes): Take Actions are immutable. This remains
-    # temporarily for reference and will be removed after Resize/Offset cleanup.
-    working = read_slot_curves(working_action, working_slot)
-    take = read_slot_curves(take_action, take_slot)
-    origin = clip_start + take_offset
-    local_start, local_end = clip_start - origin, clip_end - origin
-    for identity in sorted(working.keys() | take.keys()):
-        target = take.get(identity)
-        source = working.get(identity)
-        if target is None:
-            target = _create_curve(take_action, take_slot, identity, source)
-        keys = _empty_keys() if source is None else shift_keys(read_keys_range(source, clip_start, clip_end), -origin)
-        replace_range(target, keys, local_start, local_end)
 
 
 def clear_range(action, slot, start, end):

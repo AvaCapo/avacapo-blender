@@ -283,6 +283,7 @@ def _finish_generation() -> float | None:
             log.warning("Generation %s cancelled: %s", task_id[:8], task.error or "Cancelled locally.")
         elif task.status == TaskStatus.SUCCEEDED:
             _generation_service.release_result(task_id)
+        #TODO Need to check if finished task still exists in _generation_service._tasks, release_result does not free the limit max_tasks=100, need to clear after worker exit, including cancelled tasks and drain_events. 
         _pending_generations.pop(task_id)
         changed = True
         if publication_advanced:
@@ -449,6 +450,7 @@ def apply_generated_motion_steps(track, clip, *, command, source_motion, source_
         armature,
         blender_retarget_service.mapping_dict(armature.avacapo_retarget_mapping),
     )
+    #TODO BVH parse, resample and retarget are done before the first yield; covering publication does not unblock this UI.
     retargeted_motion = workflow.retarget_mapped_motion(source_motion, target, joint_map)
     if USE_SPACETIME_REFINEMENT:
         retargeted_motion, _constraints = workflow.refine_motion_spacetime(

@@ -167,7 +167,7 @@ def clear_mapping(armature, state) -> None:
 def confirm_mapping(armature, state) -> list[str]:
     """Validate and persist confirmation state; return errors when invalid."""
     refresh_mapping_state(armature, state, mapping_dict(state))
-    errors = _cached_validation_errors(state)
+    errors = cached_mapping_errors(state)
     if errors:
         state.confirmed = False
         state.draft_error = "\n".join(errors)
@@ -462,10 +462,6 @@ def _try_apply_known_rig_mapping(armature, state) -> str | None:
     state.detected_rig = rig_kind
     return rig_kind
 
-
-def _cached_validation_errors(state) -> list[str]:
-    return cached_mapping_errors(state)
-
-
+#TODO switch to numpy
 def _identity():
     return ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))

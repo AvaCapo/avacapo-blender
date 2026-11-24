@@ -2,7 +2,6 @@
 
 import math
 
-import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 from bpy.types import Operator
 

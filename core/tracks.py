@@ -121,6 +121,7 @@ def _set_start_preserving_takes(clip, start: int) -> None:
 
 def apply_bindings(store) -> None:
     """Preserve the original bounded, ordered propagation of neighbour links."""
+   # For each clip, if it is bound to a neighbour, adjust its start or end to match the neighbour's end or start, respectively.
     for _ in range(len(store.clips) + 1):
         changed = False
         ordered = ordered_clips(store.clips)

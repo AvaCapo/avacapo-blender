@@ -116,6 +116,7 @@ def _sample_action_frames(
     for frame in range(frame_start, frame_end + 1):
         scene.frame_set(frame)
         row = []
+        # TODO [O06]: Optimize by caching rest_basis and rest_basis_inverse for each bone.
         for joint_index, joint in enumerate(hierarchy.joints):
             pose_bone = pose_bones[joint.name]
             rest_basis = data_bones[joint.name].matrix_local.to_3x3()

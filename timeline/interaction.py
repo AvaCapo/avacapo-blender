@@ -19,42 +19,6 @@ from . import actions
 from .track_style import STYLE
 
 
-def _visible_working_curves(data, clip):
-    """Return Working-Action curves corresponding to the active Take."""
-    active_take = takes.current_take(clip)
-    if active_take is None:
-        return None, ()
-
-    working_action = data.working_action
-    working_slot = blender_actions.find_action_slot_by_handle(
-        working_action,
-        int(data.working_slot_handle),
-    )
-    if working_slot is None:
-        raise ValueError("Working Action binding is incomplete.")
-
-    take_action = active_take.take_action
-    take_slot = blender_actions.find_action_slot_by_handle(
-        take_action,
-        int(active_take.take_slot_handle),
-    )
-    if take_slot is None:
-        raise ValueError(f"Take {active_take.uid} Action binding is incomplete.")
-
-    working = {
-        (curve.data_path, int(curve.array_index)): curve
-        for curve in blender_actions.iter_slot_fcurves(working_action, working_slot)
-    }
-    curves = []
-    for take_curve in blender_actions.iter_slot_fcurves(take_action, take_slot):
-        identity = (take_curve.data_path, int(take_curve.array_index))
-        curve = working.get(identity)
-        if curve is None:
-            raise ValueError(f"Working Action has no curve for {identity!r}.")
-        curves.append(curve)
-    return working_action, curves
-
-
 def _clear_selected_armature_key_selection(context):
     """Deselect keys in every selected armature Action through Blender's operator."""
     armatures = []
@@ -131,18 +95,6 @@ def _select_clip_keys(context, data, clip, *, clear_selection):
             key.select_control_point = True
             key.select_left_handle = True
             key.select_right_handle = True
-
-
-def _clear_working_key_selection(data):
-    action = data.working_action
-    slot = blender_actions.find_action_slot_by_handle(action, int(data.working_slot_handle))
-    if slot is None:
-        return
-    for curve in blender_actions.iter_slot_fcurves(action, slot):
-        for key in curve.keyframe_points:
-            key.select_control_point = False
-            key.select_left_handle = False
-            key.select_right_handle = False
 
 
 class CLIPS_OT_hover(Operator):

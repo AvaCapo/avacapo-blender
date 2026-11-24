@@ -51,7 +51,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        log.debug(f"Auth server: {format % args}")
+        log.debug("Auth server")
 
 
 class PluginAuthServer:

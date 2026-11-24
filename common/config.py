@@ -25,7 +25,6 @@ class Config:
     DOWNLOAD_URL = f"{PUBLIC_BASE_URL}/api-avacapo-download/"
     CANCEL_URL = f"{PUBLIC_BASE_URL}/api-avacapo-cancel/"
     GET_MODELS_URL = f"{PLATFORM_URL}api/v1/get-text-model-types/"
-    GET_MODELS_NAMES_URL = GET_MODELS_URL
     GET_ADDON_VERSION_URL = f"{PLATFORM_URL}api/v1/get-addon-version/"
 
     AVACAPO_RIG_NAME = "avacapo_bvh_v1"

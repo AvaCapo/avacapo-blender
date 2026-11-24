@@ -10,9 +10,6 @@ from ..core.storage import Storage
 from .jobs import AnimationJobs
 
 
-def get_fps() -> float:
-    return Config.DEFAULT_FPS
-
 
 def _build_animation_name(prompt: str) -> str:
     return f"blender_{'_'.join(prompt.split())[:15] or 'animation'}"

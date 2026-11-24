@@ -70,6 +70,7 @@ def prepare_retargeted_motion(
             for offset, channel in enumerate(joint.channels)
             if channel.endswith("position")
         }
+        # TODO Consider: if we have keyframes for channel we just put 0 in beginning and in the end all others will modified
         if position_columns and np.any(
             motion.values[:, tuple(position_columns.values())] != 0.0
         ):
@@ -322,7 +323,7 @@ def write_prepared_curves_steps(channelbag, prepared, *, keyframe_type: str):
             curve.update()
             yield curve
 
-
+# TODO: check valid snapshot method
 def _snapshot_curves(channelbag) -> tuple[_CurveSnapshot, ...]:
     return tuple(
         _CurveSnapshot(
